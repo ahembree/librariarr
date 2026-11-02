@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("SonarrClient", () => {
   let client: SonarrClient;
@@ -62,19 +61,25 @@ describe("SonarrClient", () => {
   describe("testConnection", () => {
     it("returns ok when Sonarr responds correctly", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Sonarr", version: "4.0.0" },
+        data: { appName: "Sonarr", instanceName: "Sonarr", version: "4.0.11.2680" },
       });
       const result = await client.testConnection();
-      expect(result).toEqual({ ok: true, appName: "Sonarr", version: "4.0.0" });
+      expect(result).toEqual({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
+      // The connection test opts out of transport retries (NO_RETRY).
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/system/status", { __noRetry: true });
     });
 
     it("returns error when appName is wrong", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Radarr", version: "5.0.0" },
+        data: { appName: "Radarr", instanceName: "Radarr", version: "5.14.0.9383" },
       });
       const result = await client.testConnection();
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("Radarr");
+      expect(result).toEqual({
+        ok: false,
+        error: "Expected Sonarr but connected to Radarr",
+        appName: "Radarr",
+        version: "5.14.0.9383",
+      });
     });
 
     it("returns error on network failure", async () => {
@@ -86,7 +91,7 @@ describe("SonarrClient", () => {
 
   describe("getSeries", () => {
     it("returns array of series", async () => {
-      const series = [{ id: 1, title: "Show 1", tvdbId: 200 }];
+      const series = [{ id: 1, title: "Breaking Bad", tvdbId: 81189 }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: series });
       const result = await client.getSeries();
       expect(result).toEqual(series);
@@ -96,7 +101,7 @@ describe("SonarrClient", () => {
 
   describe("getSeriesById", () => {
     it("fetches a single series", async () => {
-      const series = { id: 10, title: "Test Show" };
+      const series = { id: 10, title: "Breaking Bad", tvdbId: 81189 };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: series });
       const result = await client.getSeriesById(10);
       expect(result).toEqual(series);
@@ -105,11 +110,12 @@ describe("SonarrClient", () => {
   });
 
   describe("getSeriesByTvdbId", () => {
-    it("returns series when found", async () => {
-      const series = { id: 1, tvdbId: 300 };
+    it("returns series when found, asking Sonarr to filter by the id", async () => {
+      const series = { id: 1, title: "Breaking Bad", tvdbId: 81189 };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: [series] });
-      const result = await client.getSeriesByTvdbId(300);
+      const result = await client.getSeriesByTvdbId(81189);
       expect(result).toEqual(series);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/series", { params: { tvdbId: 81189 } });
     });
 
     it("returns null when not found", async () => {
@@ -119,8 +125,11 @@ describe("SonarrClient", () => {
     });
 
     it("never returns a series with a different TVDB id (filter ignored)", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, tvdbId: 100 }] });
-      expect(await client.getSeriesByTvdbId(999)).toBeNull();
+      const library = [{ id: 1, tvdbId: 81189 }, { id: 2, tvdbId: 371980 }];
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: library });
+      expect(await client.getSeriesByTvdbId(73739)).toBeNull();
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: library });
+      expect(await client.getSeriesByTvdbId(371980)).toEqual({ id: 2, tvdbId: 371980 });
     });
   });
 
@@ -144,38 +153,50 @@ describe("SonarrClient", () => {
 
   describe("updateSeries", () => {
     it("merges current with update and puts", async () => {
-      const current = { id: 5, title: "Show", monitored: true };
-      const updated = { id: 5, title: "Show", monitored: false };
+      const current = { id: 5, title: "Breaking Bad", tvdbId: 81189, monitored: true, tags: [2] };
+      const updated = { ...current, monitored: false };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: current });
       mockAxiosInstance.put.mockResolvedValueOnce({ data: updated });
 
       const result = await client.updateSeries(5, { monitored: false });
       expect(result).toEqual(updated);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/series/5");
       expect(mockAxiosInstance.put).toHaveBeenCalledWith(
         "/api/v3/series/5",
         { ...current, monitored: false }
       );
     });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, title: "Breaking Bad", tvdbId: 81189, monitored: true, tags: [2] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: current });
+      await client.updateSeries(5, { monitored: false }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/series/5", { ...current, monitored: false });
+    });
   });
 
-  describe("getEpisodeFiles", () => {
-    it("fetches episode files for series", async () => {
-      const files = [{ id: 1, seriesId: 5 }];
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: files });
-      const result = await client.getEpisodeFiles(5);
-      expect(result).toEqual(files);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/episodefile", {
-        params: { seriesId: 5 },
+  describe("removeTagsFromSeries", () => {
+    it("removes the tags through the series bulk editor", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromSeries([4, 5], [2, 3]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/series/editor", {
+        seriesIds: [4, 5],
+        tags: [2, 3],
+        applyTags: "remove",
       });
     });
   });
 
   describe("getEpisodes", () => {
     it("fetches episodes for series", async () => {
-      const episodes = [{ id: 1, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10, hasFile: true }];
+      const episodes = [
+        { id: 1, seriesId: 5, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10, hasFile: true, title: "Pilot", airDate: "2008-01-20" },
+      ];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: episodes });
       const result = await client.getEpisodes(5);
       expect(result).toEqual(episodes);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/episode", { params: { seriesId: 5 } });
     });
   });
 
@@ -200,6 +221,7 @@ describe("SonarrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: profiles });
       const result = await client.getQualityProfiles();
       expect(result).toEqual(profiles);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/qualityprofile");
     });
   });
 
@@ -214,46 +236,13 @@ describe("SonarrClient", () => {
     });
   });
 
-  describe("getQueue", () => {
-    it("does not report a completed (inactive) record as downloading", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ seriesId: 1, status: "completed" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: "completed" });
-    });
-
-    it("ignores another item's active download and sends seriesIds unbracketed", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ seriesId: 2, status: "downloading" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        params: expect.objectContaining({ seriesIds: [1] }),
-        paramsSerializer: { indexes: null },
-      }));
-    });
-
-    it("returns not downloading when no records", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("returns not downloading on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-  });
-
   describe("getTags", () => {
     it("returns tags", async () => {
       const tags = [{ id: 1, label: "test" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: tags });
       const result = await client.getTags();
       expect(result).toEqual(tags);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/tag");
     });
   });
 
@@ -263,6 +252,7 @@ describe("SonarrClient", () => {
       mockAxiosInstance.post.mockResolvedValueOnce({ data: tag });
       const result = await client.createTag("new");
       expect(result).toEqual(tag);
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/tag", { label: "new" });
     });
   });
 
@@ -278,9 +268,9 @@ describe("SonarrClient", () => {
     it("asks the calendar for unmonitored episodes too and ignores specials", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: [
-          { seriesId: 1, seasonNumber: 3 },
-          { seriesId: 2, seasonNumber: 0 },
-          { seriesId: 1, seasonNumber: 3 },
+          { id: 901, seriesId: 1, seasonNumber: 3, episodeNumber: 1, monitored: false, airDateUtc: "2026-02-01T02:00:00Z" },
+          { id: 902, seriesId: 2, seasonNumber: 0, episodeNumber: 4, monitored: true, airDateUtc: "2026-03-01T02:00:00Z" },
+          { id: 903, seriesId: 1, seasonNumber: 3, episodeNumber: 2, monitored: false, airDateUtc: "2026-02-08T02:00:00Z" },
         ],
       });
       const now = new Date("2026-01-01T00:00:00Z");
@@ -310,32 +300,22 @@ describe("SonarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Sonarr", {
-        config: { url: "/api/v3/importlistexclusion", method: "post" },
-        response: { status: 400, data: [{ propertyName: "TvdbId", errorMessage: "This exclusion has already been added." }] },
-        code: "ERR_BAD_REQUEST",
-      } as never));
-      await expect(client.addExclusion(12345, "Test Show")).resolves.toBeUndefined();
-    });
-
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion(12345, "Test Show");
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/importlistexclusion", {
-        tvdbId: 12345,
-        title: "Test Show",
-      });
-    });
-  });
-
   describe("getLanguages", () => {
     it("returns languages", async () => {
-      const langs = [{ id: 1, name: "English" }];
+      const langs = [{ id: 0, name: "Unknown" }, { id: 1, name: "English" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: langs });
       const result = await client.getLanguages();
       expect(result).toEqual(langs);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/language");
+    });
+  });
+
+  describe("getMediaManagementConfig", () => {
+    it("reads the recycle bin settings without transport retries", async () => {
+      const config = { recycleBin: "/tv/.recycle", recycleBinCleanupDays: 7 };
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: config });
+      expect(await client.getMediaManagementConfig()).toEqual(config);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/config/mediamanagement", { __noRetry: true });
     });
   });
 });

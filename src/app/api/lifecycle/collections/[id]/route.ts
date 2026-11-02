@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   removePlexCollection,
@@ -8,15 +8,11 @@ import {
 } from "@/lib/lifecycle/collections";
 import { validateRequest, collectionUpdateSchema } from "@/lib/validation";
 
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { data, error } = await validateRequest(request, collectionUpdateSchema);
   if (error) return error;
@@ -45,7 +41,7 @@ export async function PUT(
       );
     }
     try {
-      await renameCollectionInPlex(session.userId!, collection.type, collection.name, name!);
+      await renameCollectionInPlex(session.userId, collection.type, collection.name, name!);
     } catch {
       // Best-effort — the membership/visibility sync below still runs.
     }
@@ -71,17 +67,13 @@ export async function PUT(
   }
 
   return NextResponse.json({ collection: updated });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const collection = await prisma.collection.findFirst({
@@ -114,7 +106,7 @@ export async function DELETE(
   // Remove the collection from Plex. Only the named rule (if any) references it,
   // and it's detached by the FK SetNull when the row is deleted.
   try {
-    await removePlexCollection(session.userId!, collection.type, collection.name);
+    await removePlexCollection(session.userId, collection.type, collection.name);
   } catch {
     // Best-effort — don't block deletion if Plex is unreachable.
   }
@@ -122,4 +114,4 @@ export async function DELETE(
   await prisma.collection.delete({ where: { id } });
 
   return NextResponse.json({ success: true });
-}
+});

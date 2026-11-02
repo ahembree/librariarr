@@ -59,23 +59,6 @@ describe("Debouncer", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("flush() runs a pending fire immediately without a later double-fire", () => {
-    const fn = vi.fn();
-    const d = new Debouncer(fn, { quietMs: 1000 });
-    d.trigger();
-    d.flush();
-    expect(fn).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(2000);
-    expect(fn).toHaveBeenCalledOnce();
-  });
-
-  it("flush() is a no-op when nothing is pending", () => {
-    const fn = vi.fn();
-    const d = new Debouncer(fn, { quietMs: 1000 });
-    d.flush();
-    expect(fn).not.toHaveBeenCalled();
-  });
-
   it("swallows synchronous throws from the callback", () => {
     const fn = vi.fn(() => {
       throw new Error("boom");

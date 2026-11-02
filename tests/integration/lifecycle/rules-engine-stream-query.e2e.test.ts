@@ -25,12 +25,10 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
+const { evaluateLifecycleRules, getMatchedCriteriaForItems } = await import("@/lib/rules/lifecycle-engine");
 
-// Stream type constants (mirror src/lib/conditions/stream-query.ts STREAM_TYPE_INT_MAP).
+// Audio stream type (mirrors STREAM_TYPE_INT_MAP in src/lib/conditions/stream-query.ts).
 const STREAM_AUDIO = 2;
-// const STREAM_VIDEO = 1;
-// const STREAM_SUBTITLE = 3;
 
 let serverId: string;
 let withAudioId: string;
@@ -86,7 +84,21 @@ async function streamMatchIds(quantifier: "any" | "none" | "all", rules: Array<{
     streamQuery: { streamType: "audio", quantifier },
   };
   const items = await evaluateLifecycleRules([group], "MOVIE", [serverId]);
-  return items.map((i) => i.id).sort();
+  const phase1 = items.map((i) => i.id).sort();
+
+  // Phase 2 (the in-memory evaluator behind matched criteria) must select the
+  // same set — the disagreement between the two is what these tests pin down.
+  const all = await getTestPrisma().mediaItem.findMany({
+    where: { library: { mediaServerId: serverId } },
+    include: { streams: true },
+  });
+  const criteria = getMatchedCriteriaForItems(all as never, [group], "MOVIE");
+  const phase2 = [...criteria]
+    .filter(([, matched]) => matched.some((c) => c.ruleId === group.id))
+    .map(([id]) => id)
+    .sort();
+  expect(phase2).toEqual(phase1);
+  return phase1;
 }
 
 describe("Rule engine — stream query 'all' quantifier must not vacuously match 0-stream items", () => {
@@ -97,7 +109,7 @@ describe("Rule engine — stream query 'all' quantifier must not vacuously match
     expect(matches).toEqual([withAudioId].sort());
   });
 
-  it("all + language equals nonexistent codec: matches nothing (no item has all streams = X)", async () => {
+  it("all + language equals a language no stream has: matches nothing", async () => {
     const matches = await streamMatchIds("all", [{ field: "sqLanguage", operator: "equals", value: "Klingon" }]);
     expect(matches).toEqual([]);
   });

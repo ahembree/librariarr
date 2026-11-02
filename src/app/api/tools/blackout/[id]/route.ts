@@ -1,26 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
-import { validateRequest, blackoutUpdateSchema } from "@/lib/validation";
+import { validateRequest, blackoutUpdateSchema, TIME_REGEX } from "@/lib/validation";
 
-// HH:mm, 00:00–23:59. The looser \d{2}:\d{2} accepted e.g. "27:99", which
-// stored a schedule whose window never activates.
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   // Verify ownership
   const existing = await prisma.blackoutSchedule.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
 
   if (!existing) {
@@ -63,6 +55,20 @@ export async function PUT(
     }
     if (!startTime || !endTime) {
       return NextResponse.json({ error: "startTime and endTime are required for recurring schedules" }, { status: 400 });
+    }
+  }
+
+  // A partial edit of a one-time schedule's dates is checked against the date
+  // it leaves in place: on its own it could store an unparseable date (a 500
+  // at the write) or an end before the start (a window that never opens).
+  if (scheduleType === undefined && effectiveType === "one_time" && (startDate != null || endDate != null)) {
+    const start = startDate != null ? new Date(startDate) : existing.startDate;
+    const end = endDate != null ? new Date(endDate) : existing.endDate;
+    if ((start && isNaN(start.getTime())) || (end && isNaN(end.getTime()))) {
+      return NextResponse.json({ error: "startDate and endDate must be valid dates" }, { status: 400 });
+    }
+    if (start && end && start >= end) {
+      return NextResponse.json({ error: "startDate must be before endDate" }, { status: 400 });
     }
   }
 
@@ -111,22 +117,18 @@ export async function PUT(
   });
 
   return NextResponse.json({ schedule });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   // Verify ownership
   const existing = await prisma.blackoutSchedule.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
 
   if (!existing) {
@@ -136,4 +138,4 @@ export async function DELETE(
   await prisma.blackoutSchedule.delete({ where: { id } });
 
   return NextResponse.json({ success: true });
-}
+});

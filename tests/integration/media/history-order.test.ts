@@ -28,7 +28,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET } from "@/app/api/media/history/route";
@@ -145,7 +151,8 @@ describe("GET /api/media/history — order across pages", () => {
     );
     const dates = data.items.map((i) => i.watchedAt);
     const firstNull = dates.indexOf(null);
-    expect(firstNull).toBeGreaterThan(0);
+    // Plays 4 and 9 are the undated ones; the other twelve come first.
+    expect(firstNull).toBe(12);
     expect(dates.slice(firstNull).every((d) => d === null)).toBe(true);
     const dated = dates.slice(0, firstNull) as string[];
     expect([...dated].sort().reverse()).toEqual(dated);

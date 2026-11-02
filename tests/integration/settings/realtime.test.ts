@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -16,6 +16,11 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/settings/realtime/route";
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+const prisma = getTestPrisma();
+const storedRealtime = async (userId: string) =>
+  (await prisma.appSettings.findUnique({ where: { userId } }))?.realtimeSync;
 
 beforeEach(async () => {
   await cleanDatabase();
@@ -42,11 +47,10 @@ describe("GET /api/settings/realtime", () => {
     expect(body.realtimeSync).toBe(true);
   });
 
-  it("returns the saved value after PUT", async () => {
+  it("returns the saved value", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
-
-    await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
+    await prisma.appSettings.create({ data: { userId: user.id, realtimeSync: false } });
 
     const res = await callRoute(GET);
     const body = await expectJson<{ realtimeSync: boolean }>(res);
@@ -64,9 +68,20 @@ describe("PUT /api/settings/realtime", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    const res = await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
-    const body = await expectJson<{ realtimeSync: boolean }>(res);
-    expect(body.realtimeSync).toBe(false);
+    // The realtime manager reconciles its sockets on this event.
+    const events: AppEvent[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    try {
+      const res = await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
+      const body = await expectJson<{ realtimeSync: boolean }>(res);
+      expect(body.realtimeSync).toBe(false);
+    } finally {
+      unsubscribe();
+    }
+    expect(await storedRealtime(user.id)).toBe(false);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "settings:changed", userId: user.id, meta: { realtimeSync: false } }),
+    ]);
   });
 
   it("returns 400 when realtimeSync is missing", async () => {
@@ -76,6 +91,7 @@ describe("PUT /api/settings/realtime", () => {
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(await storedRealtime(user.id)).toBeUndefined();
   });
 
   it("returns 400 when realtimeSync is not a boolean", async () => {
@@ -83,19 +99,21 @@ describe("PUT /api/settings/realtime", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { realtimeSync: "yes" } });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["realtimeSync: Invalid input: expected boolean, received string"]);
+    expect(await storedRealtime(user.id)).toBeUndefined();
   });
 
   it("toggles back and forth", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } }));
     let body = await expectJson<{ realtimeSync: boolean }>(await callRoute(GET));
     expect(body.realtimeSync).toBe(false);
 
-    await callRoute(PUT, { method: "PUT", body: { realtimeSync: true } });
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { realtimeSync: true } }));
     body = await expectJson<{ realtimeSync: boolean }>(await callRoute(GET));
     expect(body.realtimeSync).toBe(true);
   });

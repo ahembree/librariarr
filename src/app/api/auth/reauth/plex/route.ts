@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlexUser } from "@/lib/plex/auth";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
 import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
@@ -18,12 +18,7 @@ import { loadReauthContext } from "@/lib/auth/reauth";
  */
 const PLEX_REAUTH_BUCKET = "plex-reauth";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   // Charged only on a failed confirmation (see `reserveAuthAttempt`); after
   // the session check, so a request that is not signed in never drains it.
   const limited = peekAuthRateLimit(request, PLEX_REAUTH_BUCKET);
@@ -82,4 +77,4 @@ export async function POST(request: NextRequest) {
 
   apiLogger.info("Auth", "Identity confirmed with Plex");
   return NextResponse.json({ verified: true });
-}
+});

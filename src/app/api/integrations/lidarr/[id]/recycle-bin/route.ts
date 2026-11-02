@@ -1,42 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
-import { LidarrClient } from "@/lib/arr/lidarr-client";
-import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { LIDARR, instanceRecycleBinRoutes } from "@/lib/integrations/instance-routes";
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await params;
-
-  const instance = await prisma.lidarrInstance.findFirst({
-    where: { id, userId: session.userId },
-  });
-
-  if (!instance) {
-    return NextResponse.json({ error: "Instance not found" }, { status: 404 });
-  }
-
-  try {
-    const client = new LidarrClient(instance.url, instance.apiKey);
-    const config = await client.getMediaManagementConfig();
-    const path = config.recycleBin ?? null;
-    const enabled = !!path && path.trim().length > 0;
-    return NextResponse.json({
-      enabled,
-      path,
-      cleanupDays: config.recycleBinCleanupDays,
-      arrUrl: instance.externalUrl || instance.url,
-    });
-  } catch (error: unknown) {
-    const raw = error instanceof Error ? error.message : "Failed to query Lidarr";
-    const msg = sanitizeErrorDetail(raw) ?? "Failed to query Lidarr";
-    return NextResponse.json({ enabled: null, error: msg, arrUrl: instance.externalUrl || instance.url });
-  }
-}
+// Whether the app keeps deleted files in a recycle bin, as every integration type answers it
+// (src/lib/integrations/instance-routes.ts).
+export const { GET } = instanceRecycleBinRoutes(LIDARR);

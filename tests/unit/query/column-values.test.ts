@@ -110,14 +110,15 @@ describe("formatColumnValue / columnSortValue", () => {
     expect(formatColumnValue(def("genre"), [])).toBe("-");
     expect(formatColumnValue(def("genre"), ["A", "B"])).toBe("A, B");
     expect(formatColumnValue(def("isWatchlisted"), true)).toBe("Yes");
-    expect(formatColumnValue(def("addedAt"), "2024-01-02T12:00:00.000Z")).toBe("Jan 2, 2024");
+    // Local noon on 2 January: the viewer's calendar day in every timezone.
+    expect(formatColumnValue(def("addedAt"), new Date(2024, 0, 2, 12).toISOString())).toBe("Jan 2, 2024");
     expect(formatColumnValue(def("watchedEpisodePercentage"), 33.333)).toBe("33.3%");
     expect(formatColumnValue(def("arrRuntime"), 120)).toBe("120 min");
     expect(formatColumnValue(def("ratingCount"), 12345)).toBe("12,345");
   });
 
   it("sorts dates chronologically and nulls as null", () => {
-    expect(columnSortValue(def("addedAt"), "2024-01-02T00:00:00.000Z")).toBe(Date.parse("2024-01-02T00:00:00.000Z"));
+    expect(columnSortValue(def("addedAt"), "2024-01-02T00:00:00.000Z")).toBe(Date.UTC(2024, 0, 2));
     expect(columnSortValue(def("studio"), null)).toBeNull();
     expect(columnSortValue(def("isWatchlisted"), false)).toBe(0);
     expect(columnSortValue(def("studio"), "A24")).toBe("a24");

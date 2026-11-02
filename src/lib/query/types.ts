@@ -5,13 +5,8 @@
  */
 
 import {
-  CONDITION_FIELDS,
-  CONDITION_OPERATORS,
-  CONDITION_SECTIONS,
   ARR_FIELDS,
   SEERR_FIELDS,
-  CROSS_SYSTEM_FIELDS,
-  STREAM_FIELDS as STREAM_FIELDS_ARRAY,
   GENRE_FIELD as _GENRE_FIELD,
   LABELS_FIELD as _LABELS_FIELD,
   COUNTRY_FIELD as _COUNTRY_FIELD,
@@ -27,34 +22,20 @@ import {
   hasStreamCountRules as _hasStreamCountRules,
   hasSeriesAggregateRules as _hasSeriesAggregateRules,
   hasWatchedByUserRules as _hasWatchedByUserRules,
-  hasPlayActivityRules as _hasPlayActivityRules,
-  isSeriesAggregateField as _isSeriesAggregateField,
   type Condition,
   type ConditionGroup,
-  type ConditionField,
   type ConditionLogic,
-  type ConditionSection,
 } from "@/lib/conditions";
 
 // ─── Type aliases ───────────────────────────────────────────────────────
-export type RuleOperator = string;
 export type LifecycleRuleCondition = ConditionLogic;
 export type QueryRule = Condition;
 export type QueryGroup = ConditionGroup;
-export type QueryFieldSection = ConditionSection;
-export type QueryFieldDef = ConditionField;
-
-// ─── Re-exported registries ─────────────────────────────────────────────
-export const QUERY_FIELDS = CONDITION_FIELDS;
-export const QUERY_OPERATORS = CONDITION_OPERATORS;
-export const QUERY_FIELD_SECTIONS = CONDITION_SECTIONS;
 
 // ─── Field-set sets ──────────────────────────────────────────────────────
 // The query module historically used Sets for these; preserve that shape.
 export const ARR_QUERY_FIELDS = new Set<string>(ARR_FIELDS);
 export const SEERR_QUERY_FIELDS = new Set<string>(SEERR_FIELDS);
-export const CROSS_SYSTEM_QUERY_FIELDS = CROSS_SYSTEM_FIELDS;
-export const STREAM_FIELDS = new Set<string>(STREAM_FIELDS_ARRAY);
 
 export const GENRE_FIELD = _GENRE_FIELD;
 export const LABELS_FIELD = _LABELS_FIELD;
@@ -78,8 +59,6 @@ export const hasResolutionRules = _hasResolutionRules;
 export const hasArrayFieldRules = _hasArrayFieldRules;
 export const hasStreamCountRules = _hasStreamCountRules;
 export const hasWatchedByUserRules = _hasWatchedByUserRules;
-export const hasPlayActivityRules = _hasPlayActivityRules;
-export const isSeriesAggregateField = _isSeriesAggregateField;
 
 // ─── Query definition shape ──────────────────────────────────────────────
 export interface QueryDefinition {

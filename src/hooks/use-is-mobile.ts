@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 
 const MOBILE_BREAKPOINT = 768; // md breakpoint
 const QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`;
@@ -15,10 +15,14 @@ function getSnapshot() {
   return window.matchMedia(QUERY).matches;
 }
 
-function getServerSnapshot() {
-  return false;
-}
+/**
+ * The server's guess at whether the request came from a phone (`isLikelyPhone`,
+ * read by the authenticated layout): what the server render and the render
+ * that hydrates it lay out. False outside the shell.
+ */
+export const MobileGuessContext = createContext(false);
 
 export function useIsMobile() {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const guess = useContext(MobileGuessContext);
+  return useSyncExternalStore(subscribe, getSnapshot, () => guess);
 }

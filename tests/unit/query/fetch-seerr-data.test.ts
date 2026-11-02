@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SEERR_REQUEST_PAGE_SIZE as P } from "@/lib/seerr/request-walk";
 
 const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn() },
@@ -55,7 +56,7 @@ describe("fetchSeerrDataForQuery", () => {
           type: "movie",
           media: { tmdbId: 550, tvdbId: null },
           requestedBy: { plexUsername: "john", username: null, email: null },
-          createdAt: "2024-01-15", updatedAt: "2024-01-16", status: 2,
+          createdAt: "2024-01-15T09:30:00.000Z", updatedAt: "2024-01-16T18:05:00.000Z", status: 2,
         },
       ],
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -63,11 +64,19 @@ describe("fetchSeerrDataForQuery", () => {
 
     const result = await fetchSeerrDataForQuery("u1", ["MOVIE"]);
 
-    expect(result.MOVIE["TMDB:550"]).toBeDefined();
-    expect(result.MOVIE["TMDB:550"].requestCount).toBe(1);
-    expect(result.MOVIE["TMDB:550"].approvalDate).toBe("2024-01-16");
+    expect(result.MOVIE).toEqual({
+      "TMDB:550": {
+        requested: true,
+        requestCount: 1,
+        requestDate: "2024-01-15T09:30:00.000Z",
+        requestedBy: ["john"],
+        // APPROVED: updatedAt is the approval timestamp.
+        approvalDate: "2024-01-16T18:05:00.000Z",
+        declineDate: null,
+      },
+    });
     // Someone is waiting on the query page: the first page fails fast.
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0, mediaType: "movie" }, { retry: false });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: P, skip: 0, mediaType: "movie" }, { retry: false });
   });
 
   it("merges every enabled instance, like lifecycle rules", async () => {
@@ -101,7 +110,7 @@ describe("fetchSeerrDataForQuery", () => {
     const result = await fetchSeerrDataForQuery("u1", ["MOVIE", "SERIES"]);
 
     expect(mockGetRequests).toHaveBeenCalledTimes(1);
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0 }, { retry: false });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: P, skip: 0 }, { retry: false });
     expect(result.MOVIE["TMDB:550"].requestedBy).toEqual(["a"]);
     expect(result.SERIES["TMDB:550"].requestedBy).toEqual(["b"]);
     expect(result.SERIES["TVDB:77"]).toBe(result.SERIES["TMDB:550"]);

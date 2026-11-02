@@ -66,29 +66,35 @@ describe("backfillSeriesKeys", () => {
   it("computes the same key the TS helper does (TVDB > TMDB > title)", async () => {
     const { lib } = await seedSeriesLibrary();
 
-    const tvdbId = await legacyEpisode(lib.id, "The Office", [
-      { source: "TVDB", id: "73244" },
-      { source: "TMDB", id: "2316" },
-    ]);
-    const tmdbId = await legacyEpisode(lib.id, "Some Show", [{ source: "TMDB", id: "555" }]);
-    const titleId = await legacyEpisode(lib.id, "Untracked Show", []);
+    const cases: Array<{ parentTitle: string; externalIds: Array<{ source: string; id: string }>; expected: string }> = [
+      {
+        parentTitle: "The Office",
+        externalIds: [{ source: "TVDB", id: "73244" }, { source: "TMDB", id: "2316" }],
+        expected: "tvdb:73244",
+      },
+      { parentTitle: "Some Show", externalIds: [{ source: "TMDB", id: "555" }], expected: "tmdb:555" },
+      // The title fallback is trimmed and lower-cased on both sides.
+      { parentTitle: "  Untracked Show ", externalIds: [], expected: "title:untracked show" },
+    ];
+    const ids: string[] = [];
+    for (const c of cases) ids.push(await legacyEpisode(lib.id, c.parentTitle, c.externalIds));
 
     const updated = await backfillSeriesKeys();
-    expect(updated).toBe(3);
+    expect(updated).toBe(cases.length);
 
     const prisma = getTestPrisma();
     const rows = await prisma.mediaItem.findMany({
-      where: { id: { in: [tvdbId, tmdbId, titleId] } },
+      where: { id: { in: ids } },
       select: { id: true, seriesKey: true },
     });
     const keyOf = (id: string) => rows.find((r) => r.id === id)!.seriesKey;
 
-    expect(keyOf(tvdbId)).toBe("tvdb:73244");
-    expect(keyOf(tvdbId)).toBe(
-      computeSeriesKey({ parentTitle: "The Office", externalIds: [{ source: "TVDB", id: "73244" }] }),
-    );
-    expect(keyOf(tmdbId)).toBe("tmdb:555");
-    expect(keyOf(titleId)).toBe("title:untracked show");
+    cases.forEach((c, i) => {
+      expect(keyOf(ids[i]), c.parentTitle).toBe(c.expected);
+      expect(keyOf(ids[i]), c.parentTitle).toBe(
+        computeSeriesKey({ parentTitle: c.parentTitle, externalIds: c.externalIds }),
+      );
+    });
   });
 
   it("leaves movies untouched (seriesKey stays null)", async () => {
@@ -97,7 +103,7 @@ describe("backfillSeriesKeys", () => {
     const movieLib = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(movieLib.id, { type: "MOVIE", title: "Heat" });
 
-    await backfillSeriesKeys();
+    expect(await backfillSeriesKeys()).toBe(0);
 
     const after = await getTestPrisma().mediaItem.findFirstOrThrow({ where: { id: movie.id } });
     expect(after.seriesKey).toBeNull();

@@ -7,9 +7,14 @@ import { test, expect } from "@playwright/test";
 const GUARDED = [
   "/",
   "/settings",
+  "/settings/api-docs",
   "/library/movies",
   "/library/series",
+  "/library/series/seasons",
+  "/library/series/episodes",
   "/library/music",
+  "/library/music/albums",
+  "/library/music/tracks",
   "/library/history",
   "/library/query",
   "/lifecycle/rules",
@@ -18,7 +23,10 @@ const GUARDED = [
   "/lifecycle/exceptions",
   "/tools/streams",
   "/tools/preroll",
+  "/tools/trash",
+  "/tools/ai",
   "/system/logs",
+  "/onboarding",
 ];
 
 test.describe("auth guard & login page", () => {

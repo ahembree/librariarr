@@ -51,7 +51,7 @@ describe("oidcIssuerProblem", () => {
 
   it("refuses other schemes and non-URLs", () => {
     for (const value of ["ftp://idp.example.com", "idp.example.com", "", "javascript:alert(1)", "https://"]) {
-      expect(oidcIssuerProblem(value)).toMatch(/https/);
+      expect(oidcIssuerProblem(value)).toBe("Issuer must be a URL starting with https://");
     }
   });
 

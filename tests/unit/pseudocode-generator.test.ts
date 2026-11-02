@@ -141,12 +141,12 @@ describe("generatePseudocode", () => {
     });
   });
 
-  // ── LifecycleRule connectors (the core AND/OR logic) ─────────────────────────────
+  // ── Rule connectors (the core AND/OR logic) ──────────────────────────────
 
   describe("rule connectors within a group", () => {
     it("uses the CURRENT rule's condition as the connector (not previous)", () => {
-      // Rule 1 has condition "OR", LifecycleRule 2 has condition "AND"
-      // The connector between them should be LifecycleRule 2's condition: "AND"
+      // Rule 1 has condition "OR", rule 2 has condition "AND"
+      // The connector between them should be rule 2's condition: "AND"
       const groups = [makeGroup({
         rules: [
           makeRule({ field: "playCount", operator: "equals", value: "0", condition: "OR" }),
@@ -372,8 +372,7 @@ describe("generatePseudocode", () => {
       ];
       const lines = generatePseudocode(groups, testConfig);
       const groupStarts = lines.filter((l) => l.type === "group-start" && l.depth === 0);
-      expect(groupStarts[0].text).toContain("WHERE");
-      expect(groupStarts[1].text).not.toContain("WHERE");
+      expect(groupStarts.map((l) => l.text)).toEqual(["WHERE (", "("]);
     });
   });
 
@@ -462,6 +461,8 @@ describe("generatePseudocode", () => {
         ],
       })];
       const lines = generatePseudocode(groups, testConfig);
+      // group-start, rule, connector, sub-group start, its rule, its end, group-end
+      expect(lines).toHaveLength(7);
       for (const line of lines) {
         expect(line.disabled).toBe(true);
       }
@@ -484,6 +485,17 @@ describe("generatePseudocode", () => {
       const rule = lines.find((l) => l.type === "rule");
       expect(rule?.text).toBe('NOT Resolution = "4K"');
       expect(rule?.negated).toBe(true);
+    });
+
+    it("negated group has a NOT prefix on its opening line", () => {
+      const groups = [makeGroup({
+        negate: true,
+        rules: [makeRule({ field: "resolution", operator: "equals", value: "4K" })],
+      })];
+      const lines = generatePseudocode(groups, testConfig);
+      expect(lines[0]).toMatchObject({ type: "group-start", text: "WHERE NOT (", negated: true });
+      // The rule inside is not itself negated.
+      expect(lines.find((l) => l.type === "rule")).toMatchObject({ text: 'Resolution = "4K"', negated: false });
     });
 
     it("non-negated rule has no NOT prefix", () => {
@@ -784,12 +796,13 @@ describe("generatePseudocode", () => {
         groups: [makeGroup({ rules: [makeRule()] })],
       })];
       const lines = generatePseudocode(groups, testConfig);
-      const subStart = lines.find((l) => l.type === "group-start" && l.depth === 1);
-      const subRule = lines.find((l) => l.type === "rule" && l.depth === 2);
-      const subEnd = lines.find((l) => l.type === "group-end" && l.depth === 1);
-      expect(subStart).toBeDefined();
-      expect(subRule).toBeDefined();
-      expect(subEnd).toBeDefined();
+      expect(simplify(lines)).toEqual([
+        { type: "group-start", text: "WHERE (", depth: 0 },
+        { type: "group-start", text: "(", depth: 1 },
+        { type: "rule", text: "Play Count = 0", depth: 2 },
+        { type: "group-end", text: ")", depth: 1 },
+        { type: "group-end", text: ")", depth: 0 },
+      ]);
     });
 
     it("connectors at same depth as sibling items", () => {
@@ -819,7 +832,7 @@ describe("generatePseudocode", () => {
     });
   });
 
-  // ── LifecycleRule IDs ──────────────────────────────────────────────────────────────
+  // ── Rule IDs ─────────────────────────────────────────────────────────────
 
   describe("ruleId mapping", () => {
     it("rule lines include the original rule's id", () => {

@@ -139,10 +139,13 @@ describe("Series Last Played vs. watch history", () => {
   it("reports the aggregate as MAX over every episode's reconciled play date", async () => {
     const prisma = getTestPrisma();
     const { server, episodes } = await seedSeries();
+    // The aggregate's representative is the lowest-id episode; the play lands
+    // on the OTHER one, so a representative-only read would still say 730 days.
+    const [representative, other] = [...episodes].sort((a, b) => a.id.localeCompare(b.id));
 
     await prisma.watchHistory.create({
       data: {
-        mediaItemId: episodes[0].id,
+        mediaItemId: other.id,
         mediaServerId: server.id,
         serverUsername: "roommate",
         watchedAt: daysAgo(400),
@@ -155,6 +158,9 @@ describe("Series Last Played vs. watch history", () => {
     // representative episode's own date.
     const matches = await evaluateSeriesScope(STALE_SERIES_RULE, [server.id]);
     expect(matches).toHaveLength(1);
+    expect(matches[0].id).toBe(representative.id);
+    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: representative.id } })).lastPlayedAt?.getTime())
+      .toBe(daysAgo(730).getTime());
     expect(new Date(matches[0].seriesLastPlayedAt as Date).getTime()).toBe(
       daysAgo(400).getTime(),
     );

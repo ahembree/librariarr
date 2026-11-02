@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, transcodeManagerSchema } from "@/lib/validation";
 
@@ -11,14 +11,9 @@ const DEFAULT_CRITERIA = {
   remoteTranscoding: false,
 };
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: {
       transcodeManagerEnabled: true,
       transcodeManagerMessage: true,
@@ -37,20 +32,15 @@ export async function GET() {
     excludedUsers: settings?.transcodeManagerExcludedUsers ?? [],
     exemptHardware: settings?.transcodeManagerExemptHardware ?? false,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, transcodeManagerSchema);
   if (error) return error;
   const { enabled, message, delay, criteria, excludedUsers, exemptHardware } = data;
 
   const settings = await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: {
       transcodeManagerEnabled: enabled,
       transcodeManagerMessage: message,
@@ -60,7 +50,7 @@ export async function PUT(request: NextRequest) {
       ...(exemptHardware !== undefined && { transcodeManagerExemptHardware: exemptHardware }),
     },
     create: {
-      userId: session.userId!,
+      userId: session.userId,
       transcodeManagerEnabled: enabled,
       transcodeManagerMessage: message,
       transcodeManagerDelay: delay ?? 30,
@@ -86,4 +76,4 @@ export async function PUT(request: NextRequest) {
     excludedUsers: settings.transcodeManagerExcludedUsers,
     exemptHardware: settings.transcodeManagerExemptHardware,
   });
-}
+});

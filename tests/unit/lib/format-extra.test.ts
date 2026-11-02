@@ -4,7 +4,7 @@ import { formatDurationLarge } from "@/lib/format";
 /**
  * `formatUntil` and `formatRelativeDate` are already fully covered in
  * tests/unit/format.test.ts. The only function in src/lib/format.ts with no
- * coverage is `formatDurationLarge` (lines 51-73), so this file targets every
+ * coverage is `formatDurationLarge`, so this file targets every
  * one of its branches.
  */
 describe("formatDurationLarge", () => {

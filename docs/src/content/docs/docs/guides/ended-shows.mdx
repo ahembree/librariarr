@@ -24,14 +24,14 @@ Sonarr knows the first fact; Librariarr's play history knows the second.
 Start with the non-destructive version. On the **Series** tab with
 **Match against entire series** on, the top group holds:
 
-- `arrEnded` **equals** `true` — Sonarr reports the show as ended.
-- `arrHasUnaired` **equals** `false` — nothing is still due to air (a
+- **Ended** (`arrEnded`) **equals** `true` — Sonarr reports the show as ended.
+- **Has Unaired** (`arrHasUnaired`) **equals** `false` — nothing is still due to air (a
   show marked ended can have a final episode pending).
 
 and a nested group (**Add Group**) joined with **OR** inside:
 
-- `watchedEpisodePercentage` **equals** `0` — nobody has ever started it.
-- `seriesLastPlayedAt` **More Than X Days Ago** `365` — the newest play
+- **Watched Episode %** (`watchedEpisodePercentage`) **equals** `0` — nobody has ever started it.
+- **Series Last Played** (`seriesLastPlayedAt`) **More Than X Days Ago** `365` — the newest play
   across every episode is over a year old. A show nobody has played has no
   play date at all, so this condition alone would skip it.
 
@@ -47,13 +47,13 @@ episode was played last week.
 ## Step two: remove them
 
 Once you trust the matches, a second rule set can delete. Use the same
-conditions plus `watchedEpisodePercentage` **less than** `25` — shows the
+conditions plus **Watched Episode %** (`watchedEpisodePercentage`) **less than** `25` — shows the
 household abandoned early rather than finished — with **Delete from Sonarr**
 and a delay of two weeks. **Delete from Sonarr** removes the whole series
 and its files; it is refused outright when *any* episode of the show is on
 the Exceptions list, even one the rule never matched.
 
-To keep what people did finish, invert the test: `watchedEpisodePercentage`
+To keep what people did finish, invert the test: **Watched Episode %** (`watchedEpisodePercentage`)
 **greater than** `90` with **Unmonitor Only** stops Sonarr spending
 bandwidth on upgrades for shows that have already been watched through.
 
@@ -65,10 +65,10 @@ bandwidth on upgrades for shows that have already been watched through.
 
 ## Related fields
 
-- `arrSeriesType` — Sonarr's series type (standard, daily, anime), to keep
+- **Series Type** (`arrSeriesType`) — Sonarr's series type (standard, daily, anime), to keep
   anime out of a rule written for standard ordering.
-- `availableEpisodeCount` — how many episodes are actually on disk, so a
+- **Available Episode Count** (`availableEpisodeCount`) — how many episodes are actually on disk, so a
   show you only ever had two episodes of can be treated differently from a
   complete run.
-- `lastEpisodeAddedAt` — when the newest episode arrived; `more than X
+- **Last Episode Added** (`lastEpisodeAddedAt`) — when the newest episode arrived; `more than X
   days ago` keeps a show that is still being filled in off the list.

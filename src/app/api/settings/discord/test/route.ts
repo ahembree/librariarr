@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { sendDiscordNotification } from "@/lib/discord/client";
 import { validateRequest, discordTestSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, discordTestSchema);
   if (error) return error;
   // The settings page echoes the GET's mask back; that means "the saved one".
@@ -21,7 +16,7 @@ export async function POST(request: NextRequest) {
   // Fall back to saved settings if no URL provided
   if (!webhookUrl) {
     const settings = await prisma.appSettings.findUnique({
-      where: { userId: session.userId! },
+      where: { userId: session.userId },
     });
     if (!settings?.discordWebhookUrl) {
       return NextResponse.json(
@@ -57,4 +52,4 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ success: true });
-}
+});

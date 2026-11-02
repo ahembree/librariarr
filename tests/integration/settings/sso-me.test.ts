@@ -44,14 +44,8 @@ describe("GET /api/settings/sso/me", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const res = await callRoute(GET, { method: "GET" });
-    const body = await expectJson<{
-      ssoSubject: string | null;
-      ssoProvider: string | null;
-      ssoEnabled: boolean;
-    }>(res);
-    expect(body.ssoSubject).toBeNull();
-    expect(body.ssoProvider).toBeNull();
-    expect(body.ssoEnabled).toBe(false);
+    const body = await expectJson(res);
+    expect(body).toEqual({ ssoSubject: null, ssoProvider: null, ssoEnabled: false });
   });
 
   it("returns the linked subject + provider when present", async () => {
@@ -68,13 +62,9 @@ describe("GET /api/settings/sso/me", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const res = await callRoute(GET, { method: "GET" });
-    const body = await expectJson<{
-      ssoSubject: string | null;
-      ssoProvider: string | null;
-      ssoEnabled: boolean;
-    }>(res);
-    expect(body.ssoSubject).toBe("sub-123");
-    expect(body.ssoProvider).toBe("authentik");
-    expect(body.ssoEnabled).toBe(true);
+    const body = await expectJson(res);
+    // The link state only: nothing else from the User row (the Plex token,
+    // the password hash) rides along.
+    expect(body).toEqual({ ssoSubject: "sub-123", ssoProvider: "authentik", ssoEnabled: true });
   });
 });

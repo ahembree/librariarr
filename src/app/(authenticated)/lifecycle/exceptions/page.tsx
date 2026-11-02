@@ -2,23 +2,17 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { useRealtime } from "@/hooks/use-realtime";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
 import { TabNav } from "@/components/tab-nav";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { PageHeader } from "@/components/page-header";
 import {
   Dialog,
   DialogContent,
@@ -42,8 +36,8 @@ import {
   Trash2,
   Tv,
 } from "lucide-react";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatEpisodeTitle } from "@/lib/media/display-title";
-import type { MediaItemWithRelations } from "@/lib/types";
 
 interface ExceptionItem {
   id: string;
@@ -53,6 +47,8 @@ interface ExceptionItem {
     id: string;
     title: string;
     parentTitle: string | null;
+    /** Series identity (src/lib/media/series-key.ts); null on movies and tracks. */
+    seriesKey?: string | null;
     albumTitle?: string | null;
     type: string;
     year: number | null;
@@ -67,6 +63,7 @@ interface ExceptionItem {
     resolution: string | null;
     dynamicRange: string | null;
     audioProfile: string | null;
+    audioCodec: string | null;
     fileSize: string | null;
     genres: string[] | null;
     studio: string | null;
@@ -112,6 +109,12 @@ interface GroupedExceptionRow {
   albumCount?: number;
   /** Most recent lastPlayedAt across group items. */
   lastPlayedAt: string | null;
+  /** Plays summed across the group items. */
+  playCount: number;
+  /** Items per resolution label (series rows). */
+  qualityCounts: Record<string, number>;
+  /** Items per audio codec (music rows). */
+  audioCodecCounts: Record<string, number>;
   /** Earliest addedAt across group items. */
   addedAt: string | null;
   /** Unique servers that hold items in this group. */
@@ -141,6 +144,9 @@ const TABS: { value: TabType; label: string; icon: typeof Film }[] = [
 
 function computeAggregates(items: ExceptionItem[]) {
   let totalSize = BigInt(0);
+  let playCount = 0;
+  const qualityCounts: Record<string, number> = {};
+  const audioCodecCounts: Record<string, number> = {};
   let lastPlayedAt: string | null = null;
   let addedAt: string | null = null;
   const serverMap = new Map<string, ServerInfo>();
@@ -149,6 +155,12 @@ function computeAggregates(items: ExceptionItem[]) {
     if (e.mediaItem.fileSize) {
       totalSize += BigInt(e.mediaItem.fileSize);
     }
+    playCount += e.mediaItem.playCount ?? 0;
+    // The buckets the library's own aggregates use.
+    const quality = normalizeResolutionLabel(e.mediaItem.resolution);
+    qualityCounts[quality] = (qualityCounts[quality] ?? 0) + 1;
+    const codec = e.mediaItem.audioCodec ? e.mediaItem.audioCodec.toUpperCase() : "Unknown";
+    audioCodecCounts[codec] = (audioCodecCounts[codec] ?? 0) + 1;
     if (e.mediaItem.lastPlayedAt) {
       if (!lastPlayedAt || e.mediaItem.lastPlayedAt > lastPlayedAt) {
         lastPlayedAt = e.mediaItem.lastPlayedAt;
@@ -171,6 +183,9 @@ function computeAggregates(items: ExceptionItem[]) {
 
   return {
     totalSize: totalSize > 0 ? totalSize.toString() : null,
+    playCount,
+    qualityCounts,
+    audioCodecCounts,
     lastPlayedAt,
     addedAt,
     servers: [...serverMap.values()].sort((a, b) =>
@@ -196,6 +211,9 @@ function groupExceptions(
         createdAt: e.createdAt,
         year: e.mediaItem.year,
         totalSize: e.mediaItem.fileSize,
+        playCount: e.mediaItem.playCount,
+        qualityCounts: {},
+        audioCodecCounts: {},
         lastPlayedAt: e.mediaItem.lastPlayedAt,
         addedAt: e.mediaItem.addedAt,
         servers: ms
@@ -206,11 +224,15 @@ function groupExceptions(
     });
   }
 
-  // Series: group by parentTitle
+  // Series: group by series identity, never by title. Keyed on `parentTitle`,
+  // two different shows sharing a title (The Office UK and US) became one row,
+  // and Remove or Edit Reason then acted on both shows' exceptions — taking
+  // the protection off a show the user never meant to touch. The same show on
+  // two servers shares a key and stays one row.
   if (tab === "SERIES") {
     const groups = new Map<string, ExceptionItem[]>();
     for (const e of exceptions) {
-      const key = e.mediaItem.parentTitle ?? e.mediaItem.title;
+      const key = e.mediaItem.seriesKey ?? `title:${(e.mediaItem.parentTitle ?? e.mediaItem.title).trim().toLowerCase()}`;
       const group = groups.get(key);
       if (group) {
         group.push(e);
@@ -218,7 +240,8 @@ function groupExceptions(
         groups.set(key, [e]);
       }
     }
-    return [...groups.entries()].map(([seriesName, items]) => {
+    return [...groups.values()].map((items) => {
+      const seriesName = items[0].mediaItem.parentTitle ?? items[0].mediaItem.title;
       const agg = computeAggregates(items);
       const seasons = new Set(
         items
@@ -282,20 +305,50 @@ function groupExceptions(
   });
 }
 
-export default function LifecycleExceptionsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("MOVIE");
-  const [exceptions, setExceptions] = useState<ExceptionItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [removing, setRemoving] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<GroupedExceptionRow | null>(null);
+const exceptionRowKey = (row: GroupedExceptionRow) => row.id;
 
-  // Edit reason
-  const [editingGroup, setEditingGroup] = useState<GroupedExceptionRow | null>(null);
-  const [editReason, setEditReason] = useState("");
-  const [savingReason, setSavingReason] = useState(false);
+function getSearchResultLabel(item: SearchResult): string {
+  if (item.scope === "artist") return item.title;
+  if (item.scope === "album")
+    return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
+  if (item.scope === "series") return item.title;
+  // individual (movies)
+  return item.parentTitle
+    ? `${item.parentTitle} — ${item.title}`
+    : item.title;
+}
 
-  // Add manually
-  const [showAddDialog, setShowAddDialog] = useState(false);
+function getSearchResultSubtitle(item: SearchResult): string | null {
+  if (item.scope === "artist")
+    return `Artist · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
+  if (item.scope === "album")
+    return `Album · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
+  if (item.scope === "series")
+    return `${item.itemCount} ${item.itemCount === 1 ? "episode" : "episodes"}`;
+  return item.year ? String(item.year) : null;
+}
+
+/**
+ * "Add Exception": search the tab's media and file exceptions from the
+ * results. Its search box and reason live here, so typing re-renders the
+ * dialog alone — at the page, every keystroke re-rendered the table behind it.
+ */
+function AddExceptionDialog({
+  open,
+  onOpenChange,
+  activeTab,
+  existingMediaItemIds,
+  existingGroupTitles,
+  onAdded,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  activeTab: TabType;
+  existingMediaItemIds: ReadonlySet<string>;
+  existingGroupTitles: ReadonlySet<string>;
+  /** An exception was filed: re-read the listing. */
+  onAdded: () => Promise<void>;
+}) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -303,139 +356,16 @@ export default function LifecycleExceptionsPage() {
   const [addReason, setAddReason] = useState("");
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Media detail panel
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [selectedDetailUrl, setSelectedDetailUrl] = useState<string | undefined>();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-exceptions-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-
-  const fetchExceptions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/lifecycle/exceptions?type=${activeTab}`);
-      if (response.ok) {
-        const data = await response.json();
-        setExceptions(data.exceptions);
-      }
-    } catch (error) {
-      console.error("Failed to fetch exceptions:", error);
-    } finally {
-      setLoading(false);
+  // Every opening starts with an empty search.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setSearchQuery("");
+      setSearchResults([]);
+      setAddReason("");
     }
-  }, [activeTab]);
-
-// Exceptions cascade away with the media they protect, so a purge or a sync
-  // that removes items silently invalidates rows this page is still rendering.
-  useRealtime("sync:completed", fetchExceptions);
-  useRealtime("lifecycle:action-executed", fetchExceptions);
-
-    useEffect(() => {
-    void (async () => { await fetchExceptions(); })();
-  }, [fetchExceptions]);
-
-  const groupedRows = useMemo(
-    () => groupExceptions(exceptions, activeTab),
-    [exceptions, activeTab]
-  );
-
-  const openDetailPanel = async (row: GroupedExceptionRow) => {
-    const mediaType = row.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
-
-    try {
-      const response = await fetch(`/api/media/${row.mediaItem.id}`);
-      if (!response.ok) return;
-      const data = await response.json();
-      const rawItem: MediaItemWithRelations = data.item ?? data;
-
-      if (mediaType === "MOVIE") {
-        setSelectedDetailUrl(undefined);
-        setSelectedItem(rawItem);
-      } else {
-        // Series/Music: construct a top-level aggregate view
-        const topLevelItem: MediaItemWithRelations = {
-          ...rawItem,
-          title: row.displayTitle,
-          parentTitle: null,
-          matchedEpisodes: row.itemCount,
-          fileSize: row.totalSize,
-        };
-        const detailUrl = mediaType === "SERIES"
-          ? `/library/series/show/${row.mediaItem.id}`
-          : `/library/music/artist/${row.mediaItem.id}`;
-        setSelectedDetailUrl(detailUrl);
-        setSelectedItem(topLevelItem);
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    }
-  };
-
-  const handleRemove = async (row: GroupedExceptionRow) => {
-    setRemoving(row.id);
-    try {
-      const response = await fetch("/api/lifecycle/exceptions", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: row.exceptionIds }),
-      });
-      if (response.ok) {
-        const removedIds = new Set(row.exceptionIds);
-        setExceptions((prev) => prev.filter((e) => !removedIds.has(e.id)));
-        if (selectedItem && selectedItem.id === row.mediaItem.id) {
-          setSelectedItem(null);
-        }
-        toast.success("Exception removed", { description: row.displayTitle });
-      } else {
-        const data = await response.json().catch(() => ({}));
-        toast.error("Couldn't remove exception", { description: data.error });
-      }
-    } catch (error) {
-      console.error("Failed to remove exception:", error);
-      toast.error("Couldn't remove exception");
-    } finally {
-      setRemoving(null);
-      setConfirmRemove(null);
-    }
-  };
-
-  const handleEditReason = async () => {
-    if (!editingGroup) return;
-    setSavingReason(true);
-    try {
-      const response = await fetch("/api/lifecycle/exceptions", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ids: editingGroup.exceptionIds,
-          reason: editReason || undefined,
-        }),
-      });
-      if (response.ok) {
-        const updatedIds = new Set(editingGroup.exceptionIds);
-        setExceptions((prev) =>
-          prev.map((e) =>
-            updatedIds.has(e.id) ? { ...e, reason: editReason || null } : e
-          )
-        );
-        setEditingGroup(null);
-        toast.success("Reason updated");
-      } else {
-        const data = await response.json().catch(() => ({}));
-        toast.error("Couldn't update reason", { description: data.error });
-      }
-    } catch (error) {
-      console.error("Failed to update reason:", error);
-      toast.error("Couldn't update reason");
-    } finally {
-      setSavingReason(false);
-    }
-  };
+  }
 
   // Search for media items to add manually
   const handleSearch = useCallback(async (query: string) => {
@@ -485,7 +415,7 @@ export default function LifecycleExceptionsPage() {
       if (response.ok) {
         // Remove from search results and refresh exceptions
         setSearchResults((prev) => prev.filter((r) => r.id !== item.id));
-        await fetchExceptions();
+        await onAdded();
         toast.success("Exception added", { description: getSearchResultLabel(item) });
       } else {
         const data = await response.json().catch(() => ({}));
@@ -499,25 +429,251 @@ export default function LifecycleExceptionsPage() {
     }
   };
 
-  const getSearchResultLabel = (item: SearchResult) => {
-    if (item.scope === "artist") return item.title;
-    if (item.scope === "album")
-      return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
-    if (item.scope === "series") return item.title;
-    // individual (movies)
-    return item.parentTitle
-      ? `${item.parentTitle} — ${item.title}`
-      : item.title;
+  const searchPlaceholder =
+    activeTab === "MOVIE"
+      ? "Search by title..."
+      : activeTab === "SERIES"
+        ? "Search by series name..."
+        : "Search by artist or album...";
+
+  const dialogDescription =
+    activeTab === "MOVIE"
+      ? "Search for a movie to exclude from lifecycle actions."
+      : activeTab === "SERIES"
+        ? "Search for a series to exclude all its episodes from lifecycle actions."
+        : "Search for an artist or album to exclude from lifecycle actions.";
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onOpenChange(false); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add Exception</DialogTitle>
+          <DialogDescription>
+            {dialogDescription}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="exception-search">Search</Label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="exception-search"
+                placeholder={searchPlaceholder}
+                className="pl-9"
+                value={searchQuery}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="exception-reason">Reason</Label>
+            <Input
+              id="exception-reason"
+              placeholder="Optional — applied to anything you add below"
+              value={addReason}
+              onChange={(e) => setAddReason(e.target.value)}
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded-md border">
+            {searching ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                {searchQuery.trim() ? "No results found." : "Type to search for media items."}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {searchResults.map((item) => {
+                  // For grouped scopes, match against display titles of existing
+                  // groups: the search's representative id differs from the
+                  // exceptions' own.
+                  const alreadyExcluded = item.scope === "individual"
+                    ? existingMediaItemIds.has(item.id)
+                    : existingGroupTitles.has(getSearchResultLabel(item));
+                  const subtitle = getSearchResultSubtitle(item);
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {getSearchResultLabel(item)}
+                        </p>
+                        {subtitle && (
+                          <p className="text-xs text-muted-foreground">{subtitle}</p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-3 shrink-0"
+                        disabled={alreadyExcluded || addingItemId === item.id}
+                        onClick={() => handleAddException(item)}
+                      >
+                        {addingItemId === item.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : alreadyExcluded ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                            Excluded
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="h-3.5 w-3.5 mr-1" />
+                            Add
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export default function LifecycleExceptionsPage() {
+  const [activeTab, setActiveTab] = useState<TabType>("MOVIE");
+  const [exceptions, setExceptions] = useState<ExceptionItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<GroupedExceptionRow | null>(null);
+
+  // Edit reason
+  const [editingGroup, setEditingGroup] = useState<GroupedExceptionRow | null>(null);
+  const [editReason, setEditReason] = useState("");
+  const [savingReason, setSavingReason] = useState(false);
+
+  // Add manually
+  const [showAddDialog, setShowAddDialog] = useState(false);
+
+  // Media detail panel
+  const detailPanel = useMediaDetailPanel();
+
+  // Only the latest request may write: a tab switch while the previous tab's
+  // list loaded let the older response land second, and the new tab grouped
+  // the other type's exceptions under its own columns.
+  const exceptionsReqToken = useRef(0);
+  const fetchExceptions = useCallback(async () => {
+    const token = ++exceptionsReqToken.current;
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/lifecycle/exceptions?type=${activeTab}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (token !== exceptionsReqToken.current) return;
+        setExceptions(data.exceptions);
+      }
+    } catch (error) {
+      console.error("Failed to fetch exceptions:", error);
+    } finally {
+      if (token === exceptionsReqToken.current) setLoading(false);
+    }
+  }, [activeTab]);
+
+  // Exceptions cascade away with the media they protect, so a purge or a sync
+  // that removes items silently invalidates rows this page is still rendering.
+  useRealtime("sync:completed", fetchExceptions);
+  useRealtime("lifecycle:action-executed", fetchExceptions);
+
+  useEffect(() => {
+    void (async () => { await fetchExceptions(); })();
+  }, [fetchExceptions]);
+
+  const groupedRows = useMemo(
+    () => groupExceptions(exceptions, activeTab),
+    [exceptions, activeTab]
+  );
+
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((row: GroupedExceptionRow) => {
+    const mediaType = toDetailPanelMediaType(row.mediaItem.type);
+    void openPanel({
+      id: row.mediaItem.id,
+      mediaType,
+      label: row.displayTitle,
+      // A series or music row stands for every excepted episode/track under
+      // it — except a series row holding one episode, which is named as that
+      // episode ("<Show> SxxExx") and so opens as it.
+      group: mediaType === "MOVIE" || (mediaType === "SERIES" && row.itemCount === 1) ? undefined : {
+        title: row.displayTitle,
+        memberCount: row.itemCount,
+        fileSize: row.totalSize,
+        playCount: row.playCount,
+        lastPlayedAt: row.lastPlayedAt,
+        addedAt: row.addedAt,
+      },
+    });
+  }, [openPanel]);
+
+  const handleRemove = async (row: GroupedExceptionRow) => {
+    setRemoving(row.id);
+    try {
+      const response = await fetch("/api/lifecycle/exceptions", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: row.exceptionIds }),
+      });
+      if (response.ok) {
+        const removedIds = new Set(row.exceptionIds);
+        setExceptions((prev) => prev.filter((e) => !removedIds.has(e.id)));
+        if (detailPanel.selectedId === row.mediaItem.id) {
+          detailPanel.close();
+        }
+        toast.success("Exception removed", { description: row.displayTitle });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't remove exception", { description: data.error });
+      }
+    } catch (error) {
+      console.error("Failed to remove exception:", error);
+      toast.error("Couldn't remove exception");
+    } finally {
+      setRemoving(null);
+      setConfirmRemove(null);
+    }
   };
 
-  const getSearchResultSubtitle = (item: SearchResult) => {
-    if (item.scope === "artist")
-      return `Artist · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
-    if (item.scope === "album")
-      return `Album · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
-    if (item.scope === "series")
-      return `${item.itemCount} ${item.itemCount === 1 ? "episode" : "episodes"}`;
-    return item.year ? String(item.year) : null;
+  const handleEditReason = async () => {
+    if (!editingGroup) return;
+    setSavingReason(true);
+    try {
+      const response = await fetch("/api/lifecycle/exceptions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: editingGroup.exceptionIds,
+          reason: editReason || undefined,
+        }),
+      });
+      if (response.ok) {
+        const updatedIds = new Set(editingGroup.exceptionIds);
+        setExceptions((prev) =>
+          prev.map((e) =>
+            updatedIds.has(e.id) ? { ...e, reason: editReason || null } : e
+          )
+        );
+        setEditingGroup(null);
+        toast.success("Reason updated");
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't update reason", { description: data.error });
+      }
+    } catch (error) {
+      console.error("Failed to update reason:", error);
+      toast.error("Couldn't update reason");
+    } finally {
+      setSavingReason(false);
+    }
   };
 
   const renderHoverContent = useCallback((row: GroupedExceptionRow) => {
@@ -545,7 +701,7 @@ export default function LifecycleExceptionsPage() {
             fileSize: row.totalSize,
             genres: row.mediaItem.genres,
             studio: row.mediaItem.studio,
-            playCount: row.mediaItem.playCount,
+            playCount: row.playCount,
             lastPlayedAt: row.lastPlayedAt,
             addedAt: row.addedAt,
             servers: row.servers,
@@ -571,11 +727,14 @@ export default function LifecycleExceptionsPage() {
             studio: row.mediaItem.studio,
             seasonCount: row.seasonCount,
             episodeCount: row.itemCount,
-            resolution: row.mediaItem.resolution,
-            dynamicRange: row.mediaItem.dynamicRange,
-            audioProfile: row.mediaItem.audioProfile,
+            // One excepted episode is that episode; a group's own quality
+            // values would be one episode's.
+            resolution: row.itemCount === 1 ? row.mediaItem.resolution : undefined,
+            dynamicRange: row.itemCount === 1 ? row.mediaItem.dynamicRange : undefined,
+            audioProfile: row.itemCount === 1 ? row.mediaItem.audioProfile : undefined,
+            qualityCounts: row.itemCount === 1 ? undefined : row.qualityCounts,
             fileSize: row.totalSize,
-            playCount: row.mediaItem.playCount,
+            playCount: row.playCount,
             lastPlayedAt: row.lastPlayedAt,
             addedAt: row.addedAt,
             servers: row.servers,
@@ -602,11 +761,10 @@ export default function LifecycleExceptionsPage() {
           studio: row.mediaItem.studio,
           albumCount: row.albumCount,
           trackCount: row.itemCount,
-          resolution: row.mediaItem.resolution,
-          dynamicRange: row.mediaItem.dynamicRange,
-          audioProfile: row.mediaItem.audioProfile,
+          // An album or artist row is a group: its codecs, counted.
+          audioCodecCounts: row.audioCodecCounts,
           fileSize: row.totalSize,
-          playCount: row.mediaItem.playCount,
+          playCount: row.playCount,
           lastPlayedAt: row.lastPlayedAt,
           addedAt: row.addedAt,
           servers: row.servers,
@@ -617,7 +775,9 @@ export default function LifecycleExceptionsPage() {
 
   const isGrouped = activeTab !== "MOVIE";
 
-  const exceptionColumns: DataTableColumn<GroupedExceptionRow>[] = [
+  // Memoised: the table re-sorts whenever its sort column's `sortValue`
+  // changes, and built inline every render re-sorted on any state change.
+  const exceptionColumns = useMemo<DataTableColumn<GroupedExceptionRow>[]>(() => [
     {
       id: "title",
       header: "Title",
@@ -701,51 +861,30 @@ export default function LifecycleExceptionsPage() {
         </div>
       ),
     },
-  ];
+  ], [activeTab, isGrouped, removing]);
 
-  const existingMediaItemIds = new Set(exceptions.map((e) => e.mediaItem.id));
+  const existingMediaItemIds = useMemo(() => new Set(exceptions.map((e) => e.mediaItem.id)), [exceptions]);
   // For grouped tabs, track existing group display titles so the "already excluded"
   // check works even when the search representative ID differs from exception IDs
   const existingGroupTitles = useMemo(() => {
     return new Set(groupedRows.map((r) => r.displayTitle));
   }, [groupedRows]);
 
-  const searchPlaceholder =
-    activeTab === "MOVIE"
-      ? "Search by title..."
-      : activeTab === "SERIES"
-        ? "Search by series name..."
-        : "Search by artist or album...";
-
-  const dialogDescription =
-    activeTab === "MOVIE"
-      ? "Search for a movie to exclude from lifecycle actions."
-      : activeTab === "SERIES"
-        ? "Search for a series to exclude all its episodes from lifecycle actions."
-        : "Search for an artist or album to exclude from lifecycle actions.";
-
-  const openAddDialog = () => {
-    setShowAddDialog(true);
-    setSearchQuery("");
-    setSearchResults([]);
-    setAddReason("");
-  };
+  const openAddDialog = () => setShowAddDialog(true);
 
   return (
     <>
       <div className="space-y-6 p-4 sm:p-6 lg:p-8 overflow-y-auto h-full">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
-            <p className="text-muted-foreground mt-1">
-              Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
-            </p>
-          </div>
-          <Button onClick={openAddDialog} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Exception
-          </Button>
-        </div>
+        <PageHeader
+          title="Lifecycle Exceptions"
+          description="Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set."
+          actions={
+            <Button onClick={openAddDialog} className="shrink-0">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Exception
+            </Button>
+          }
+        />
 
         {/* Tab navigation */}
         <TabNav tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
@@ -779,38 +918,34 @@ export default function LifecycleExceptionsPage() {
             <DataTable<GroupedExceptionRow>
               columns={exceptionColumns}
               data={groupedRows}
-              keyExtractor={(row) => row.id}
+              keyExtractor={exceptionRowKey}
               defaultSortId="title"
               resizeStorageKey="dt-widths-exceptions"
-              onRowClick={(row) => openDetailPanel(row)}
+              onRowClick={openDetailPanel}
               renderHoverContent={renderHoverContent}
             />
           </div>
         )}
 
         {/* Confirm removal dialog */}
-        <AlertDialog open={!!confirmRemove} onOpenChange={() => setConfirmRemove(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Remove exception?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will allow &quot;{confirmRemove?.displayTitle}&quot;
-                {confirmRemove && confirmRemove.itemCount > 1
-                  ? ` (${confirmRemove.itemCount} ${activeTab === "SERIES" ? "episodes" : "tracks"})`
-                  : ""}
-                {" "}to be matched and actioned by lifecycle rules again.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => confirmRemove && handleRemove(confirmRemove)}
-              >
-                Remove
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ConfirmDialog
+          open={!!confirmRemove}
+          onOpenChange={(open) => { if (!open) setConfirmRemove(null); }}
+          title="Remove exception?"
+          description={
+            <>
+              This will allow &quot;{confirmRemove?.displayTitle}&quot;
+              {confirmRemove && confirmRemove.itemCount > 1
+                ? ` (${confirmRemove.itemCount} ${activeTab === "SERIES" ? "episodes" : "tracks"})`
+                : ""}
+              {" "}to be matched and actioned by lifecycle rules again.
+            </>
+          }
+          confirmLabel="Remove"
+          onConfirm={() => {
+            if (confirmRemove) void handleRemove(confirmRemove);
+          }}
+        />
 
         {/* Edit reason dialog */}
         <Dialog open={!!editingGroup} onOpenChange={(open) => { if (!open) setEditingGroup(null); }}>
@@ -840,123 +975,25 @@ export default function LifecycleExceptionsPage() {
               <Button variant="outline" onClick={() => setEditingGroup(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleEditReason} disabled={savingReason}>
-                {savingReason ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              <LoadingButton onClick={handleEditReason} loading={savingReason} iconClassName="h-4 w-4 mr-2">
                 Save
-              </Button>
+              </LoadingButton>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Add exception dialog */}
-        <Dialog open={showAddDialog} onOpenChange={(open) => { if (!open) setShowAddDialog(false); }}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Add Exception</DialogTitle>
-              <DialogDescription>
-                {dialogDescription}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="exception-search">Search</Label>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="exception-search"
-                    placeholder={searchPlaceholder}
-                    className="pl-9"
-                    value={searchQuery}
-                    onChange={(e) => handleSearchInput(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="exception-reason">Reason</Label>
-                <Input
-                  id="exception-reason"
-                  placeholder="Optional — applied to anything you add below"
-                  value={addReason}
-                  onChange={(e) => setAddReason(e.target.value)}
-                />
-              </div>
-              <div className="max-h-64 overflow-y-auto rounded-md border">
-                {searching ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : searchResults.length === 0 ? (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    {searchQuery.trim() ? "No results found." : "Type to search for media items."}
-                  </div>
-                ) : (
-                  <div className="divide-y">
-                    {searchResults.map((item) => {
-                      const alreadyExcluded = (() => {
-                        if (item.scope === "individual")
-                          return existingMediaItemIds.has(item.id);
-                        // For grouped scopes, match against display titles of existing groups
-                        const label = getSearchResultLabel(item);
-                        return existingGroupTitles.has(label);
-                      })();
-                      const subtitle = getSearchResultSubtitle(item);
-                      return (
-                        <div
-                          key={item.id}
-                          className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {getSearchResultLabel(item)}
-                            </p>
-                            {subtitle && (
-                              <p className="text-xs text-muted-foreground">{subtitle}</p>
-                            )}
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="ml-3 shrink-0"
-                            disabled={alreadyExcluded || addingItemId === item.id}
-                            onClick={() => handleAddException(item)}
-                          >
-                            {addingItemId === item.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : alreadyExcluded ? (
-                              <>
-                                <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
-                                Excluded
-                              </>
-                            ) : (
-                              <>
-                                <Plus className="h-3.5 w-3.5 mr-1" />
-                                Add
-                              </>
-                            )}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <AddExceptionDialog
+          open={showAddDialog}
+          onOpenChange={setShowAddDialog}
+          activeTab={activeTab}
+          existingMediaItemIds={existingMediaItemIds}
+          existingGroupTitles={existingGroupTitles}
+          onAdded={fetchExceptions}
+        />
       </div>
 
       {/* Media detail side panel */}
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          detailUrl={selectedDetailUrl}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
     </>
   );
 }

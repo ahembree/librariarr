@@ -20,7 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -128,8 +128,11 @@ function saveErrorMessage(data: { error?: string; details?: unknown } | null, fa
   return typeof first === "string" ? `${error} — ${first}` : error;
 }
 
-async function fetchApiKeys(): Promise<ApiKeyRow[]> {
-  const res = await fetch("/api/settings/api-keys", { cache: "no-store" });
+// Never from the browser's cache: the list must show a key just made or deleted.
+const fetchApiKeyList = () => fetch("/api/settings/api-keys", { cache: "no-store" });
+
+async function fetchApiKeys(read: () => Promise<Response> = fetchApiKeyList): Promise<ApiKeyRow[]> {
+  const res = await read();
   if (!res.ok) throw new Error(String(res.status));
   return ((await res.json()) as { apiKeys: ApiKeyRow[] }).apiKeys;
 }
@@ -139,7 +142,18 @@ function isExpired(key: ApiKeyRow): boolean {
 }
 
 
-export function ApiKeysSection({ confirmsWithPassword }: { confirmsWithPassword: boolean }) {
+/**
+ * `read` answers the opening read of the key list; the Settings page passes
+ * one that serves it from its settings bundle, already loaded with the tab.
+ * A Retry and the refresh after a change always ask the route.
+ */
+export function ApiKeysSection({
+  confirmsWithPassword,
+  read,
+}: {
+  confirmsWithPassword: boolean;
+  read?: (path: string) => Promise<Response>;
+}) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -175,7 +189,7 @@ export function ApiKeysSection({ confirmsWithPassword }: { confirmsWithPassword:
   useEffect(() => {
     loadSeq.current += 1;
     const seq = loadSeq.current;
-    fetchApiKeys().then(
+    fetchApiKeys(read ? () => read("/api/settings/api-keys") : undefined).then(
       (apiKeys) => {
         if (seq === loadSeq.current) setKeys(apiKeys);
       },
@@ -187,6 +201,8 @@ export function ApiKeysSection({ confirmsWithPassword }: { confirmsWithPassword:
       // Nothing still in flight may land after unmount.
       loadSeq.current += 1;
     };
+    // The opening read only: a new `read` must not replace a list since changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const retry = async () => {
@@ -383,16 +399,14 @@ function ApiKeyListItem({ apiKey, onDelete }: { apiKey: ApiKeyRow; onDelete: () 
           <span className="truncate text-sm font-medium">{apiKey.name}</span>
           <code className={cn(codeClass, "text-muted-foreground")}>{apiKey.prefix}…</code>
           {expired ? (
-            <Badge variant="destructive">Expired</Badge>
+            <ColorChip className="border-red/25 bg-red-dim text-red">Expired</ColorChip>
           ) : readOnly ? (
-            <Badge variant="secondary">Read-only</Badge>
+            <ColorChip className="bg-muted/40 text-muted-foreground">Read-only</ColorChip>
           ) : (
-            <Badge variant="outline">Read &amp; write</Badge>
+            <ColorChip className="bg-muted/40 text-muted-foreground">Read &amp; write</ColorChip>
           )}
           {destructive && !expired && (
-            <Badge variant="outline" className="border-destructive/40 text-destructive">
-              Can delete media
-            </Badge>
+            <ColorChip className="border-red/25 text-red">Can delete media</ColorChip>
           )}
         </div>
         <p className="text-xs text-muted-foreground">

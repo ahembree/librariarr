@@ -1,32 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession, type LoggedInSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { actionTargetTitle } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
-import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import {
+  tryBeginExecute,
+  endExecute,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
+  hasProtectionGroup,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import { actsOnMembers, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const action = await prisma.lifecycleAction.findUnique({
@@ -46,18 +50,14 @@ export async function DELETE(
 
   await prisma.lifecycleAction.delete({ where: { id } });
   return NextResponse.json({ action: null });
-}
+});
 
 // Force-retry a failed action
-export async function POST(
+export const POST = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const skipTitleValidation = request.nextUrl.searchParams.get("skipTitleValidation") === "true";
 
@@ -100,12 +100,22 @@ export async function POST(
       { status: 409 }
     );
   }
+  // Kept apart from an ad-hoc query action, which can act on another copy or
+  // track of the same Arr record (see `execute-in-flight.ts`).
+  if (!tryBeginRuleSetExecution(session.userId)) {
+    endExecute(ruleSetId, lockedItems);
+    return NextResponse.json(
+      { error: "A query action is running — wait for it to finish" },
+      { status: 409 }
+    );
+  }
   try {
     return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
   } finally {
+    endRuleSetExecution(session.userId);
     endExecute(ruleSetId, lockedItems);
   }
-}
+});
 
 type FailedAction = Prisma.LifecycleActionGetPayload<{
   include: { mediaItem: { include: { externalIds: true } } };
@@ -113,7 +123,7 @@ type FailedAction = Prisma.LifecycleActionGetPayload<{
 
 /** The retry proper. Runs under the execute lock on its item (see `POST`). */
 async function retryAction(
-  session: Awaited<ReturnType<typeof getSession>>,
+  session: LoggedInSession,
   action: FailedAction,
   skipTitleValidation: boolean,
 ): Promise<NextResponse> {
@@ -126,7 +136,7 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true },
+    select: { enabled: true, type: true, rules: true, seriesScope: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
@@ -156,7 +166,7 @@ async function retryAction(
   // executor enforces).
   const stillMatched = await prisma.ruleMatch.findFirst({
     where: { ruleSetId: action.ruleSetId, mediaItemId: action.mediaItemId },
-    select: { id: true },
+    select: { itemData: true },
   });
   if (!stillMatched) {
     return NextResponse.json(
@@ -165,27 +175,58 @@ async function retryAction(
     );
   }
 
+  // The episodes/tracks the retry acts on, judged as the scheduled executor
+  // judges them (processor.ts, pass 1): the FAILED row keeps the member list it
+  // was scheduled with, which can be months old. A member-scoped file delete
+  // acts only on members the current match still lists, and none that an
+  // exception protects — sent as stored, a retry deleted the files of episodes
+  // watched or excepted since the failure.
+  let members = action.matchedMediaItemIds ?? [];
+  const episodeScope = ruleSetActsOnEpisodes(action.actionType, ruleSet);
+  if (members.length > 0 && actsOnMembers(action.actionType, episodeScope)) {
+    const current = new Set(memberIdsFromItemData(stillMatched.itemData));
+    if (current.size > 0) {
+      members = members.filter((m) => current.has(m));
+      if (members.length === 0) {
+        return NextResponse.json(
+          { error: "None of the episodes/tracks this action targeted still match — re-run detection before retrying" },
+          { status: 400 }
+        );
+      }
+    }
+  }
+
   // Exceptions added AFTER an action failed must still protect the item —
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.
   // An exception on another server's copy of the item (same dedupKey) counts.
-  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId]);
-  if (excepted.size > 0) {
+  const excepted = await findExceptedItemIds(session.userId, [action.mediaItemId, ...members]);
+  if (excepted.has(action.mediaItemId)) {
     return NextResponse.json(
       { error: "This item has a lifecycle exception and cannot be actioned" },
       { status: 400 }
     );
   }
+  if (members.some((m) => excepted.has(m))) {
+    const kept = members.filter((m) => !excepted.has(m));
+    // A whole-record delete cannot leave an excepted member out.
+    if (kept.length === 0 || isWholeRecordDestructiveAction(action.actionType)) {
+      return NextResponse.json(
+        { error: "An episode/track of this action has a lifecycle exception and cannot be actioned" },
+        { status: 400 }
+      );
+    }
+    members = kept;
+  }
 
   // Whole-record destructive actions destroy every episode/track of the
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
-  const retryGroupKey = protectionKey(action.mediaItem);
-  if (isWholeRecordDestructiveAction(action.actionType) && retryGroupKey) {
-    const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
+  if (isWholeRecordDestructiveAction(action.actionType) && hasProtectionGroup(action.mediaItem)) {
+    const protectedGroups = await findExceptionProtectedGroups(session.userId, [
       action.mediaItem,
     ]);
-    if (protectedGroups.has(retryGroupKey)) {
+    if (isGroupProtected(protectedGroups, action.mediaItem)) {
       return NextResponse.json(
         { error: "An episode/track of this series/artist has a lifecycle exception — a whole-record delete cannot exclude it" },
         { status: 400 }
@@ -223,7 +264,8 @@ async function retryAction(
   }
 
   // A file delete on exactly one other episode is named after it.
-  const targetTitle = actionTargetTitle({ ...action, mediaItem, memberEpisodes: await loadMemberEpisodes([action]) });
+  const running = { ...action, matchedMediaItemIds: members, episodeScope };
+  const targetTitle = actionTargetTitle({ ...running, mediaItem, memberEpisodes: await loadMemberEpisodes([running]) });
 
   try {
     await executeAction({
@@ -233,10 +275,11 @@ async function retryAction(
       targetQualityProfileId: action.targetQualityProfileId,
       addImportExclusion: action.addImportExclusion,
       searchAfterAction: action.searchAfterAction,
-      matchedMediaItemIds: action.matchedMediaItemIds,
+      matchedMediaItemIds: members,
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
+      episodeScope,
       targetTitle,
       mediaItem,
     });
@@ -247,6 +290,8 @@ async function retryAction(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
+        // What it acted on, not what was scheduled (see `members` above).
+        matchedMediaItemIds: members,
       },
     });
 

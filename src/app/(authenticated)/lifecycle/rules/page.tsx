@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { Film, Tv, Music } from "lucide-react";
 import { LifecycleRulePage } from "@/components/lifecycle-rule-page";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { PageHeader } from "@/components/page-header";
+import { useHashTab } from "@/hooks/use-hash-tab";
+import { useHydrated } from "@/hooks/use-hydrated";
+import { useLibraryTypes } from "@/hooks/use-library-types";
+import { useRuleEditorData } from "@/hooks/use-rule-editor-data";
 
 type RuleTab = "movies" | "series" | "music";
 
@@ -14,50 +19,39 @@ const TABS: TabNavItem<RuleTab>[] = [
   { value: "music", label: "Music", icon: Music },
 ];
 
-function getInitialTab(): RuleTab {
-  if (typeof window === "undefined") return "movies";
-  const hash = window.location.hash.replace("#", "") as RuleTab;
-  if (["movies", "series", "music"].includes(hash)) return hash;
-  return "movies";
-}
+const TAB_VALUES = TABS.map((t) => t.value);
+
+const TAB_TYPE: Record<RuleTab, string> = { movies: "MOVIE", series: "SERIES", music: "MUSIC" };
 
 export default function LifecycleRulesPage() {
-  const [activeTab, setActiveTab] = useState<RuleTab>(getInitialTab);
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
-
-  // Ensure hash is always in the URL for consistency
-  useEffect(() => {
-    const hash = window.location.hash.replace("#", "");
-    if (!hash) {
-      window.history.replaceState(null, "", `#${activeTab}`);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    fetch("/api/media/library-types")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.allTypes?.length > 0) setAvailableTypes(data.allTypes);
-        else if (data.types?.length > 0) setAvailableTypes(data.types);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleTabChange = useCallback((tab: RuleTab) => {
-    setActiveTab(tab);
-    window.history.replaceState(null, "", `#${tab}`);
-  }, []);
+  // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
+  // read through a store rather than once on mount (a query converted to a
+  // rule set lands here as /lifecycle/rules?ruleSet=…#series).
+  const [activeTab, setTab] = useHashTab(TAB_VALUES, "movies");
+  // The hash reads as empty until hydrated, so a tab mounted before then is
+  // the fallback's, replaced a moment later by the one the hash names.
+  const hydrated = useHydrated();
+  // Seeded from the layout's read, so the tabs are known on the first render:
+  // a hash naming a type with no library no longer mounts that tab only to
+  // replace it once the types arrive.
+  const libraryTypes = useLibraryTypes();
+  const availableTypes = useMemo(() => {
+    if (!libraryTypes) return [];
+    return libraryTypes.allTypes.length > 0 ? libraryTypes.allTypes : libraryTypes.types;
+  }, [libraryTypes]);
+  // Every tab's tab-independent data, read once for the page.
+  const editorData = useRuleEditorData();
 
   // Filter tabs to only show available media types (once loaded)
-  const visibleTabs = availableTypes.length > 0
-    ? TABS.filter((t) => availableTypes.includes(t.value === "movies" ? "MOVIE" : t.value === "series" ? "SERIES" : "MUSIC"))
-    : TABS;
+  const visibleTabs = useMemo(
+    () => (availableTypes.length > 0 ? TABS.filter((t) => availableTypes.includes(TAB_TYPE[t.value])) : TABS),
+    [availableTypes],
+  );
 
   // If active tab becomes unavailable, derive the correct tab
   const effectiveTab = useMemo(() => {
     if (availableTypes.length === 0) return activeTab;
-    const tabType = activeTab === "movies" ? "MOVIE" : activeTab === "series" ? "SERIES" : "MUSIC";
-    if (availableTypes.includes(tabType)) return activeTab;
+    if (availableTypes.includes(TAB_TYPE[activeTab])) return activeTab;
     return visibleTabs.length > 0 ? visibleTabs[0].value : activeTab;
   }, [availableTypes, activeTab, visibleTabs]);
 
@@ -66,15 +60,16 @@ export default function LifecycleRulesPage() {
     // (a pinned header ate a third of small screens).
     <div>
       <div className="p-4 sm:p-6 lg:p-8 pb-0 sm:pb-0 lg:pb-0">
-        <div className="mb-6">
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Rules</h1>
-          <p className="text-muted-foreground mt-1">Define rules to automatically manage your media library based on criteria like age, play count, and quality.</p>
-        </div>
+        <PageHeader
+          className="mb-6"
+          title="Lifecycle Rules"
+          description="Define rules to automatically manage your media library based on criteria like age, play count, and quality."
+        />
 
-        <TabNav tabs={visibleTabs} activeTab={effectiveTab} onTabChange={handleTabChange} className="mb-6" />
+        <TabNav tabs={visibleTabs} activeTab={effectiveTab} onTabChange={setTab} className="mb-6" />
       </div>
 
-      {effectiveTab === "movies" && (
+      {hydrated && effectiveTab === "movies" && (
         <LifecycleRulePage
           mediaType="MOVIE"
           pageTitle=""
@@ -85,9 +80,10 @@ export default function LifecycleRulesPage() {
           actionTypes={MOVIE_ACTION_TYPES}
           importErrorMessage="This is a series rule set. Import it on the Series tab."
           embedded
+          data={editorData}
         />
       )}
-      {effectiveTab === "series" && (
+      {hydrated && effectiveTab === "series" && (
         <LifecycleRulePage
           mediaType="SERIES"
           pageTitle=""
@@ -106,9 +102,10 @@ export default function LifecycleRulesPage() {
             ruleSetDisabledLabel: "Episode scope",
           }}
           embedded
+          data={editorData}
         />
       )}
-      {effectiveTab === "music" && (
+      {hydrated && effectiveTab === "music" && (
         <LifecycleRulePage
           mediaType="MUSIC"
           pageTitle=""
@@ -127,6 +124,7 @@ export default function LifecycleRulesPage() {
             ruleSetDisabledLabel: "Track scope",
           }}
           embedded
+          data={editorData}
         />
       )}
     </div>

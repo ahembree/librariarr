@@ -37,6 +37,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { POST } from "@/app/api/settings/sso/link/oidc/start/route";
+import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 
 const prisma = getTestPrisma();
 
@@ -45,6 +46,8 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // mockReset: one test's discovery answer must not reach the next.
+    mockDiscover.mockReset();
     mockGeneratePkce.mockReturnValue({ verifier: "v", challenge: "c" });
     mockGenerateState.mockReturnValue("s");
     mockBuildAuthUrl.mockReturnValue("https://idp.example.com/auth");
@@ -57,6 +60,21 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
   it("returns 401 when not authenticated", async () => {
     const res = await callRoute(POST, { method: "POST" });
     await expectJson(res, 401);
+    expect(getMockSession().oidcFlow).toBeUndefined();
+  });
+
+  it("refuses a request from another origin", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "https://idp.example.com", oidcClientId: "client" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const res = await callRoute(POST, { method: "POST", headers: { Origin: "https://evil.example.com" } });
+    const body = await expectJson<{ error: string }>(res, 403);
+    expect(body.error).toBe("Forbidden");
+    expect(mockDiscover).not.toHaveBeenCalled();
+    expect(getMockSession().oidcFlow).toBeUndefined();
   });
 
   it("refuses to start a link without a sign-in from the last 15 minutes", async () => {
@@ -81,7 +99,9 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(POST, { method: "POST" });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("OIDC mode must be selected and configured before linking");
+    expect(mockDiscover).not.toHaveBeenCalled();
   });
 
   it("returns 400 when issuer or client_id is missing", async () => {
@@ -108,6 +128,7 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
 
       const res = await callRoute(POST, { method: "POST" });
       const body = await expectJson<{ error: string }>(res, 400);
+      expect(body.error).toBe(oidcIssuerProblem("http://idp.lan"));
       expect(body.error).toMatch(/https/);
       expect(mockDiscover).not.toHaveBeenCalled();
       expect(getMockSession().oidcFlow).toBeUndefined();
@@ -137,6 +158,14 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     const res = await callRoute(POST, { method: "POST" });
     const body = await expectJson<{ authorizationUrl: string }>(res);
     expect(body.authorizationUrl).toBe("https://idp.example.com/auth");
+    expect(mockBuildAuthUrl).toHaveBeenCalledWith({
+      discovery: expect.objectContaining({ issuer: "https://idp.example.com" }),
+      clientId: "client",
+      redirectUri: "http://localhost:3000/api/auth/sso/oidc/callback",
+      scope: "openid profile email",
+      state: "s",
+      codeChallenge: "c",
+    });
 
     // The link flag is what tells the callback to take the link path instead
     // of treating this as a login.
@@ -160,6 +189,8 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     mockDiscover.mockRejectedValue(new Error("ENOTFOUND"));
 
     const res = await callRoute(POST, { method: "POST" });
-    await expectJson(res, 500);
+    const body = await expectJson<{ error: string }>(res, 500);
+    expect(body.error).toBe("Failed to initiate OIDC link flow");
+    expect(getMockSession().oidcFlow).toBeUndefined();
   });
 });

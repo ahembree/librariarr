@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { withSession } from "@/lib/auth/with-session";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { loadPreviewMetadata, previewMetadataPhase } from "@/lib/lifecycle/preview-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -15,16 +14,13 @@ import type { ProgressPhase } from "@/lib/progress/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, rulePreviewSchema);
   if (error) return error;
 
-  const { rules, type, seriesScope, serverIds, arrInstanceId } = data;
+  const { rules, type, seriesScope, serverIds, arrInstanceId, ruleSetId } = data;
+  // "Has Pending Action" reads other rule sets' actions, as detection reads it.
+  const crossSystemOptions = { excludeRuleSetId: ruleSetId };
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -37,16 +33,14 @@ export async function POST(request: NextRequest) {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds, arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
-  const willFetchArr = hasArrRules(typedRules);
-  const willFetchSeerr = hasSeerrRules(typedRules) && type !== "MUSIC";
+  const metadataPhase = previewMetadataPhase(typedRules, type);
   const phases: ProgressPhase[] = [
-    ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
-    ...(willFetchSeerr ? [{ key: "seerr", label: "Fetching Seerr metadata" }] : []),
+    ...(metadataPhase ? [metadataPhase] : []),
     { key: "evaluate", label: "Evaluating rules" },
     { key: "finalize", label: "Computing matched criteria" },
   ];
@@ -56,39 +50,40 @@ export async function POST(request: NextRequest) {
     // (request.signal passed below aborts this run on client disconnect.)
 
     let arrData: ArrDataMap | undefined;
-    if (willFetchArr) {
-      emit({ type: "phase", key: "arr", fraction: 0 });
-      arrData = await fetchArrMetadata(
-        session.userId!,
-        type,
-        (f) => emit({ type: "phase", key: "arr", fraction: f }),
-        arrInstanceId,
-      );
-    }
-
     let seerrData: SeerrDataMap | undefined;
-    if (willFetchSeerr) {
-      emit({ type: "phase", key: "seerr", fraction: 0 });
-      // willFetchSeerr already guarantees type !== "MUSIC".
-      seerrData = await fetchSeerrMetadata(session.userId!, type as "MOVIE" | "SERIES", (f) =>
-        emit({ type: "phase", key: "seerr", fraction: f }),
-      );
+    if (metadataPhase) {
+      emit({ type: "phase", key: metadataPhase.key, fraction: 0 });
+      ({ arrData, seerrData } = await loadPreviewMetadata(
+        session.userId,
+        type,
+        typedRules,
+        arrInstanceId,
+        (f) => emit({ type: "phase", key: metadataPhase.key, fraction: f }),
+      ));
     }
 
     emit({ type: "phase", key: "evaluate" });
     let items;
-    if (type === "SERIES" && seriesScope !== false) {
+    // A series-aggregate field forces the series path even with series scope
+    // off, members restricted to the matching episodes — exactly as detection
+    // routes it (detect-matches.ts). Evaluated per episode the aggregate reads
+    // absent, and the preview showed a different set from the one stored.
+    const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+    if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
       items = await evaluateSeriesScope(
         typedRules,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        aggregateForced,
+        crossSystemOptions,
       );
     } else if (type === "MUSIC" && seriesScope !== false) {
       items = await evaluateMusicScope(
         typedRules,
         serverIds,
-        arrData
+        arrData,
+        crossSystemOptions,
       );
     } else {
       const rawItems = await evaluateLifecycleRules(
@@ -96,7 +91,8 @@ export async function POST(request: NextRequest) {
         type,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        crossSystemOptions,
       );
       items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
     }
@@ -139,5 +135,5 @@ export async function POST(request: NextRequest) {
       });
 
     return { items: itemsWithCriteria, count: itemsWithCriteria.length };
-  }, { signal: request.signal });
-}
+  }, { request });
+});

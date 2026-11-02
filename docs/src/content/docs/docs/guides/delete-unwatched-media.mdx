@@ -49,35 +49,35 @@ included. It works the same on Plex, Jellyfin, and Emby.
 
 2. **Add the conditions.** In the top group:
 
-   - `addedAt` **More Than X Days Ago** `180` — leave new arrivals alone,
+   - **Date Added** (`addedAt`) **More Than X Days Ago** `180` — leave new arrivals alone,
      whether or not anyone has got to them yet.
 
    Then **Add Group** inside it, holding the two ways of being unwatched,
    joined with **OR**:
 
-   - `playCount` **equals** `0` — never played by anyone.
-   - `lastPlayedAt` **More Than X Days Ago** `365` — played, but not in the
+   - **Play Count** (`playCount`) **equals** `0` — never played by anyone.
+   - **Last Played** (`lastPlayedAt`) **More Than X Days Ago** `365` — played, but not in the
      last year. A title that has never been played has no last-played date,
      so this condition does not match it on its own.
 
    The nested group matters: rules in one group fold left to right, so an
-   OR beside the `addedAt` rule would read as *(added long ago AND not
+   OR beside the **Date Added** (`addedAt`) rule would read as *(added long ago AND not
    played in a year) OR never played* and let every new, never-played title
    through. The Logic Preview beside the builder spells out the exact
    grouping.
 
    For **series**, use the **Series** tab and the series rollup
    **Series Last Played** (`seriesLastPlayedAt`) **more than X days ago** `365`
-   instead of the per-episode `lastPlayedAt`: it is the most recent play across
+   instead of the per-episode **Last Played** (`lastPlayedAt`): it is the most recent play across
    *every* episode, so a show someone is part-way through is never selected
-   because of its older episodes. `watchedEpisodePercentage` **equals** `0`
+   because of its older episodes. **Watched Episode %** (`watchedEpisodePercentage`) **equals** `0`
    finds shows nobody has started.
 
 3. **Keep what you are keeping.** Add conditions to the top group that
-   exclude titles you know you want, for example `isWatchlisted` **equals**
+   exclude titles you know you want, for example **Is Watchlisted** (`isWatchlisted`) **equals**
    `false` (the connected account's Plex watchlist; its Favorites on Jellyfin
    and Emby). If you use [Seerr](/docs/integrations/seerr/) and want recent
-   requests left alone, put `seerrRequestDate` **In Last X Days** `90` in a
+   requests left alone, put **Request Date** (`seerrRequestDate`) **In Last X Days** `90` in a
    group of its own with the group's **NOT** switch on — a plain *More Than
    X Days Ago* would also drop every title that was never requested, since
    those have no request date. For individual titles, the **Exceptions**

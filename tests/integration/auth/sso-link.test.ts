@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 vi.mock("@/lib/db", async () => {
@@ -16,10 +16,19 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST, DELETE } from "@/app/api/settings/sso/link/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 const prisma = getTestPrisma();
 
 describe("POST /api/settings/sso/link — manual subject link", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
   });
@@ -50,6 +59,31 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     expect(body.code).toBe("reauth_required");
     const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(unchanged.ssoSubject).toBeNull();
+    expect(unchanged.ssoEnabled).toBe(false);
+    expect(unchanged.sessionVersion).toBe(user.sessionVersion);
+  });
+
+  it("refuses a link requested from another origin", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const res = await callRoute(POST, {
+      method: "POST",
+      headers: { Origin: "https://evil.example.com" },
+      body: { ssoSubject: "attacker" },
+    });
+    const body = await expectJson<{ error: string }>(res, 403);
+    expect(body.error).toBe("Forbidden");
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.ssoSubject).toBeNull();
   });
 
   it("returns 400 when no settings exist (issuer unknown)", async () => {
@@ -62,6 +96,8 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toMatch(/Configure SSO mode and issuer/);
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.ssoSubject).toBeNull();
   });
 
   it("links the subject and captures the current OIDC issuer", async () => {
@@ -88,6 +124,8 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     expect(refreshed?.ssoSubject).toBe("abc-sub");
     expect(refreshed?.ssoIssuer).toBe("https://idp.example.com");
     expect(refreshed?.ssoEnabled).toBe(true);
+    // The user chip names the sign-in method.
+    expect(announced(user.id)).toBe(1);
   });
 
   it("normalizes the issuer (strips trailing slashes) at link time", async () => {
@@ -102,10 +140,10 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
-    await callRoute(POST, {
+    await expectJson(await callRoute(POST, {
       method: "POST",
       body: { ssoSubject: "abc-sub" },
-    });
+    }));
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.ssoIssuer).toBe("https://idp.example.com");
   });
@@ -121,11 +159,12 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
-    await callRoute(POST, {
+    await expectJson(await callRoute(POST, {
       method: "POST",
       body: { ssoSubject: "alice" },
-    });
+    }));
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(refreshed?.ssoSubject).toBe("alice");
     expect(refreshed?.ssoIssuer).toBe("forward-auth");
   });
 
@@ -141,10 +180,11 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
-    await callRoute(POST, {
+    const body = await expectJson<{ ssoSubject: string }>(await callRoute(POST, {
       method: "POST",
       body: { ssoSubject: "  abc  " },
-    });
+    }));
+    expect(body.ssoSubject).toBe("abc");
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.ssoSubject).toBe("abc");
   });
@@ -165,8 +205,13 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
       method: "POST",
       body: { ssoSubject: "   " },
     });
-    // Zod's .min(1) catches this — validation rejects before our trim check
-    await expectJson(res, 400);
+    // Three characters pass the schema's min(1); the route's own check on the
+    // trimmed value is what refuses it.
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("SSO subject is required");
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.ssoSubject).toBeNull();
+    expect(unchanged.ssoEnabled).toBe(false);
   });
 
   it("bumps sessionVersion to invalidate other sessions", async () => {
@@ -182,17 +227,20 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const initial = user.sessionVersion;
-    await callRoute(POST, {
+    await expectJson(await callRoute(POST, {
       method: "POST",
       body: { ssoSubject: "abc" },
-    });
+    }));
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.sessionVersion).toBe(initial + 1);
+    // The session that linked stays valid.
+    expect(getMockSession().sessionVersion).toBe(initial + 1);
   });
 });
 
 describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
   });
@@ -263,7 +311,26 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toMatch(/Cannot unlink SSO without another working login method/);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBe("abc");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+  });
+
+  it("refuses an unlink requested from another origin", async () => {
+    const user = await createTestUser({ plexId: "p1" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "abc", ssoIssuer: "https://idp.example.com", ssoEnabled: true },
+    });
+    await prisma.appSettings.create({ data: { userId: user.id, plexLoginEnabled: true, ssoEnabled: true } });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const res = await callRoute(DELETE, { method: "DELETE", headers: { Origin: "https://evil.example.com" } });
+    const body = await expectJson<{ error: string }>(res, 403);
+    expect(body.error).toBe("Forbidden");
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBe("abc");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
   });
 
   it("allows unlink and auto-disables global SSO when Plex is the fallback", async () => {
@@ -305,6 +372,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
 
     const refreshedSettings = await prisma.appSettings.findFirst();
     expect(refreshedSettings?.ssoEnabled).toBe(false);
+    expect(announced(user.id)).toBe(1);
   });
 
   it("allows unlink when local credentials are the fallback", async () => {
@@ -333,6 +401,8 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ globalSsoDisabled: boolean }>(res);
     expect(body.globalSsoDisabled).toBe(true);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(false);
   });
 
   // Unlinking with SSO on turns SSO off, and with local login on that gives
@@ -378,6 +448,8 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     const body = await expectJson<{ globalSsoDisabled: boolean }>(await callRoute(DELETE, { method: "DELETE" }));
     expect(body.globalSsoDisabled).toBe(true);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(false);
   });
 
   // With local login off the password stays powerless once SSO is off too:
@@ -437,7 +509,9 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(DELETE, { method: "DELETE" });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toMatch(/Cannot unlink SSO without another working login method/);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBe("abc");
   });
 
   it("does NOT auto-disable global SSO when it was already off", async () => {
@@ -465,6 +539,8 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ globalSsoDisabled: boolean }>(res);
     expect(body.globalSsoDisabled).toBe(false);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(false);
   });
 
   it("bumps user.sessionVersion on unlink", async () => {
@@ -487,8 +563,10 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const initial = user.sessionVersion;
-    await callRoute(DELETE, { method: "DELETE" });
+    await expectJson(await callRoute(DELETE, { method: "DELETE" }));
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.sessionVersion).toBe(initial + 1);
+    // The session that unlinked stays valid.
+    expect(getMockSession().sessionVersion).toBe(initial + 1);
   });
 });

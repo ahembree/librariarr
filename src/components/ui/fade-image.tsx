@@ -2,6 +2,7 @@
 
 import { type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
+import { markImageLoaded } from "@/lib/loaded-images";
 
 /**
  * Drop-in `<img>` replacement that fades in when the image loads.
@@ -18,6 +19,7 @@ export function FadeImage({ className, onLoad, onError, ...props }: ComponentPro
       className={cn("opacity-0 transition-opacity duration-300", className)}
       onLoad={(e) => {
         e.currentTarget.classList.remove("opacity-0");
+        markImageLoaded(e.currentTarget.getAttribute("src"));
         onLoad?.(e);
       }}
       onError={(e) => {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useElementSize } from "@/hooks/use-element-size";
-import { reconcileSelectedType } from "@/lib/dashboard/server-selection";
+import type { BreakdownRow, CrossTabRow, CustomCardData, TimelineData } from "@/lib/dashboard/custom-card-data";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -35,7 +35,7 @@ import {
 import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
-import type { ChipColorCategory } from "@/lib/theme/chip-colors";
+import { FALLBACK_HEX, type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AUTO_HEX, OTHER_HEX } from "@/components/dashboard/chart-palette";
 
@@ -43,6 +43,7 @@ const DIMENSION_CHIP_CATEGORY: Partial<Record<string, ChipColorCategory>> = {
   resolution: "resolution",
   dynamicRange: "dynamicRange",
   audioProfile: "audioProfile",
+  audioCodec: "audioCodec",
 };
 
 function interpolateHex(low: string, high: string, t: number): string {
@@ -63,11 +64,12 @@ function getGradientColors(gradientId?: string) {
   return { low: preset.low, high: preset.high };
 }
 
-type BreakdownRow = { value: string | null; type: string; _count: number };
 type AggregatedEntry = { label: string; count: number; movies: number; series: number; music: number };
-type CrossTabRow = { dim1: string | null; dim2: string | null; type: string; _count: number };
-type TimelinePoint = { date: string; total: number; breakdown?: Record<string, number> };
-type TimelineData = { points: TimelinePoint[]; series: string[] };
+
+// Stable empties, so the memoised heatmap processing below is not re-run on
+// every render of a card that has no rows of that kind.
+const NO_BREAKDOWN: BreakdownRow[] = [];
+const NO_CROSS_TAB: CrossTabRow[] = [];
 
 interface HeatmapCell {
   dim1: string;
@@ -84,39 +86,47 @@ interface HeatmapData {
 
 interface CustomChartCardProps {
   config: CustomCardConfig;
-  filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  /** The type the card shows: its own selection, or the Insights one when locked. */
+  filterType?: string;
   lockedFilterType?: boolean;
-  serverId?: string;
   availableTypes?: string[];
+  /** The card's own type selector, and its change handler (`CustomCardSlot` holds it). */
+  localFilter: string;
+  onLocalFilterChange: (value: string) => void;
+  /** The data for the current request is still on its way. */
+  loading: boolean;
+  /**
+   * The current request failed. Shown as an error rather than "No data" or the
+   * previous config's data, which used to stay on screen under the edited
+   * card's new title.
+   */
+  failed: boolean;
+  /** The current request's data; null while loading or after a failure. */
+  data: CustomCardData | null;
   onEditConfig?: (config: CustomCardConfig) => void;
 }
 
+/**
+ * A custom Insights card's chart. Its data and its type selection come from
+ * `CustomCardSlot` (`src/components/dashboard/custom-card-slot.tsx`), which
+ * asks for every card's data in one batch.
+ */
 export function CustomChartCard({
   config,
-  filterType: externalFilterType,
+  filterType,
   lockedFilterType,
-  serverId,
   availableTypes,
+  localFilter,
+  onLocalFilterChange,
+  loading,
+  failed,
+  data,
   onEditConfig,
 }: CustomChartCardProps) {
   const { getHex } = useChipColors();
-  const [breakdown, setBreakdown] = useState<BreakdownRow[]>([]);
-  const [heatmapRaw, setHeatmapRaw] = useState<CrossTabRow[]>([]);
-  const [timelineData, setTimelineData] = useState<TimelineData | null>(null);
-  const [loading, setLoading] = useState(true);
-  // A failed load shows an error rather than the previous config's data,
-  // which used to stay on screen under the edited card's new title.
-  const [failed, setFailed] = useState(false);
-  const reqToken = useRef(0);
-  const [localFilter, setLocalFilter] = useState<string>(externalFilterType ?? "ALL");
-  // Follow the Insights type selector, as the built-in cards do; the card's
-  // own selector still overrides it until the Insights one changes again.
-  // Without this the dashboard's type filter did nothing to custom cards.
-  const [prevExternalFilter, setPrevExternalFilter] = useState(externalFilterType);
-  if (prevExternalFilter !== externalFilterType) {
-    setPrevExternalFilter(externalFilterType);
-    setLocalFilter(externalFilterType ?? "ALL");
-  }
+  const breakdown: BreakdownRow[] = data?.kind === "custom" ? data.breakdown : NO_BREAKDOWN;
+  const heatmapRaw: CrossTabRow[] = data?.kind === "crossTab" ? data.rows : NO_CROSS_TAB;
+  const timelineData: TimelineData | null = data?.kind === "timeline" ? data.timeline : null;
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
 
   const isHeatmap = config.chartType === "heatmap";
@@ -132,11 +142,6 @@ export function CustomChartCard({
     });
   };
 
-  // The card's own selector hides once one type is left, so a local choice of
-  // a type that has since gone must not stay applied with no way to clear it.
-  const effectiveLocal = reconcileSelectedType(localFilter, availableTypes ?? [], "ALL");
-  const filterType = lockedFilterType ? externalFilterType : (effectiveLocal === "ALL" ? undefined : effectiveLocal);
-
   const meta = getDimensionMeta(config.dimension);
   const meta2 = config.dimension2 ? getDimensionMeta(config.dimension2) : null;
   const cardTitle = config.title || (
@@ -148,68 +153,6 @@ export function CustomChartCard({
       : isCount && meta ? `${meta.label} Count`
       : meta ? `${meta.label} Breakdown` : "Custom Chart"
   );
-
-  const fetchData = useCallback(async () => {
-    // Guards against an older config's slow response landing after an edit.
-    const token = ++reqToken.current;
-    setLoading(true);
-    let ok = false;
-    try {
-      if (isTimeline) {
-        const params = new URLSearchParams({ dateField: config.dimension, bin: config.timelineBin ?? "month" });
-        if (config.dimension2) params.set("breakdown", config.dimension2);
-        if (config.topN !== undefined && config.topN !== null) params.set("topN", String(config.topN));
-        if (serverId) params.set("serverId", serverId);
-        if (filterType) params.set("type", filterType as string);
-        const res = await fetch(`/api/media/stats/timeline?${params}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (token !== reqToken.current) return;
-          setTimelineData(data);
-          ok = true;
-        }
-      } else if (isHeatmap && config.dimension2) {
-        const params = new URLSearchParams({
-          dimension1: config.dimension,
-          dimension2: config.dimension2,
-        });
-        if (serverId) params.set("serverId", serverId);
-        const res = await fetch(`/api/media/stats/cross-tab?${params}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (token !== reqToken.current) return;
-          setHeatmapRaw(data.rows ?? []);
-          ok = true;
-        }
-      } else {
-        const params = new URLSearchParams({ dimension: config.dimension });
-        if (serverId) params.set("serverId", serverId);
-        const res = await fetch(`/api/media/stats/custom?${params}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (token !== reqToken.current) return;
-          setBreakdown(data.breakdown ?? []);
-          ok = true;
-        }
-      }
-    } catch {
-      // Reported below as a failed load.
-    } finally {
-      if (token === reqToken.current) {
-        if (!ok) {
-          setTimelineData(null);
-          setHeatmapRaw([]);
-          setBreakdown([]);
-        }
-        setFailed(!ok);
-        setLoading(false);
-      }
-    }
-  }, [config.dimension, config.dimension2, config.timelineBin, config.topN, isHeatmap, isTimeline, serverId, filterType]);
-
-  useEffect(() => {
-    void (async () => { await fetchData(); })();
-  }, [fetchData]);
 
   // Heatmap data processing
   const heatmapData = useMemo(() => {
@@ -229,14 +172,20 @@ export function CustomChartCard({
   const topN = config.topN !== undefined ? config.topN : 10;
   const displayed = applyTopN(sorted, topN);
   const chipCategory = DIMENSION_CHIP_CATEGORY[config.dimension];
-  const allWithColors = displayed.map((entry, i) => ({
-    ...entry,
-    fill: entry.label === "Other"
-      ? OTHER_HEX
-      : chipCategory
-        ? getHex(chipCategory, entry.label)
-        : AUTO_HEX[i % AUTO_HEX.length],
-  }));
+  const allWithColors = displayed.map((entry, i) => {
+    // A value with no chip colour of its own (a codec such as DCA or TRUEHD,
+    // "Unknown") keeps a palette colour, as the breakdown cards do, rather
+    // than every one of them drawing the same grey.
+    const chipHex = chipCategory ? getHex(chipCategory, entry.label) : null;
+    return {
+      ...entry,
+      fill: entry.label === "Other"
+        ? OTHER_HEX
+        : chipHex && chipHex !== FALLBACK_HEX
+          ? chipHex
+          : AUTO_HEX[i % AUTO_HEX.length],
+    };
+  });
   const chartData = allWithColors.filter((entry) => !hiddenItems.has(entry.label));
 
   return (
@@ -260,7 +209,7 @@ export function CustomChartCard({
         <div className="flex items-center gap-2">
           {/* Type filter (only if not locked) */}
           {!lockedFilterType && availableTypes && availableTypes.length > 1 && (
-            <Select value={localFilter} onValueChange={setLocalFilter}>
+            <Select value={localFilter} onValueChange={onLocalFilterChange}>
               <SelectTrigger className="h-7 w-24 text-xs">
                 <SelectValue />
               </SelectTrigger>

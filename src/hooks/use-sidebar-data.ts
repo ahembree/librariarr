@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { useLibraryTypes } from "@/hooks/use-library-types";
+import { useShellSnapshot } from "@/components/shell-settings-provider";
+import { getLiveSessionCount, subscribeLiveSessionCount } from "@/hooks/use-live-session-count";
+import { fetchJsonShared } from "@/lib/shared-fetch";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
@@ -36,7 +41,7 @@ export interface NavItem {
   dotTooltip?: string;
 }
 
-export interface NavGroup {
+interface NavGroup {
   label: string;
   items: NavItem[];
 }
@@ -106,11 +111,29 @@ export interface CurrentUser {
   authMethod: string;
 }
 
+const ALL_LIBRARY_TYPES: LibraryType[] = ["MOVIE", "SERIES", "MUSIC"];
+
+// A server reporting no types keeps every link, as the fetch always did.
+const typesOrAll = (types: string[] | undefined) =>
+  types && types.length > 0 ? (types as LibraryType[]) : ALL_LIBRARY_TYPES;
+
 export function useSidebarData(initialCollapsed = false) {
   const router = useRouter();
-  const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [user, setUser] = useState<CurrentUser | null>(null);
+  // The server layout read the user and the library types for the first
+  // paint; only outside it (or when that read failed) are they fetched on
+  // mount. Fetched after hydration, the sidebar drew all three library links
+  // and then dropped the ones the admin has no library for.
+  const shell = useShellSnapshot();
+  // Seeded from the layout's read, kept current by `server:changed` and
+  // `sync:completed` (this was a one-shot mount fetch, so adding a server,
+  // enabling a library or finishing a first sync never added the group until a
+  // full reload), and shared with every page that reads the types.
+  const libraryTypes = useLibraryTypes();
+  const availableTypes = typesOrAll(libraryTypes?.types);
+  const allKnownTypes = typesOrAll(libraryTypes?.allTypes);
+  const [fetchedUser, setUser] = useState<CurrentUser | null>(null);
+  const user = shell?.user ?? fetchedUser;
+  const shellKnown = useRef(shell !== null);
   // Persisted in a cookie (not localStorage) so the server layout can read
   // it and SSR the correct state — a client-only read here rendered the
   // collapsed sidebar against expanded server HTML and tripped hydration.
@@ -123,46 +146,24 @@ export function useSidebarData(initialCollapsed = false) {
     document.cookie = `sidebar-collapsed=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
   }, [collapsed]);
 
-  const fetchLibraryTypes = useCallback(() => {
-    fetch("/api/media/library-types")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.types && data.types.length > 0) {
-          setAvailableTypes(data.types);
-        }
-        if (data.allTypes && data.allTypes.length > 0) {
-          setAllKnownTypes(data.allTypes);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    fetchLibraryTypes();
-  }, [fetchLibraryTypes]);
-
-  // The nav groups are derived from which library types exist. This was a
-  // one-shot mount fetch, so adding a server, enabling a library or finishing a
-  // first sync never added the group until a full reload.
-  useRealtime("server:changed", fetchLibraryTypes);
-  useRealtime("sync:completed", fetchLibraryTypes);
-
   // Low priority, like the session count below: it only feeds a dot, and the
   // browser serves a handful of same-origin requests at a time, so at default
   // priority it took a slot from the page's own data on every page load.
   useEffect(() => {
-    fetch("/api/system/update-check", { priority: "low" })
-      .then((res) => res.json())
+    // Shared with any page that reads it on the same mount (the dashboard's
+    // status strip, Settings).
+    fetchJsonShared<{ updateAvailable?: boolean; latestVersion?: string | null }>("/api/system/update-check", { priority: "low" })
       .then((data) => {
-        if (data.updateAvailable) {
+        if (data?.updateAvailable) {
           setUpdateAvailable(true);
-          setLatestVersion(data.latestVersion);
+          setLatestVersion(data.latestVersion ?? null);
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
+    if (shellKnown.current) return;
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -177,9 +178,18 @@ export function useSidebarData(initialCollapsed = false) {
   // asks every media server for its sessions, so it can be the slowest request
   // a page load makes.
   const fetchSessionCount = useCallback(() => {
-    fetch("/api/tools/sessions", { priority: "low" })
-      .then((res) => res.json())
-      .then((data: { sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }) => {
+    // Shared with the dashboard's status strip, which reads it on the same mount.
+    fetchJsonShared<{ sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }>(
+      "/api/tools/sessions",
+      { priority: "low" },
+    )
+      .then((data) => {
+        // A refused or failed answer says nothing about which servers are down:
+        // read as an empty list, it announced every unreachable server back online.
+        if (!data) {
+          console.error("Failed to fetch session count");
+          return;
+        }
         if (data.sessions) setActiveSessionCount(data.sessions.length);
 
         const current = new Map<string, string>(
@@ -214,25 +224,40 @@ export function useSidebarData(initialCollapsed = false) {
       .catch((e) => console.error("Failed to fetch session count", e));
   }, []);
 
+  // While a page holds the live session list (the Stream Manager, over its own
+  // stream), the badge takes its count from it and `session-changed` asks no
+  // media server for anything.
+  useEffect(
+    () =>
+      subscribeLiveSessionCount(() => {
+        const count = getLiveSessionCount();
+        if (count !== null) setActiveSessionCount(count);
+      }),
+    [],
+  );
+  const onSessionChanged = useCallback(() => {
+    if (getLiveSessionCount() !== null) return;
+    fetchSessionCount();
+  }, [fetchSessionCount]);
+
   // Pushed: `session-changed` is bridged from the media-server WebSocket layer
   // (throttled 2s per server), so a stream starting or stopping updates the
   // badge in about half a second.
-  useRealtime("session-changed", fetchSessionCount);
+  useRealtime("session-changed", onSessionChanged);
   // A server socket dropping changes the unreachable set this same route
   // reports, so recheck on that too.
   useRealtime("server-status", fetchSessionCount);
 
   useEffect(() => {
     fetchSessionCount();
-    // Fallback only, and deliberately slow. This is the most expensive poll in
-    // the app: it runs in the sidebar, which is mounted on every page for the
-    // life of the tab, and each tick calls getSessions() against every media
-    // server — a live outbound HTTP request per server. At 30s that cost was
-    // paid ~2,880 times a day per open tab to render a badge. The pushes above
-    // are now the primary path; this only covers a dropped SSE stream.
-    const interval = setInterval(fetchSessionCount, 300000);
-    return () => clearInterval(interval);
   }, [fetchSessionCount]);
+  // Fallback only, and deliberately slow. This is the most expensive poll in
+  // the app: it runs in the sidebar, which is mounted on every page for the
+  // life of the tab, and each tick calls getSessions() against every media
+  // server — a live outbound HTTP request per server. At 30s that cost was
+  // paid ~2,880 times a day per open tab to render a badge. The pushes above
+  // are the primary path; this runs only while they are not arriving.
+  useFallbackPoll(fetchSessionCount, 300000);
 
   const navigation = buildNavigation(
     availableTypes,

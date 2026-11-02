@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { eventBus } from "@/lib/events/event-bus";
 import { logger } from "@/lib/logger";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 /**
  * Announce that a server's stored play data changed.
@@ -25,12 +26,19 @@ import { logger } from "@/lib/logger";
  * `tracearr:import-progress`, the receiving page refetches the route that owns
  * the numbers, so there is only ever one place they are computed.
  *
+ * The media caches are dropped FIRST, here rather than by each caller: the
+ * browser empties its own list cache on this event and refetches, and a
+ * server-side listing still cached from before the new plays (`media-list:`)
+ * would hand it the old play counts to keep as fresh. Callers that invalidate
+ * again afterwards only repeat a cheap clear.
+ *
  * Best-effort: a sync must never fail because an event could not be emitted.
  */
 export async function emitWatchHistoryUpdated(
   serverId: string,
   meta?: Record<string, unknown>,
 ): Promise<void> {
+  invalidateMediaCaches();
   try {
     // These jobs are scheduler- and realtime-driven, so there is no session to
     // read the owner from — resolve it from the server record.

@@ -110,7 +110,7 @@ describe("stream query groups - single condition", () => {
       makeRule({ field: "sqCodec", operator: "equals", value: "truehd" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("does not match when no stream has matching codec", () => {
@@ -142,7 +142,7 @@ describe("stream query groups - compound conditions on same stream", () => {
       makeRule({ id: "r2", field: "sqLanguage", operator: "notEquals", value: "English" }),
     ]);
     const result = matched([japaneseAtmosItem], [group]);
-    expect(result.get("atmos2")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos2")).toHaveLength(1);
   });
 
   it("does NOT match when conditions span DIFFERENT streams (English Atmos + Japanese stereo)", () => {
@@ -161,7 +161,7 @@ describe("stream query groups - compound conditions on same stream", () => {
       makeRule({ id: "r2", field: "sqChannels", operator: "greaterThanOrEqual", value: 6 }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("does not match codec + channels when no single stream satisfies both", () => {
@@ -185,7 +185,7 @@ describe("stream query groups - computed fields", () => {
       makeRule({ field: "sqAudioProfile", operator: "equals", value: "Dolby Atmos" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("sqAudioProfile does not match non-Atmos streams", () => {
@@ -201,7 +201,7 @@ describe("stream query groups - computed fields", () => {
       makeRule({ field: "sqDynamicRange", operator: "equals", value: "Dolby Vision" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("sqDynamicRange does not match wrong range", () => {
@@ -241,7 +241,7 @@ describe("stream query groups - stream type filtering", () => {
       makeRule({ field: "sqLanguage", operator: "equals", value: "English" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("subtitle forced field", () => {
@@ -249,7 +249,7 @@ describe("stream query groups - stream type filtering", () => {
       makeRule({ field: "sqForced", operator: "equals", value: "false" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 });
 
@@ -263,7 +263,7 @@ describe("stream query groups - boolean and numeric fields", () => {
       makeRule({ field: "sqIsDefault", operator: "equals", value: "true" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("sqChannels numeric comparison", () => {
@@ -272,7 +272,7 @@ describe("stream query groups - boolean and numeric fields", () => {
     ]);
     // Japanese stereo has 2 channels
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("sqBitrate numeric comparison", () => {
@@ -281,7 +281,7 @@ describe("stream query groups - boolean and numeric fields", () => {
     ]);
     // Atmos track has 5000 bitrate
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("sqWidth numeric on video stream", () => {
@@ -289,7 +289,7 @@ describe("stream query groups - boolean and numeric fields", () => {
       makeRule({ field: "sqWidth", operator: "greaterThanOrEqual", value: 3840 }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 });
 
@@ -300,10 +300,11 @@ describe("stream query groups - boolean and numeric fields", () => {
 describe("stream query groups - disabled rules/groups", () => {
   it("disabled stream query group is skipped", () => {
     const group = makeStreamQueryGroup("audio", [
-      makeRule({ field: "sqCodec", operator: "equals", value: "nonexistent" }),
+      makeRule({ field: "sqCodec", operator: "equals", value: "truehd" }),
     ], { enabled: false });
     const result = matched([atmosItem], [group]);
-    // Disabled group should not cause a non-match
+    // The English TrueHD track satisfies the rule, but a disabled group is
+    // never evaluated, so it reports no criterion.
     expect(result.get("atmos1")).toHaveLength(0);
   });
 
@@ -314,7 +315,7 @@ describe("stream query groups - disabled rules/groups", () => {
     ]);
     const result = matched([atmosItem], [group]);
     // Only the enabled rule (sqCodec=truehd) should apply
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 });
 
@@ -328,7 +329,7 @@ describe("stream query groups - wildcard operators", () => {
       makeRule({ field: "sqLanguage", operator: "matchesWildcard", value: "Eng*" }),
     ]);
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 
   it("notMatchesWildcard on language", () => {
@@ -337,7 +338,7 @@ describe("stream query groups - wildcard operators", () => {
     ]);
     // Japanese stream doesn't match Eng*, so this should match
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 });
 
@@ -353,7 +354,7 @@ describe("stream query groups - negate", () => {
     // negate(equals truehd) means the stream's codec must NOT be truehd
     // The AAC stream satisfies this
     const result = matched([atmosItem], [group]);
-    expect(result.get("atmos1")!.length).toBeGreaterThan(0);
+    expect(result.get("atmos1")).toHaveLength(1);
   });
 });
 

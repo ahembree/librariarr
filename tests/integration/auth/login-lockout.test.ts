@@ -107,8 +107,11 @@ describe("the login budget (real limiter)", () => {
     for (let i = 0; i < 10; i++) expect((await login("wrong", "10.9.0.1")).status).toBe(401);
     const refused = await login(PASSWORD, "10.9.0.1");
     expect(refused.status).toBe(429);
-    expect(refused.headers.get("Retry-After")).toBeTruthy();
-    expect(getMockSession().isLoggedIn).toBeFalsy();
+    // Seconds left in the 15-minute window the first failure opened.
+    const retryAfter = Number(refused.headers.get("Retry-After"));
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter).toBeLessThanOrEqual(15 * 60);
+    expect(getMockSession().isLoggedIn).toBe(false);
     expect((await login(PASSWORD, "10.9.0.2")).status).toBe(200);
   });
 
@@ -141,8 +144,12 @@ describe("the login budget (real limiter)", () => {
     process.env.TRUST_PROXY_HEADERS = "false";
     await seedAdmin();
     expect((await login(PASSWORD, "1.1.1.1")).status).toBe(200);
-    // Ten failures fill the one shared per-address bucket; the floor (sixty)
-    // is never what refuses here.
+    // The floor spent in full: the one shared address a sign-in has succeeded
+    // from is not refused by it.
+    for (let i = 0; i < 60; i++) authGlobalRateLimiter.check("login:*");
+    expect((await login(PASSWORD, "4.4.4.4")).status).toBe(200);
+    // Ten failures, whatever address each claims, fill the one shared
+    // per-address bucket.
     for (let i = 0; i < 10; i++) expect((await login("wrong", `2.2.2.${i}`)).status).toBe(401);
     expect((await login(PASSWORD, "3.3.3.3")).status).toBe(429);
   });

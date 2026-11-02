@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { detailPrefetch, mediaPlaysUrl, PLAY_HISTORY_PAGE_SIZE } from "@/lib/media/detail-prefetch";
 import Link from "next/link";
 import {
   CircleCheck,
@@ -15,12 +16,13 @@ import {
 import { ColorChip } from "@/components/color-chip";
 import { PaginationControls } from "@/components/pagination-controls";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { formatDurationClock } from "@/lib/format";
+import { formatDurationClock, formatWatchedAt } from "@/lib/format";
+import { decisionChipClass, streamDecision } from "@/lib/media/stream-decision";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { cn } from "@/lib/utils";
 
 /** How many plays one page shows; the footer steps between pages. */
-const PAGE_SIZE = 5;
+const PAGE_SIZE = PLAY_HISTORY_PAGE_SIZE;
 
 interface WatchHistoryRow {
   id: string;
@@ -141,30 +143,6 @@ function episodeLabel(row: WatchHistoryRow): string | null {
   return `S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`;
 }
 
-/**
- * Absolute date + time for a play. Watch history is about *when* something was
- * played, so the clock time is part of the answer, not decoration — a relative
- * "2d ago" alone can't distinguish two plays on the same evening.
- */
-function formatWatchedAt(dateStr: string | null): string {
-  if (!dateStr) return "Unknown date";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const watchDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((today.getTime() - watchDay.getTime()) / 86400000);
-
-  if (diffDays === 0) return `Today ${time}`;
-  if (diffDays === 1) return `Yesterday ${time}`;
-  const day = date.toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    ...(date.getFullYear() !== now.getFullYear() && { year: "numeric" }),
-  });
-  return `${day} ${time}`;
-}
-
 function formatPlayCount(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "play" : "plays"}`;
 }
@@ -264,28 +242,6 @@ function channelsLabel(display: unknown, channels: unknown): string | null {
 function joinParts(parts: Array<string | null | undefined>): string | null {
   const kept = parts.filter((part): part is string => !!part);
   return kept.length > 0 ? kept.join(" · ") : null;
-}
-
-/**
- * The transcode-vs-direct-play badge.
- *
- * Same rule as the Stream Manager's `getStreamDecision`, so a play labelled
- * "Transcode" while it was live is still labelled "Transcode" in its history:
- * ANY re-encode — video or audio — is a transcode, a `copy` decision is a
- * remux (container change, nothing re-encoded) and everything else is direct
- * play. Returns null when the row knows none of the three, which is every
- * native row.
- */
-function streamDecision(row: WatchHistoryRow): { label: string; classes: string } | null {
-  const { isTranscode, videoDecision, audioDecision } = row;
-  if (isTranscode == null && !videoDecision && !audioDecision) return null;
-  if (isTranscode || videoDecision === "transcode" || audioDecision === "transcode") {
-    return { label: "Transcode", classes: "bg-amber-dim text-amber border-amber/25" };
-  }
-  if (videoDecision === "copy" || audioDecision === "copy") {
-    return { label: "Direct Stream", classes: "bg-sky-dim text-sky border-sky/25" };
-  }
-  return { label: "Direct Play", classes: "bg-green-dim text-green border-green/25" };
 }
 
 interface Completion {
@@ -585,6 +541,7 @@ function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
  * a native play renders exactly the markup it did before Tracearr existed.
  */
 function PlaybackMeta({ row, className }: { row: WatchHistoryRow; className?: string }) {
+  // The transcode-vs-direct-play badge, on the Stream Manager's rule; null on a native row.
   const decision = streamDecision(row);
   const progress = completion(row);
   const player = playerLabel(row);
@@ -637,7 +594,7 @@ function PlaybackMeta({ row, className }: { row: WatchHistoryRow; className?: st
             .join(" ")}
         </span>
       )}
-      {decision && <ColorChip className={decision.classes}>{decision.label}</ColorChip>}
+      {decision && <ColorChip className={decisionChipClass(decision.kind)}>{decision.label}</ColorChip>}
       {player && (
         <span className="flex min-w-0 items-center gap-1" title={player}>
           <MonitorPlay className="h-3 w-3 shrink-0" />
@@ -815,18 +772,20 @@ export function PlayHistory({
 
   const fetchPage = useCallback(
     async (target: number): Promise<WatchHistoryResponse> => {
-      const params = new URLSearchParams({
-        page: String(target),
-        limit: String(PAGE_SIZE),
-      });
-      if (serverId) params.set("serverId", serverId);
-
       // Two scopes, two endpoints. An item id is the narrower and more
       // certain of the two, so it wins when both are somehow supplied.
       let url: string;
       if (mediaItemId) {
-        url = `/api/media/${mediaItemId}/plays?${params}`;
+        // The same URL `prefetchMediaDetail` starts, so a detail page's first
+        // page is taken from that request rather than asked for again — the
+        // one builder for this endpoint's paging parameters.
+        url = mediaPlaysUrl(mediaItemId, target, serverId ?? undefined);
       } else {
+        const params = new URLSearchParams({
+          page: String(target),
+          limit: String(PAGE_SIZE),
+        });
+        if (serverId) params.set("serverId", serverId);
         if (seriesKey) params.set("seriesKey", seriesKey);
         else if (parentTitle) params.set("parentTitle", parentTitle);
         if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
@@ -834,9 +793,9 @@ export function PlayHistory({
         url = `/api/media/series/watch-history?${params}`;
       }
 
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to load watch history");
-      return (await res.json()) as WatchHistoryResponse;
+      const res = await detailPrefetch.fetch<WatchHistoryResponse>(url);
+      if (!res.ok || !res.body) throw new Error("Failed to load watch history");
+      return res.body;
     },
     [mediaItemId, seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
   );

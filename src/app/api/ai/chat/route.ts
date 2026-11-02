@@ -56,6 +56,7 @@ export async function POST(request: Request) {
         emit as unknown as (event: AiStreamEvent) => void,
         signal,
       ),
-    { signal: request.signal },
+    // `request`: its signal, and gzip when the client accepts it.
+    { request },
   );
 }

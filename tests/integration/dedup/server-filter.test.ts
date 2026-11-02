@@ -120,10 +120,14 @@ describe("resolveServerFilter", () => {
 
   it("returns null when serverId does not match any enabled server", async () => {
     const user = await createTestUser();
-    await createTestServer(user.id, { name: "Plex 1" });
+    const enabled = await createTestServer(user.id, { name: "Plex 1" });
+    const disabled = await createTestServer(user.id, { name: "Plex 2", enabled: false });
+    await createTestLibrary(enabled.id, { type: "MOVIE" });
+    await createTestLibrary(disabled.id, { type: "MOVIE" });
 
-    const result = await resolveServerFilter(user.id, "nonexistent-id", "MOVIE");
-    expect(result).toBeNull();
+    expect(await resolveServerFilter(user.id, "nonexistent-id", "MOVIE")).toBeNull();
+    // A disabled server's id names a real server, but not one that may be queried.
+    expect(await resolveServerFilter(user.id, disabled.id, "MOVIE")).toBeNull();
   });
 
   it('serverId "all" returns all servers', async () => {
@@ -168,6 +172,7 @@ describe("resolveServerFilter", () => {
     const result = await resolveServerFilter(user.id, null, "MOVIE");
     expect(result).not.toBeNull();
     expect(result!.preferredTitleServerId).toBe(server2.id);
+    expect(result!.preferredArtworkServerId).toBeNull();
   });
 
   it("serverMap contains correct name and type", async () => {
@@ -177,10 +182,7 @@ describe("resolveServerFilter", () => {
 
     const result = await resolveServerFilter(user.id, null, "MOVIE");
     expect(result).not.toBeNull();
-    const entry = result!.serverMap.get(server.id);
-    expect(entry).toBeDefined();
-    expect(entry!.name).toBe("My Plex Server");
-    expect(entry!.type).toBe("PLEX");
+    expect(result!.serverMap.get(server.id)).toEqual({ name: "My Plex Server", type: "PLEX" });
   });
 
   it("disabled servers are excluded", async () => {

@@ -10,9 +10,11 @@
  * "" and would have included them. Mixed Phase 1 + Phase 2 rule sets thus
  * lost items permanently.
  *
- * Seeds half the items with non-null values and half with NULLs in every
- * nullable column the engine handles, then asserts each rule returns the
- * NULL-inclusive count.
+ * Seeds one group of items with non-null values and a differently-sized group
+ * with NULLs in every nullable column the engine handles, then asserts each
+ * rule returns the NULL-inclusive count. The two groups differ in size so a
+ * count identifies WHICH group matched — with equal sizes, a rule returning the
+ * populated rows instead of the NULL rows would pass unnoticed.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
@@ -31,7 +33,7 @@ vi.mock("@/lib/logger", () => ({
 const { evaluateLifecycleRules } = await import("@/lib/rules/lifecycle-engine");
 
 const FULL_COUNT = 20;
-const NULL_COUNT = 20;
+const NULL_COUNT = 15;
 let serverId: string;
 
 beforeAll(async () => {
@@ -103,7 +105,7 @@ async function count(rules: LifecycleRuleGroup[]) {
 describe("Rule engine — NULL handling for notEquals/notContains (Phase 1 must include NULL rows)", () => {
   it("text notEquals on nullable column includes NULL rows", async () => {
     // Group A has studio="WB". Group B has studio=NULL.
-    // notEquals "WB" must return both rows that don't equal AND NULL rows = 20 (null group).
+    // notEquals "WB" must return the rows that don't equal it, i.e. the NULL group.
     expect(await count(group("studio", "notEquals", "WB"))).toBe(NULL_COUNT);
   });
 
@@ -123,13 +125,13 @@ describe("Rule engine — NULL handling for notEquals/notContains (Phase 1 must 
   });
 
   it("numeric notEquals on nullable Float includes NULL rows", async () => {
-    // Group A rating=8.0, Group B rating=NULL → notEquals "8" returns 20.
+    // Group A rating=8.0, Group B rating=NULL → notEquals "8" returns Group B.
     expect(await count(group("rating", "notEquals", "8"))).toBe(NULL_COUNT);
     expect(await count(group("audienceRating", "notEquals", "7"))).toBe(NULL_COUNT);
   });
 
   it("numeric notEquals on non-nullable Int (playCount) does NOT add OR null (no NULL rows possible)", async () => {
-    // Group A playCount=2, Group B playCount=0 (default). notEquals "2" must return 20 (group B).
+    // Group A playCount=2, Group B playCount=0 (default). notEquals "2" must return Group B.
     // The withNullSafety helper must skip wrapping non-nullable columns.
     expect(await count(group("playCount", "notEquals", "2"))).toBe(NULL_COUNT);
   });
@@ -191,7 +193,7 @@ describe("Rule engine — NULL handling for notEquals/notContains (Phase 1 must 
   });
 
   it("notEquals negate=true inverts correctly (NULL rows excluded from negated set)", async () => {
-    // notEquals "WB" matches NULL rows (20). negate=true should INVERT → match Group A (20).
+    // notEquals "WB" matches the NULL rows. negate=true should INVERT → match Group A.
     expect(await count(group("studio", "notEquals", "WB", true))).toBe(FULL_COUNT);
   });
 });

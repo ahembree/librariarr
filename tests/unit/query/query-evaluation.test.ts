@@ -403,7 +403,7 @@ describe("evaluateAllQueryRulesInMemory — audit fail-open regressions", () => 
   });
 
   it("hasExternalId contains is source list-membership, not match-everything", () => {
-    const withTmdb = { id: "1", externalIds: [{ source: "TMDB" }] };
+    const withTmdb = { id: "1", externalIds: [{ source: "TMDB", externalId: "603" }] };
     const withNone = { id: "2", externalIds: [] };
     expect(evaluateAllQueryRulesInMemory(grp({ field: "hasExternalId", operator: "contains", value: "TMDB|IMDB" }), withTmdb, undefined, undefined)).toBe(true);
     expect(evaluateAllQueryRulesInMemory(grp({ field: "hasExternalId", operator: "contains", value: "TMDB|IMDB" }), withNone, undefined, undefined)).toBe(false);
@@ -539,5 +539,8 @@ describe("evaluateAllQueryRulesInMemory — hasPendingAction isNull / isNotNull"
     const eqTrue = makeRule({ field: "hasPendingAction", operator: "equals", value: "true" });
     expect(evaluateAllQueryRulesInMemory(grp(eqTrue), pending, undefined, undefined)).toBe(true);
     expect(evaluateAllQueryRulesInMemory(grp(eqTrue), notPending, undefined, undefined)).toBe(false);
+    const neTrue = makeRule({ field: "hasPendingAction", operator: "notEquals", value: "true" });
+    expect(evaluateAllQueryRulesInMemory(grp(neTrue), pending, undefined, undefined)).toBe(false);
+    expect(evaluateAllQueryRulesInMemory(grp(neTrue), notPending, undefined, undefined)).toBe(true);
   });
 });

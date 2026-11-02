@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 
 describe("resolveSecretWrite", () => {
   it("keeps the current value when the field is undefined (not sent)", () => {
@@ -8,8 +9,8 @@ describe("resolveSecretWrite", () => {
   });
 
   it("keeps the current value when the masked placeholder is echoed back", () => {
-    // sanitize() emits this exact string
-    expect(resolveSecretWrite("••••••••", "stored")).toBe("stored");
+    // The mask sanitize() puts in GET responses, which the form echoes back.
+    expect(resolveSecretWrite(MASKED_VALUE, "stored")).toBe("stored");
     // any all-bullet string counts as masked
     expect(resolveSecretWrite("••••", "stored")).toBe("stored");
   });
@@ -40,8 +41,8 @@ describe("resolveSecretWrite", () => {
     // Without trimming before the regex check, the anchored `^•+$` would
     // fail to match and we'd silently overwrite the real secret with
     // literal bullet characters.
-    expect(resolveSecretWrite("••••••••  ", "stored")).toBe("stored");
-    expect(resolveSecretWrite("  ••••••••", "stored")).toBe("stored");
-    expect(resolveSecretWrite("  ••••••••  ", "stored")).toBe("stored");
+    expect(resolveSecretWrite(`${MASKED_VALUE}  `, "stored")).toBe("stored");
+    expect(resolveSecretWrite(`  ${MASKED_VALUE}`, "stored")).toBe("stored");
+    expect(resolveSecretWrite(`  ${MASKED_VALUE}  `, "stored")).toBe("stored");
   });
 });

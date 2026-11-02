@@ -41,6 +41,7 @@ export const PAGES: { path: string; heading: RegExp }[] = [
   { path: "/tools/streams", heading: /Stream Manager/i },
   { path: "/tools/preroll", heading: /Preroll Manager/i },
   { path: "/tools/trash", heading: /TRaSH Guide Sync/i },
+  { path: "/tools/ai", heading: /AI Analysis/i },
 
   // System.
   { path: "/system/logs", heading: /^Logs$/i },
@@ -67,7 +68,10 @@ export const NAV_LINKS: { name: RegExp; path: string }[] = [
   { name: /^Streams$/i, path: "/tools/streams" },
   { name: /^Prerolls$/i, path: "/tools/preroll" },
   { name: /^TRaSH Sync$/i, path: "/tools/trash" },
-  { name: /^Settings$/i, path: "/settings" },
+  { name: /^AI Analysis$/i, path: "/tools/ai" },
+  // Anchored at the start only: when a newer release exists the link carries
+  // an "Update available" dot, a titled span that is part of its name.
+  { name: /^Settings/i, path: "/settings" },
   { name: /^Logs$/i, path: "/system/logs" },
 ];
 
@@ -79,5 +83,8 @@ export const SETTINGS_TABS: { tab: RegExp; heading: RegExp }[] = [
   { tab: /^Integrations$/i, heading: /^Integrations$/i },
   { tab: /^Notifications$/i, heading: /^Notifications$/i },
   { tab: /^Authentication$/i, heading: /^Authentication$/i },
-  { tab: /^System$/i, heading: /^System$/i },
+  { tab: /^AI$/i, heading: /^AI Analysis$/i },
+  // Anchored at the start only: the tab carries an "Update available" dot
+  // (a titled span, part of its accessible name) when a newer release exists.
+  { tab: /^System/i, heading: /^System$/i },
 ];

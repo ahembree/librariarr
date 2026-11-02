@@ -3,6 +3,7 @@ import type {
   MediaMetadataItem,
   MediaLibrarySection,
   MediaCollection,
+  CollectionVisibility,
   WatchHistoryEntry,
   DetailedWatchHistoryEntry,
 } from "./types";
@@ -33,6 +34,20 @@ export class MediaItemNotFoundError extends Error {
     super(`Media item ${ratingKey} not found on server`);
     this.name = "MediaItemNotFoundError";
   }
+}
+
+/**
+ * "The server answered, and said this item is gone": a `MediaItemNotFoundError`
+ * or a bare HTTP 404 (Jellyfin/Emby answer a missing item id that way). The
+ * only failure of `getItemMetadata` that may be read as evidence of deletion;
+ * every other one — a timeout, a 5xx, an unparseable body — says nothing about
+ * whether the item exists.
+ */
+export function isMediaItemNotFound(error: unknown): boolean {
+  return (
+    error instanceof MediaItemNotFoundError ||
+    (error as { response?: { status?: number } } | null)?.response?.status === 404
+  );
 }
 
 export interface MediaServerClient {
@@ -79,9 +94,6 @@ export interface MediaServerClient {
   resolveLibraryKey?(ratingKey: string): Promise<string | null>;
 
   // Watch data
-  getWatchCounts(): Promise<
-    Map<string, { count: number; lastWatchedAt: number }>
-  >;
   getWatchHistory(
     ratingKey: string,
     itemDuration?: number
@@ -93,7 +105,12 @@ export interface MediaServerClient {
    * "played" set, not dated events) ignores it and returns everything, and the
    * caller must treat the result as the full set.
    */
-  getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]>;
+  /**
+   * `signal` cancels the fetch between (and during) its requests: it rejects
+   * with the abort rather than returning what was read so far, since a partial
+   * history fed to the full replace would delete every play it missed.
+   */
+  getDetailedWatchHistory(options?: { since?: Date; signal?: AbortSignal }): Promise<DetailedWatchHistoryEntry[]>;
   /**
    * True only when `getDetailedWatchHistory({ since })` really filters
    * server-side. The incremental watch-history refresh appends whatever comes
@@ -170,18 +187,15 @@ export interface MediaServerClient {
   getCollectionVisibility?(
     sectionKey: string,
     collectionRatingKey: string
-  ): Promise<{
-    identifier: string | null;
-    home: boolean;
-    shared: boolean;
-    recommended: boolean;
-  }>;
+  ): Promise<CollectionVisibility>;
+  /** `known`: the state the caller just read, so it is not read again. */
   updateCollectionVisibility?(
     sectionKey: string,
     collectionRatingKey: string,
     home: boolean,
     shared: boolean,
-    recommended: boolean
+    recommended: boolean,
+    known?: CollectionVisibility
   ): Promise<void>;
   getPrerollSetting?(): Promise<string>;
   setPrerollPath?(path: string): Promise<void>;

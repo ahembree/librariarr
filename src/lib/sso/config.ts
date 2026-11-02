@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 import { isTruthyFlag } from "@/lib/env-flag";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 export interface SsoSettings {
   ssoEnabled: boolean;
@@ -149,7 +150,7 @@ export function currentSsoIssuer(settings: SsoSettings | null): string | null {
   if (!settings) return null;
   if (settings.ssoMode === "OIDC") {
     if (!settings.oidcIssuer) return null;
-    return settings.oidcIssuer.replace(/\/+$/, "");
+    return stripTrailingSlashes(settings.oidcIssuer);
   }
   return "forward-auth";
 }

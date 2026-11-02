@@ -1,13 +1,15 @@
+import { stripTrailingSlashes } from "@/lib/url-normalize";
+
 /**
  * Maps an App Router pathname to its breadcrumb metadata for the topbar.
  *
  * The topbar renders a `Group › Page` breadcrumb (e.g. `Lifecycle › Rules`).
- * This mirrors the sidebar grouping in `use-sidebar-data.ts`. Sub-routes
- * (detail panels, `[id]` segments) inherit their section's metadata via
- * longest-prefix matching, so `/library/movies/abc123` still reads
- * `Library › Movies`.
+ * This mirrors the sidebar grouping and labels in `use-sidebar-data.ts` (a
+ * test checks every sidebar link against it). Sub-routes (detail panels,
+ * `[id]` segments) inherit their section's metadata via longest-prefix
+ * matching, so `/library/movies/abc123` still reads `Library › Movies`.
  */
-export interface PageMeta {
+interface PageMeta {
   /** Top-level nav group label, e.g. "Library". */
   group: string;
   /** Page title, e.g. "Movies". */
@@ -32,6 +34,8 @@ const ENTRIES: MetaEntry[] = [
   { prefix: "/lifecycle/exceptions", group: "Lifecycle", title: "Exceptions" },
   { prefix: "/tools/streams", group: "Tools", title: "Streams" },
   { prefix: "/tools/preroll", group: "Tools", title: "Prerolls" },
+  { prefix: "/tools/trash", group: "Tools", title: "TRaSH Sync" },
+  { prefix: "/tools/ai", group: "Tools", title: "AI Analysis" },
   { prefix: "/settings", group: "System", title: "Settings" },
   { prefix: "/system/logs", group: "System", title: "Logs" },
 ];
@@ -44,7 +48,7 @@ const DASHBOARD: PageMeta = { group: "Overview", title: "Dashboard" };
  */
 export function getPageMeta(pathname: string): PageMeta {
   // Normalize away any trailing slash (except the root itself).
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  const path = pathname.length > 1 ? stripTrailingSlashes(pathname) : pathname;
 
   if (path === "/" || path === "") return DASHBOARD;
 

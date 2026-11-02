@@ -1,0 +1,483 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+
+/**
+ * The React side of `useRealtime`: one shared EventSource per tab, delivery to
+ * the right subscribers, the ref count and its 10s idle close, the resync after
+ * a re-open, and the auth-expired state. The reconnect machinery itself is
+ * covered by use-realtime-reconnect.test.ts.
+ */
+
+class FakeEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+  static instances: FakeEventSource[] = [];
+
+  readyState = FakeEventSource.CONNECTING;
+  closed = false;
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  listeners = new Map<string, Set<(e: MessageEvent) => void>>();
+
+  constructor(public url: string) {
+    FakeEventSource.instances.push(this);
+  }
+  addEventListener(type: string, fn: (e: MessageEvent) => void) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(fn);
+  }
+  removeEventListener(type: string, fn: (e: MessageEvent) => void) {
+    this.listeners.get(type)?.delete(fn);
+  }
+  close() {
+    this.closed = true;
+    this.readyState = FakeEventSource.CLOSED;
+  }
+  emit(type: string, data: string) {
+    for (const fn of this.listeners.get(type) ?? []) fn({ data } as MessageEvent);
+  }
+  /** As the browser dispatches: ONE event object handed to every listener. */
+  dispatch(type: string, data: string) {
+    const event = { data } as MessageEvent;
+    for (const fn of this.listeners.get(type) ?? []) fn(event);
+  }
+  open() {
+    this.readyState = FakeEventSource.OPEN;
+    this.onopen?.();
+  }
+  fail(fatal: boolean) {
+    if (fatal) this.readyState = FakeEventSource.CLOSED;
+    this.onerror?.();
+  }
+}
+
+const fetchMock = vi.fn();
+let useRealtime: typeof import("@/hooks/use-realtime").useRealtime;
+let beforeRealtimeEvents: typeof import("@/hooks/use-realtime").beforeRealtimeEvents;
+let isRealtimeLive: typeof import("@/hooks/use-realtime").isRealtimeLive;
+let useRealtimeLive: typeof import("@/hooks/use-realtime").useRealtimeLive;
+let useRealtimeEvents: typeof import("@/hooks/use-realtime").useRealtimeEvents;
+let fetchJsonShared: typeof import("@/lib/shared-fetch").fetchJsonShared;
+
+const latest = () => FakeEventSource.instances.at(-1)!;
+
+beforeEach(async () => {
+  vi.resetModules();
+  FakeEventSource.instances = [];
+  fetchMock.mockReset().mockResolvedValue({ status: 200 });
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("fetch", fetchMock);
+  vi.useFakeTimers();
+  ({ useRealtime, beforeRealtimeEvents, isRealtimeLive, useRealtimeLive, useRealtimeEvents } = await import(
+    "@/hooks/use-realtime"
+  ));
+  // The same module instance the hook just loaded.
+  ({ fetchJsonShared } = await import("@/lib/shared-fetch"));
+});
+
+const callsTo = (url: string) => fetchMock.mock.calls.filter(([u]) => u === url).length;
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("useRealtime subscriptions", () => {
+  it("shares one EventSource across subscribers and delivers parsed data by type", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    renderHook(() => useRealtime("sync:completed", a));
+    renderHook(() => useRealtime("server:changed", b));
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(latest().url).toBe("/api/events/stream");
+
+    act(() => latest().emit("sync:completed", JSON.stringify({ meta: { serverId: "s1" } })));
+    expect(a).toHaveBeenCalledWith({ meta: { serverId: "s1" } });
+    expect(b).not.toHaveBeenCalled();
+
+    act(() => latest().emit("sync:completed", "{not json"));
+    expect(a).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the latest callback without resubscribing", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender } = renderHook(({ cb }) => useRealtime("x", cb), { initialProps: { cb: first } });
+    rerender({ cb: second });
+    expect(latest().listeners.get("x")!.size).toBe(1);
+    act(() => latest().emit("x", "{}"));
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith({});
+  });
+
+  it("moves the subscription when the event type changes", () => {
+    const cb = vi.fn();
+    const { rerender } = renderHook(({ type }) => useRealtime(type, cb), { initialProps: { type: "a" } });
+    rerender({ type: "b" });
+    expect(latest().listeners.get("a")?.size ?? 0).toBe(0);
+    act(() => latest().emit("a", "{}"));
+    act(() => latest().emit("b", '{"n":1}'));
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ n: 1 });
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("removes only the unmounted subscriber's handler", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const hookA = renderHook(() => useRealtime("evt", a));
+    renderHook(() => useRealtime("evt", b));
+    hookA.unmount();
+    act(() => latest().emit("evt", "{}"));
+    expect(a).not.toHaveBeenCalled();
+    expect(b).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports connected on the 'connected' event and on open, and false on an error", () => {
+    const one = renderHook(() => useRealtime("e", () => {}));
+    const two = renderHook(() => useRealtime("e", () => {}));
+    expect(one.result.current.connected).toBe(false);
+    act(() => latest().emit("connected", "{}"));
+    expect(one.result.current.connected).toBe(true);
+    expect(two.result.current.connected).toBe(true);
+    // A non-fatal error: the browser retries by itself, no rebuild.
+    act(() => latest().fail(false));
+    expect(one.result.current.connected).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    act(() => latest().open());
+    expect(two.result.current.connected).toBe(true);
+  });
+
+  it("starts a late subscriber with the current connected state", () => {
+    renderHook(() => useRealtime("e", () => {}));
+    act(() => latest().open());
+    const late = renderHook(() => useRealtime("e", () => {}));
+    expect(late.result.current.connected).toBe(true);
+  });
+});
+
+describe("useRealtime ref count and idle close", () => {
+  it("keeps the connection for 10s after the last subscriber leaves, then closes it", () => {
+    const { unmount, result } = renderHook(() => useRealtime("e", () => {}));
+    act(() => latest().open());
+    expect(result.current.connected).toBe(true);
+    const source = latest();
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(9_999);
+    });
+    expect(source.closed).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(source.closed).toBe(true);
+  });
+
+  it("reuses the live connection when a subscriber arrives within the grace period (navigation)", () => {
+    const outgoing = renderHook(() => useRealtime("page-a", () => {}));
+    const source = latest();
+    outgoing.unmount();
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    const cb = vi.fn();
+    renderHook(() => useRealtime("page-b", cb));
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(source.closed).toBe(false);
+    act(() => source.emit("page-b", '{"n":2}'));
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ n: 2 });
+  });
+
+  it("opens a fresh connection after the idle close, with no resync on its first open", () => {
+    const first = renderHook(() => useRealtime("e", () => {}));
+    act(() => latest().open());
+    first.unmount();
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    const cb = vi.fn();
+    renderHook(() => useRealtime("e", cb));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    act(() => latest().open());
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe("beforeRealtimeEvents", () => {
+  it("runs once per event, before every subscriber, whichever subscribed first", () => {
+    const order: string[] = [];
+    // The page subscribes before the shell's registration exists in the order
+    // that matters: a pre-handler must still run ahead of it.
+    renderHook(() => useRealtime("sync:completed", () => order.push("page")));
+    beforeRealtimeEvents(["sync:completed"], () => order.push("drop"));
+    renderHook(() => useRealtime("sync:completed", () => order.push("shell")));
+    act(() => latest().dispatch("sync:completed", "{}"));
+    expect(order).toEqual(["drop", "page", "shell"]);
+  });
+
+  it("runs with no subscriber for its event type, on a source opened before or after it registered", async () => {
+    const drop = vi.fn();
+    renderHook(() => useRealtime("other", () => {}));
+    // Registered with the source already open.
+    beforeRealtimeEvents(["lonely"], drop);
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+    // And re-attached to the source that replaces it.
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    drop.mockClear();
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs only for its own event types, and stops once unregistered", () => {
+    const drop = vi.fn();
+    const off = beforeRealtimeEvents(["a"], drop);
+    renderHook(() => useRealtime("a", () => {}));
+    renderHook(() => useRealtime("b", () => {}));
+    act(() => latest().dispatch("b", "{}"));
+    expect(drop).not.toHaveBeenCalled();
+    act(() => latest().dispatch("a", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+    off();
+    act(() => latest().dispatch("a", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop the event reaching subscribers when it throws", () => {
+    beforeRealtimeEvents(["a"], () => {
+      throw new Error("boom");
+    });
+    const cb = vi.fn();
+    renderHook(() => useRealtime("a", cb));
+    act(() => latest().dispatch("a", '{"n":1}'));
+    expect(cb).toHaveBeenCalledWith({ n: 1 });
+  });
+
+  it("runs once before a reconnect's resync", async () => {
+    const order: string[] = [];
+    beforeRealtimeEvents(["a", "b"], () => order.push("drop"));
+    renderHook(() => useRealtime("a", () => order.push("a")));
+    renderHook(() => useRealtime("b", () => order.push("b")));
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(order).toEqual(["drop", "a", "b"]);
+  });
+});
+
+describe("useRealtime resync and auth", () => {
+  it("refetches every subscriber once after a re-open, but not on the first open", async () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    renderHook(() => useRealtime("a", a));
+    renderHook(() => useRealtime("b", b));
+    act(() => latest().open());
+    expect(a).not.toHaveBeenCalled();
+
+    // Server hard-closes; the probe says the session is fine; rebuild after 2s.
+    await act(async () => latest().fail(true));
+    expect(fetchMock).toHaveBeenCalledWith("/api/events/stream", expect.objectContaining({ method: "HEAD" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    // Handlers were re-attached to the new source.
+    act(() => latest().emit("a", '{"live":true}'));
+    expect(a).toHaveBeenLastCalledWith({ live: true });
+    a.mockClear();
+
+    b.mockClear();
+
+    act(() => latest().open());
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(a).toHaveBeenCalledWith({});
+    expect(b).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledWith({});
+  });
+
+  it("does not resync twice within 5s", async () => {
+    const cb = vi.fn();
+    renderHook(() => useRealtime("e", cb));
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(cb).toHaveBeenCalledTimes(1);
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("flags an expired session, retries after a minute, and clears the flag on open", async () => {
+    fetchMock.mockResolvedValue({ status: 401 });
+    const { result } = renderHook(() => useRealtime("e", () => {}));
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    expect(result.current.authExpired).toBe(true);
+    expect(result.current.connected).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_999);
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    act(() => latest().open());
+    expect(result.current.authExpired).toBe(false);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it("keeps working when EventSource cannot be constructed", () => {
+    vi.stubGlobal("EventSource", function () {
+      throw new Error("unavailable");
+    });
+    const cb = vi.fn();
+    const { result, unmount } = renderHook(() => useRealtime("e", cb));
+    expect(result.current).toEqual({ connected: false, authExpired: false });
+    expect(() => unmount()).not.toThrow();
+  });
+
+  it("resyncs a callback subscribed to several event types once", async () => {
+    const shared = vi.fn();
+    const other = vi.fn();
+    renderHook(() => {
+      useRealtime("sync:started", shared);
+      useRealtime("sync:progress", shared);
+      useRealtime("sync:completed", shared);
+      useRealtime("sync:completed", other);
+    });
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(shared).toHaveBeenCalledTimes(1);
+    expect(other).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a resync's callbacks one request scope", async () => {
+    renderHook(() => useRealtime("a", () => void fetchJsonShared("/api/sync/status")));
+    renderHook(() => useRealtime("b", () => void fetchJsonShared("/api/sync/status")));
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(callsTo("/api/sync/status")).toBe(1);
+  });
+});
+
+describe("request sharing across one event's subscribers", () => {
+  it("shares one request between every subscriber of one event, and none between events", async () => {
+    const refetch = () => void fetchJsonShared("/api/sync/status");
+    renderHook(() => useRealtime("sync:progress", refetch));
+    renderHook(() => useRealtime("sync:progress", () => refetch()));
+    renderHook(() => useRealtime("sync:progress", () => void fetchJsonShared("/api/tools/sessions")));
+
+    act(() => latest().dispatch("sync:progress", "{}"));
+    expect(callsTo("/api/sync/status")).toBe(1);
+    expect(callsTo("/api/tools/sessions")).toBe(1);
+
+    // The next event — even one before the first request has answered — asks again.
+    act(() => latest().dispatch("sync:progress", "{}"));
+    expect(callsTo("/api/sync/status")).toBe(2);
+  });
+
+  it("never answers a call made outside an event with the event's request", async () => {
+    renderHook(() => useRealtime("sync:progress", () => void fetchJsonShared("/api/sync/status")));
+    act(() => latest().dispatch("sync:progress", "{}"));
+    void fetchJsonShared("/api/sync/status");
+    expect(callsTo("/api/sync/status")).toBe(2);
+  });
+});
+
+describe("useRealtimeEvents", () => {
+  it("delivers every listed type to one callback, resyncs it once, and moves with the list", async () => {
+    const cb = vi.fn();
+    const { rerender, unmount } = renderHook(({ types }) => useRealtimeEvents(types, cb), {
+      initialProps: { types: ["a", "b"] as readonly string[] },
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    act(() => latest().emit("a", '{"n":1}'));
+    act(() => latest().emit("b", '{"n":2}'));
+    expect(cb.mock.calls).toEqual([[{ n: 1 }], [{ n: 2 }]]);
+
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    cb.mockClear();
+    act(() => latest().open());
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    rerender({ types: ["c"] });
+    cb.mockClear();
+    act(() => latest().emit("a", "{}"));
+    act(() => latest().emit("c", "{}"));
+    expect(cb).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(latest().listeners.get("c")?.size ?? 0).toBe(0);
+  });
+
+  it("subscribes to nothing, and opens no stream, for an empty list", () => {
+    renderHook(() => useRealtimeEvents([], () => {}));
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+});
+
+describe("isRealtimeLive", () => {
+  it("is true only once the stream delivers an event, and false again after a drop", () => {
+    const { result } = renderHook(() => {
+      useRealtime("e", () => {});
+      return useRealtimeLive();
+    });
+    expect(result.current).toBe(false);
+    // Headers alone (a buffering proxy passes them on) are not enough.
+    act(() => latest().open());
+    expect(result.current).toBe(false);
+    act(() => latest().emit("connected", "{}"));
+    expect(result.current).toBe(true);
+    expect(isRealtimeLive()).toBe(true);
+    act(() => latest().fail(false));
+    expect(result.current).toBe(false);
+    // Any delivered event proves the stream is flowing again.
+    act(() => latest().emit("e", "{}"));
+    expect(result.current).toBe(true);
+  });
+
+  it("turns false when the idle close tears the stream down", () => {
+    const { unmount } = renderHook(() => useRealtime("e", () => {}));
+    act(() => latest().emit("connected", "{}"));
+    expect(isRealtimeLive()).toBe(true);
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(isRealtimeLive()).toBe(false);
+  });
+});

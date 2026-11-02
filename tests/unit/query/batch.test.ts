@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildActionBatches, actionMediaType, countActionUnits, type BatchableItem } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup, type BatchableItem } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 /** N movies as distinct items. */
@@ -58,12 +58,10 @@ describe("buildActionBatches", () => {
     // twice. Group-aware packing keeps each show whole.
     const items = [...episodes("A", 900), ...episodes("B", 600)];
     const batches = buildActionBatches(items, "SERIES", 1000);
-    const showsPerBatch = batches.map((b) => new Set(b.map((id) => id.split("-")[0])));
-    // No show appears in more than one batch.
-    expect(showsPerBatch[0].has("B") && showsPerBatch[1].has("B")).toBe(false);
-    // A fully in one batch, B fully in another.
-    expect(batches.flat().filter((id) => id.startsWith("A-"))).toHaveLength(900);
-    expect(batches.flat().filter((id) => id.startsWith("B-"))).toHaveLength(600);
+    // A fully in one batch, B fully in the next.
+    expect(batches).toHaveLength(2);
+    expect(batches[0]).toEqual(items.slice(0, 900).map((i) => i.id));
+    expect(batches[1]).toEqual(items.slice(900).map((i) => i.id));
   });
 
   it("groups a show's episodes together even when interleaved in the input", () => {
@@ -91,7 +89,10 @@ describe("buildActionBatches", () => {
     ];
     const batches = buildActionBatches(items, "SERIES", 1000);
     const batchOf = (id: string) => batches.findIndex((b) => b.includes(id));
-    expect(batchOf("blank1")).toBe(batchOf("blank2"));
+    // A (600) + both blanks (2) fill the first batch; B goes in the second.
+    expect(batches.map((b) => b.length)).toEqual([602, 600]);
+    expect(batchOf("blank1")).toBe(0);
+    expect(batchOf("blank2")).toBe(0);
   });
 
   it("hard-splits a single show larger than the batch size", () => {
@@ -102,10 +103,9 @@ describe("buildActionBatches", () => {
   it("partitions a large mixed-show selection into ordered, disjoint batches covering every id", () => {
     const items = [...episodes("A", 700), ...episodes("B", 700), ...episodes("C", 700)];
     const batches = buildActionBatches(items, "SERIES", 1000);
-    const flat = batches.flat();
-    expect(flat).toHaveLength(2100);
-    expect(new Set(flat).size).toBe(2100);
-    expect(batches.every((b) => b.length <= 1000)).toBe(true);
+    // One show per batch (two would pass 1000), in input order, no id twice.
+    expect(batches.map((b) => b.length)).toEqual([700, 700, 700]);
+    expect(batches.flat()).toEqual(items.map((i) => i.id));
   });
 
   it("defaults the size to MAX_QUERY_ACTION_ITEMS", () => {
@@ -129,24 +129,23 @@ describe("buildActionBatches", () => {
       { id: "us1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
       { id: "us2", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
     ];
-    // Batch size 1 forces one batch per group, so the group count is observable.
-    const batches = buildActionBatches(items, "SERIES", 1);
-    // Two shows → two groups (the US show's two episodes share a group and are
-    // hard-split only by the size-1 cap, but never mixed with the UK show).
-    const batchOf = (id: string) => batches.findIndex((b) => b.includes(id));
-    expect(batchOf("uk1")).not.toBe(batchOf("us1"));
-    expect(batchOf("uk1")).not.toBe(batchOf("us2"));
+    // Batch size 2 makes the grouping observable: the UK show (1) and the US
+    // show (2) cannot share a batch, so the US episodes start a new one. One
+    // title-keyed group of 3 would instead be hard-split as [uk1, us1], [us2].
+    const batches = buildActionBatches(items, "SERIES", 2);
+    expect(batches).toEqual([["uk1"], ["us1", "us2"]]);
   });
 
   it("keeps a single show's episodes in one group when seriesKey is shared", () => {
     const items: BatchableItem[] = [
       { id: "e1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
+      { id: "uk1", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:78107" },
       { id: "e2", type: "SERIES", parentTitle: "The Office", seriesKey: "tvdb:73244" },
     ];
-    // A generous size keeps the whole group together in one batch.
+    // Groups are emitted in first-seen order, so e2 joins e1 ahead of the UK
+    // show's episode only when the two share a group.
     const batches = buildActionBatches(items, "SERIES", 1000);
-    expect(batches).toHaveLength(1);
-    expect(batches[0].sort()).toEqual(["e1", "e2"]);
+    expect(batches).toEqual([["e1", "e2", "uk1"]]);
   });
 });
 
@@ -172,5 +171,29 @@ describe("music batching and run size", () => {
       { id: "m1", type: "MOVIE" },
     ], "MUSIC")).toBe(1);
     expect(countActionUnits([{ id: "m1", type: "MOVIE" }, { id: "m2", type: "MOVIE" }], "MOVIE")).toBe(2);
+  });
+});
+
+describe("oversizedActionGroup", () => {
+  const tracks = (artist: string, n: number): BatchableItem[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `${artist}-t${i}`, type: "MUSIC", title: `T${i}`, parentTitle: artist }));
+
+  it("flags an artist with more selected tracks than one batch holds", () => {
+    // Split across batches, a whole-artist Lidarr action ran once per batch.
+    expect(oversizedActionGroup(tracks("Big Artist", 4), "MUSIC", 3)).toBe("MUSIC");
+    expect(oversizedActionGroup(tracks("Big Artist", 3), "MUSIC", 3)).toBeNull();
+  });
+
+  it("flags a show in episode view the same way", () => {
+    expect(oversizedActionGroup(episodes("show", 4), "SERIES", 3)).toBe("SERIES");
+  });
+
+  it("ignores movies and types outside the action's family", () => {
+    expect(oversizedActionGroup(movies(10), "MOVIE", 3)).toBeNull();
+    expect(oversizedActionGroup(tracks("Big Artist", 10), "MOVIE", 3)).toBeNull();
+  });
+
+  it("counts each artist apart", () => {
+    expect(oversizedActionGroup([...tracks("A", 3), ...tracks("B", 3)], "MUSIC", 3)).toBeNull();
   });
 });

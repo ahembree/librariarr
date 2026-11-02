@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { access, constants } from "fs/promises";
 import nodePath from "node:path";
 import { validateRequest, prerollValidatePathSchema } from "@/lib/validation";
@@ -10,12 +10,7 @@ const ALLOWED_PREFIXES = (
     : ["/media", "/data", "/mnt", "/opt/prerolls"]
 ).map((p) => nodePath.resolve(p));
 
-export async function POST(req: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, req: NextRequest) => {
   const { data, error } = await validateRequest(req, prerollValidatePathSchema);
   if (error) return error;
   const { path } = data;
@@ -40,4 +35,4 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ exists: false });
   }
-}
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRouteWithParams,
@@ -35,13 +35,16 @@ vi.mock("@/lib/plex/client", () => ({
 
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/servers/[id]/libraries/route";
+import { appCache } from "@/lib/cache/memory-cache";
+import { eventBus } from "@/lib/events/event-bus";
+import { LIST_RESPONSE_CACHE_PREFIX } from "@/lib/cache/list-response-prefix";
 
 describe("Server Libraries endpoints", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, name: "Test Server" });
+    mockTestConnection.mockResolvedValue({ ok: true, serverName: "Test Server" });
     mockGetLibraries.mockResolvedValue([]);
   });
 
@@ -107,17 +110,11 @@ describe("Server Libraries endpoints", () => {
         }[];
       }>(response, 200);
 
-      expect(body.libraries).toHaveLength(2);
-
-      const movies = body.libraries.find((l) => l.key === "1");
-      expect(movies?.type).toBe("MOVIE");
-      expect(movies?.enabled).toBe(true);
-      expect(movies?.exists).toBe(true);
-
-      const tvShows = body.libraries.find((l) => l.key === "2");
-      expect(tvShows?.type).toBe("SERIES");
-      expect(tvShows?.enabled).toBe(false);
-      expect(tvShows?.exists).toBe(false);
+      // In the server's own order; a section with no row yet is listed off.
+      expect(body.libraries).toEqual([
+        { key: "1", title: "Movies", type: "MOVIE", enabled: true, exists: true },
+        { key: "2", title: "TV Shows", type: "SERIES", enabled: false, exists: false },
+      ]);
     });
 
     it("maps artist type to MUSIC", async () => {
@@ -139,7 +136,7 @@ describe("Server Libraries endpoints", () => {
         libraries: { key: string; type: string }[];
       }>(response, 200);
 
-      expect(body.libraries[0].type).toBe("MUSIC");
+      expect(body.libraries).toEqual([{ key: "3", title: "Music", type: "MUSIC", enabled: false, exists: false }]);
     });
   });
 
@@ -191,8 +188,9 @@ describe("Server Libraries endpoints", () => {
           body: { libraries: "not-an-array" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual([expect.stringMatching(/^libraries: /)]);
     });
 
     it("updates enabled state of existing libraries", async () => {
@@ -206,6 +204,10 @@ describe("Server Libraries endpoints", () => {
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
+      // A listing cached before the change: turning the library off empties it.
+      appCache.set(`${LIST_RESPONSE_CACHE_PREFIX}media-movies?limit=0`, { cached: true });
+      const events: string[] = [];
+      const unsubscribe = eventBus.subscribe((event) => events.push(event.type));
 
       const response = await callRouteWithParams(
         PUT,
@@ -220,8 +222,15 @@ describe("Server Libraries endpoints", () => {
         libraries: { key: string; enabled: boolean }[];
       }>(response, 200);
 
-      const lib = body.libraries.find((l) => l.key === "1");
-      expect(lib?.enabled).toBe(false);
+      expect(body.libraries).toEqual([{ key: "1", title: "Movies", type: "MOVIE", enabled: false }]);
+      expect(appCache.get(`${LIST_RESPONSE_CACHE_PREFIX}media-movies?limit=0`)).toBeUndefined();
+      // And the browser's lists, which drop on this event.
+      unsubscribe();
+      expect(events).toContain("server:changed");
+      const stored = await getTestPrisma().library.findMany({ where: { mediaServerId: server.id } });
+      expect(stored.map((l) => [l.key, l.enabled])).toEqual([["1", false]]);
+      // A known library needs no round trip to the server.
+      expect(mockGetLibraries).not.toHaveBeenCalled();
     });
 
     it("creates new library record when key does not exist yet", async () => {
@@ -229,7 +238,7 @@ describe("Server Libraries endpoints", () => {
       const server = await createTestServer(user.id);
 
       mockGetLibraries.mockResolvedValue([
-        { key: "new-1", title: "New Library", type: "movie" },
+        { key: "4", title: "New Library", type: "movie" },
       ]);
 
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -240,18 +249,64 @@ describe("Server Libraries endpoints", () => {
         {
           url: `/api/servers/${server.id}/libraries`,
           method: "PUT",
-          body: { libraries: [{ key: "new-1", enabled: true }] },
+          body: { libraries: [{ key: "4", enabled: true }] },
         }
       );
       const body = await expectJson<{
         libraries: { key: string; title: string; type: string; enabled: boolean }[];
       }>(response, 200);
 
-      expect(body.libraries).toHaveLength(1);
-      expect(body.libraries[0].key).toBe("new-1");
-      expect(body.libraries[0].title).toBe("New Library");
-      expect(body.libraries[0].type).toBe("MOVIE");
-      expect(body.libraries[0].enabled).toBe(true);
+      expect(body.libraries).toEqual([{ key: "4", title: "New Library", type: "MOVIE", enabled: true }]);
+      const stored = await getTestPrisma().library.findMany({ where: { mediaServerId: server.id } });
+      expect(stored).toHaveLength(1);
+    });
+
+    it("creates nothing for a key the server does not list", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      mockGetLibraries.mockResolvedValue([{ key: "4", title: "New Library", type: "movie" }]);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}/libraries`,
+          method: "PUT",
+          body: { libraries: [{ key: "99", enabled: true }] },
+        }
+      );
+      const body = await expectJson<{ libraries: unknown[] }>(response, 200);
+      expect(body.libraries).toEqual([]);
+      expect(await getTestPrisma().library.count()).toBe(0);
+    });
+
+    it("asks the server for its library list once however many new libraries are enabled", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      mockGetLibraries.mockResolvedValue([
+        { key: "4", title: "Films", type: "movie" },
+        { key: "5", title: "Shows", type: "show" },
+        { key: "6", title: "Music", type: "artist" },
+      ]);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}/libraries`,
+          method: "PUT",
+          body: { libraries: [{ key: "4", enabled: true }, { key: "5", enabled: false }, { key: "6", enabled: true }] },
+        }
+      );
+      const body = await expectJson<{ libraries: { key: string; type: string; enabled: boolean }[] }>(response, 200);
+      expect(body.libraries.map((l) => [l.key, l.type, l.enabled]).sort()).toEqual([
+        ["4", "MOVIE", true],
+        ["5", "SERIES", false],
+        ["6", "MUSIC", true],
+      ]);
+      expect(mockGetLibraries).toHaveBeenCalledTimes(1);
     });
   });
 });

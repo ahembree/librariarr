@@ -49,7 +49,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, name: "Test Server" });
+    mockTestConnection.mockResolvedValue({ ok: true, serverName: "Test Server" });
   });
 
   afterAll(async () => {
@@ -93,8 +93,12 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
 
     const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
     expect(updated!.tracearrServerId).toBe(TRACEARR_SERVER_A);
+    // Emptied, so no longer established until the new source refills it.
+    expect(updated!.watchHistorySyncedAt).toBeNull();
     expect(await countHistory(server.id)).toBe(0);
-    expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+    expect(mockInvalidateMediaCaches).toHaveBeenCalledOnce();
+    // A mapping change alone sends nothing to the media server.
+    expect(mockTestConnection).not.toHaveBeenCalled();
   });
 
   it("unlinking with null reverts to native history and wipes the Tracearr rows", async () => {
@@ -111,8 +115,10 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const body = await expectJson<{ server: { tracearrServerId: string | null } }>(response, 200);
     expect(body.server.tracearrServerId).toBeNull();
 
+    const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+    expect(updated!.tracearrServerId).toBeNull();
     expect(await countHistory(server.id)).toBe(0);
-    expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+    expect(mockInvalidateMediaCaches).toHaveBeenCalledOnce();
   });
 
   it("re-pointing to a different Tracearr server wipes the previous server's rows", async () => {
@@ -214,7 +220,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(updated!.url).toBe("http://plex.test:32401");
     expect(updated!.tracearrServerId).toBe(TRACEARR_SERVER_A);
     expect(await countHistory(server.id)).toBe(2);
-    expect(mockTestConnection).toHaveBeenCalled();
+    expect(mockTestConnection).toHaveBeenCalledOnce();
   });
 
   it("does not touch another server's watch history on a mapping change", async () => {
@@ -247,7 +253,10 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
 
     const response = await putMapping(second.id, { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ error: string; detail: string }>(response, 409);
-    expect(body.detail).toContain("First");
+    expect(body).toEqual({
+      error: "Tracearr server already in use",
+      detail: 'That Tracearr server is already the watch-history source for "First".',
+    });
 
     const stored = await prisma.mediaServer.findUnique({ where: { id: second.id } });
     expect(stored!.tracearrServerId).toBeNull();
@@ -292,9 +301,13 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
 
     it("defaults to false for a newly created server", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
+      // Created without the field (the test factory always sets it), so this
+      // reads the column default rather than the factory's.
+      const server = await prisma.mediaServer.create({
+        data: { userId: user.id, type: "PLEX", name: "Fresh", url: "http://plex.test:32400", accessToken: "tok" },
+      });
 
-      // Migration 0017 adds the column `NOT NULL DEFAULT false`, deliberately:
+      // Migration 0016 adds the column `NOT NULL DEFAULT false`, deliberately:
       // an unbackfilled server re-walks (idempotent upsert — costs time, not
       // correctness), whereas defaulting true would permanently skip history.
       expect((await readServer(server.id)).tracearrBackfillComplete).toBe(false);
@@ -423,14 +436,13 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(await countHistory(server.id)).toBe(2);
   });
 
-  it("returns 404 for a server owned by another user and wipes nothing", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const other = await createTestUser({ plexId: "other" });
-    const server = await createTestServer(owner.id);
+  it("returns 404 for a server that does not exist and wipes nothing", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: other.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
+    const response = await putMapping("nonexistent", { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
 

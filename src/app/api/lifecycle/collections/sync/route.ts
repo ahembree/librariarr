@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { validateRequest, collectionSyncSchema } from "@/lib/validation";
@@ -8,12 +8,7 @@ import { validateRequest, collectionSyncSchema } from "@/lib/validation";
  * Manually push a collection to Plex from its current persisted matches. Syncs
  * the UNION of every enabled rule set assigned to the collection.
  */
-export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: Request) => {
   const { data, error } = await validateRequest(request, collectionSyncSchema);
   if (error) return error;
 
@@ -30,4 +25,4 @@ export async function POST(request: Request) {
   await syncCollectionById(collection.id);
 
   return NextResponse.json({ success: true, collectionName: collection.name });
-}
+});

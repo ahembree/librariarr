@@ -1,15 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { NextRequest } from "next/server";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonTextResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { matchItemJson } from "@/lib/lifecycle/match-json";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   // Read persisted matches grouped by rule set
   const ruleSets = await prisma.ruleSet.findMany({
     where: { userId: session.userId, enabled: true },
@@ -27,6 +22,8 @@ export async function GET(request: NextRequest) {
       searchAfterAction: true,
       addArrTags: true,
       removeArrTags: true,
+      // The detail panel's Logic Preview, as the rule editor's preview shows it.
+      rules: true,
       collection: { select: { name: true, sort: true } },
     },
   });
@@ -67,6 +64,7 @@ export async function GET(request: NextRequest) {
       searchAfterAction: rs.searchAfterAction,
       addArrTags: rs.addArrTags,
       removeArrTags: rs.removeArrTags,
+      rules: rs.rules,
       collectionName: rs.collection?.name ?? null,
       collectionSort: rs.collection?.sort ?? null,
     };
@@ -75,4 +73,4 @@ export async function GET(request: NextRequest) {
   });
 
   return jsonTextResponse(request, `{"ruleMatches":[${groups.join(",")}]}`);
-}
+});

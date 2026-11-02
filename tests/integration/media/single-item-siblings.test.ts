@@ -1,0 +1,125 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
+import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import {
+  callRouteWithParams,
+  expectJson,
+  createTestUser,
+  createTestServer,
+  createTestLibrary,
+  createTestMediaItem,
+} from "../../setup/test-helpers";
+
+vi.mock("@/lib/db", async () => {
+  const { getTestPrisma } = await import("../../setup/test-db");
+  return { prisma: getTestPrisma() };
+});
+
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { GET } from "@/app/api/media/[id]/route";
+
+type Body = {
+  item: { id: string; servers: { serverId: string; serverName: string; mediaItemId: string }[] };
+  playServers: { serverName: string; ratingKey: string; machineId: string | null }[];
+};
+
+describe("GET /api/media/[id] — copies on other servers", () => {
+  let userId: string;
+
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    userId = (await createTestUser()).id;
+    setMockSession({ userId, isLoggedIn: true });
+  });
+
+  afterAll(async () => {
+    await disconnectTestDb();
+  });
+
+  async function itemOn(serverName: string, dedupKey: string | null, opts: { enabled?: boolean } = {}) {
+    const server = await createTestServer(userId, {
+      name: serverName,
+      enabled: opts.enabled ?? true,
+      machineId: `m-${serverName}`,
+    });
+    const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+    const item = await createTestMediaItem(lib.id, { title: "Heat", ratingKey: `rk-${serverName}` });
+    if (dedupKey) {
+      await getTestPrisma().mediaItem.update({ where: { id: item.id }, data: { dedupKey } });
+    }
+    return { server, lib, item };
+  }
+
+  it("lists every enabled server holding a copy, sorted by name, once per server", async () => {
+    const main = await itemOn("Mike", "movie:title:heat:1995");
+    const alpha = await itemOn("Alpha", "movie:title:heat:1995");
+    await itemOn("Disabled", "movie:title:heat:1995", { enabled: false });
+    // A second copy on the main server's own library does not add a server.
+    const dup = await createTestMediaItem(main.lib.id, { title: "Heat", ratingKey: "rk-dup" });
+    await getTestPrisma().mediaItem.update({ where: { id: dup.id }, data: { dedupKey: "movie:title:heat:1995" } });
+    // Another server with a second copy of its own: listed once.
+    const zulu = await itemOn("Zulu", "movie:title:heat:1995");
+    const zuluDup = await createTestMediaItem(zulu.lib.id, { title: "Heat", ratingKey: "rk-zulu-2" });
+    await getTestPrisma().mediaItem.update({ where: { id: zuluDup.id }, data: { dedupKey: "movie:title:heat:1995" } });
+
+    const body = await expectJson<Body>(
+      await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
+    );
+    expect(body.playServers.map((p) => p.serverName)).toEqual(["Alpha", "Mike", "Zulu"]);
+    expect(body.item.servers.map((s) => s.serverName)).toEqual(["Alpha", "Mike", "Zulu"]);
+    const alphaEntry = body.item.servers.find((s) => s.serverName === "Alpha")!;
+    expect(alphaEntry.mediaItemId).toBe(alpha.item.id);
+    expect(alphaEntry.serverId).toBe(alpha.server.id);
+    expect(body.playServers.find((p) => p.serverName === "Alpha")!.ratingKey).toBe("rk-Alpha");
+    expect(body.playServers.find((p) => p.serverName === "Mike")!.machineId).toBe("m-Mike");
+  });
+
+  // One entry per server, the first copy read winning — and the copies were
+  // read with no ORDER BY, so storage order decided which copy's rating key
+  // the play link opened. Now the oldest copy, as the grouped listings pick
+  // it. Both storage orders, since an unordered read may follow either.
+  it("lists the oldest copy when another server holds two", async () => {
+    const main = await itemOn("Mike", "movie:title:heat:1995");
+    const prisma = getTestPrisma();
+    const secondCopy = async (lib: { id: string }, ratingKey: string, createdAt?: Date) => {
+      const copy = await createTestMediaItem(lib.id, { title: "Heat", ratingKey });
+      await prisma.mediaItem.update({
+        where: { id: copy.id },
+        data: { dedupKey: "movie:title:heat:1995", ...(createdAt ? { createdAt } : {}) },
+      });
+      return copy;
+    };
+    // Yankee: the older copy is stored first.
+    const yankee = await itemOn("Yankee", "movie:title:heat:1995");
+    await prisma.mediaItem.update({ where: { id: yankee.item.id }, data: { createdAt: new Date("2000-01-01T00:00:00Z") } });
+    await secondCopy(yankee.lib, "rk-yankee-newer");
+    // Zulu: the older copy is stored second.
+    const zulu = await itemOn("Zulu", "movie:title:heat:1995");
+    const zuluOlder = await secondCopy(zulu.lib, "rk-zulu-older", new Date("2000-01-01T00:00:00Z"));
+
+    const body = await expectJson<Body>(
+      await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
+    );
+    expect(body.item.servers.find((s) => s.serverName === "Yankee")!.mediaItemId).toBe(yankee.item.id);
+    expect(body.playServers.find((p) => p.serverName === "Yankee")!.ratingKey).toBe("rk-Yankee");
+    expect(body.item.servers.find((s) => s.serverName === "Zulu")!.mediaItemId).toBe(zuluOlder.id);
+    expect(body.playServers.find((p) => p.serverName === "Zulu")!.ratingKey).toBe("rk-zulu-older");
+  });
+
+  it("lists only its own server when no other copy exists", async () => {
+    const main = await itemOn("Solo", "movie:title:heat:1995");
+    const body = await expectJson<Body>(
+      await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
+    );
+    expect(body.playServers.map((p) => p.serverName)).toEqual(["Solo"]);
+    expect(body.item.servers).toEqual([
+      expect.objectContaining({ serverName: "Solo", mediaItemId: main.item.id }),
+    ]);
+  });
+});

@@ -1,19 +1,15 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { getBackupFilePath, deleteBackup } from "@/lib/backup/backup-service";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import fs from "fs/promises";
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: Request,
   { params }: { params: Promise<{ filename: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   // The file carries the Plex token (User.plexToken) and every server's and
   // integration's credentials — plaintext in an unencrypted backup, and behind
   // a passphrase the caller may have chosen in an encrypted one. Whoever holds
@@ -22,7 +18,7 @@ export async function GET(
   // backups sit in the same directory. Settings renews it in place
   // (`fetchWithReauth`).
   if (!hasRecentLogin(session)) {
-    return reauthRequired(session.userId!, "Downloading a backup");
+    return reauthRequired(session.userId, "Downloading a backup");
   }
 
   const { filename } = await params;
@@ -46,17 +42,13 @@ export async function GET(
   } catch {
     return NextResponse.json({ error: "Backup not found" }, { status: 404 });
   }
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   _request: Request,
   { params }: { params: Promise<{ filename: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { filename } = await params;
   const deleted = await deleteBackup(filename);
   if (!deleted) {
@@ -64,4 +56,4 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true });
-}
+});

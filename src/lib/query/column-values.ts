@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { CONDITION_FIELDS } from "@/lib/conditions/fields";
-import { fetchCrossSystemData, type CrossSystemDataEntry } from "@/lib/conditions/cross-system-data";
+import { CUSTOM_FORMAT_SCORE_FIELD } from "@/lib/conditions/helpers";
+import { fetchCrossSystemData, foldCrossSystemData, type CrossSystemDataEntry } from "@/lib/conditions/cross-system-data";
 import {
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
@@ -28,13 +29,13 @@ import { QUERY_COLUMN_FIELDS, type QueryColumnValue } from "./column-fields";
  * which `warnings` then explains.
  */
 
-export interface ColumnValueRequestItem {
+interface ColumnValueRequestItem {
   id: string;
   /** A grouped series row (one row per show): values come from the show's aggregate. */
   grouped?: boolean;
 }
 
-export interface ColumnValuesResult {
+interface ColumnValuesResult {
   values: Record<string, Record<string, QueryColumnValue>>;
   warnings: string[];
 }
@@ -265,6 +266,8 @@ export async function computeQueryColumnValues(
   // its episodes in the representative's library — the same per-library
   // record the query engine evaluates series rules against.
   const evalItems = new Map<string, Record<string, unknown>>();
+  // The episodes behind each grouped row, for the cross-system fields below.
+  const membersOfRow = new Map<string, string[]>();
   const groupedRows = rows.filter((r) => groupedIds.has(r.id as string) && r.type === "SERIES" && r.seriesKey);
   if (groupedRows.length > 0) {
     const keys = [...new Set(groupedRows.map((r) => r.seriesKey as string))];
@@ -278,14 +281,16 @@ export async function computeQueryColumnValues(
       episodes.push(...(chunk as unknown as Array<Record<string, unknown>>));
     }
     const aggregates = aggregateEpisodesIntoSeries(episodes as unknown as AggregableEpisode[], { includeStreams: true });
-    const byMember = new Map<string, Record<string, unknown>>();
+    const byMember = new Map<string, { serialized: Record<string, unknown>; memberIds: string[] }>();
     for (const agg of aggregates) {
-      const serialized = serializeSeriesAggregateForEval(agg);
-      for (const memberId of agg.memberIds) byMember.set(memberId, serialized);
+      const entry = { serialized: serializeSeriesAggregateForEval(agg), memberIds: agg.memberIds };
+      for (const memberId of agg.memberIds) byMember.set(memberId, entry);
     }
     for (const row of groupedRows) {
       const agg = byMember.get(row.id as string);
-      if (agg) evalItems.set(row.id as string, agg);
+      if (!agg) continue;
+      evalItems.set(row.id as string, agg.serialized);
+      membersOfRow.set(row.id as string, agg.memberIds);
     }
   }
 
@@ -294,7 +299,9 @@ export async function computeQueryColumnValues(
 
   let cross: Map<string, CrossSystemDataEntry> | undefined;
   if (fieldDefs.some((f) => f.section === "cross")) {
-    cross = await fetchCrossSystemData(ids.filter((id) => byId.has(id)));
+    cross = await fetchCrossSystemData([
+      ...new Set([...ids.filter((id) => byId.has(id)), ...[...membersOfRow.values()].flat()]),
+    ]);
   }
 
   let arrByType: Record<string, ArrDataMap> = {};
@@ -304,7 +311,10 @@ export async function computeQueryColumnValues(
       warnings.push("Select an Arr server in the query scope to show Arr columns.");
     } else {
       try {
-        arrByType = await fetchArrDataForQuery(userId, arrServerIds, types);
+        arrByType = await fetchArrDataForQuery(userId, arrServerIds, types, undefined, {
+          // Radarr's /moviefile sweep, only when that column is on screen.
+          customFormatScores: fields.includes(CUSTOM_FORMAT_SCORE_FIELD),
+        });
       } catch (error) {
         logger.warn("Query", "Arr data for query columns could not be fetched", { error: String(error) });
         warnings.push(`Arr columns are empty: ${sanitizeErrorDetail(error instanceof Error ? error.message : String(error))}`);
@@ -340,7 +350,9 @@ export async function computeQueryColumnValues(
       arrLoaded: !!arrData,
       seerrMeta: type === "MUSIC" ? undefined : lookupSeerrMeta(externalIds, seerrByType[type], type),
       seerrLoaded: seerrLoaded && type !== "MUSIC",
-      cross: cross?.get(id),
+      // A show reads across its episodes, exactly as the query engine
+      // evaluates it (`foldCrossSystemData`); an episode or a movie, its own.
+      cross: membersOfRow.has(id) ? foldCrossSystemData(membersOfRow.get(id)!, cross) : cross?.get(id),
     };
     const out: Record<string, QueryColumnValue> = {};
     for (const def of fieldDefs) {

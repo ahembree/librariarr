@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+/** The limiter's state, pinned to globalThis so every module copy shares it. */
+const slotState = () => (globalThis as { syncSlots?: { active: number; waitQueue: unknown[] } }).syncSlots;
+
 describe("sync-semaphore", () => {
   let acquireSyncSlot: typeof import("@/lib/sync/sync-semaphore").acquireSyncSlot;
   let releaseSyncSlot: typeof import("@/lib/sync/sync-semaphore").releaseSyncSlot;
 
   beforeEach(async () => {
-    // Re-import with fresh module state each time
+    // Re-import with fresh state each time (the slots live on globalThis)
+    delete (globalThis as Record<string, unknown>).syncSlots;
     vi.resetModules();
     const mod = await import("@/lib/sync/sync-semaphore");
     acquireSyncSlot = mod.acquireSyncSlot;
@@ -13,8 +17,15 @@ describe("sync-semaphore", () => {
   });
 
   it("allows the first sync to acquire immediately", async () => {
-    await acquireSyncSlot();
-    // Should resolve without blocking
+    let acquired = false;
+    const first = acquireSyncSlot().then(() => {
+      acquired = true;
+    });
+    // One microtask: an immediate grant resolves without waiting for a release.
+    await Promise.resolve();
+    expect(acquired).toBe(true);
+    await first;
+    expect(slotState()).toEqual({ active: 1, waitQueue: [] });
     releaseSyncSlot();
   });
 
@@ -76,9 +87,11 @@ describe("sync-semaphore", () => {
   it("allows re-acquisition after release", async () => {
     await acquireSyncSlot();
     releaseSyncSlot();
+    expect(slotState()).toEqual({ active: 0, waitQueue: [] });
 
-    // Should be able to acquire again
+    // Acquired again straight away, holding the one slot.
     await acquireSyncSlot();
+    expect(slotState()).toEqual({ active: 1, waitQueue: [] });
     releaseSyncSlot();
   });
 
@@ -86,13 +99,18 @@ describe("sync-semaphore", () => {
     await acquireSyncSlot();
     releaseSyncSlot();
 
-    // Should be able to acquire immediately again (slot freed)
-    let acquired = false;
-    const p = acquireSyncSlot().then(() => {
-      acquired = true;
+    // The slot is free again (count back to 0, not below it): one acquire
+    // succeeds at once and the next one waits.
+    await acquireSyncSlot();
+    let secondAcquired = false;
+    const second = acquireSyncSlot().then(() => {
+      secondAcquired = true;
     });
-    await p;
-    expect(acquired).toBe(true);
+    await Promise.resolve();
+    expect(secondAcquired).toBe(false);
+
+    releaseSyncSlot();
+    await second;
     releaseSyncSlot();
   });
 
@@ -101,14 +119,15 @@ describe("sync-semaphore", () => {
       await acquireSyncSlot();
       releaseSyncSlot();
     }
-    // Should complete without deadlocking
+    // Balanced cycles leave the limiter exactly idle: no slot held, no waiter.
+    expect(slotState()).toEqual({ active: 0, waitQueue: [] });
   });
 
   it("blocked acquires do not resolve until release is called", async () => {
     await acquireSyncSlot();
 
     let resolved = false;
-    acquireSyncSlot().then(() => {
+    const blocked = acquireSyncSlot().then(() => {
       resolved = true;
     });
 
@@ -119,11 +138,25 @@ describe("sync-semaphore", () => {
     expect(resolved).toBe(false);
 
     releaseSyncSlot();
-    // Now yield for the promise to resolve
-    await Promise.resolve();
-    await Promise.resolve();
+    await blocked;
     expect(resolved).toBe(true);
 
     releaseSyncSlot();
+  });
+
+  it("is one limiter across module copies, as the worker and a route bundle load it", async () => {
+    await acquireSyncSlot();
+    vi.resetModules();
+    const other = await import("@/lib/sync/sync-semaphore");
+
+    let acquired = false;
+    const waiting = other.acquireSyncSlot().then(() => { acquired = true; });
+    await Promise.resolve();
+    expect(acquired).toBe(false);
+
+    releaseSyncSlot();
+    await waiting;
+    expect(acquired).toBe(true);
+    other.releaseSyncSlot();
   });
 });

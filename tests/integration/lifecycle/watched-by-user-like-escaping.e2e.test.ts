@@ -97,8 +97,12 @@ async function phase1(operator: string, value: string): Promise<string[]> {
  * the query under test.
  */
 function phase2(operator: string, value: string): string[] {
-  return Object.entries(WATCHERS)
-    .filter(([username]) => matchNameListField([username], operator, value) === true)
+  const viewers: Array<[string[], string]> = [
+    ...Object.entries(WATCHERS).map(([username, title]): [string[], string] => [[username], title]),
+    [[], "Never Watched"],
+  ];
+  return viewers
+    .filter(([usernames]) => matchNameListField(usernames, operator, value) === true)
     .map(([, title]) => title)
     .sort();
 }
@@ -121,15 +125,14 @@ describe("watchedByUser compares literally in both phases", () => {
     // Phase 1 `notEquals` compiles to `watchHistory: { none: … }`, so a pattern
     // that over-matches there under-matches the rule — the opposite direction
     // from `equals`, and just as wrong.
-    const p1 = await phase1("notEquals", "alice_smith");
-    expect(p1).toContain("Decoy Movie");
-    expect(p1).toContain("Never Watched");
-    expect(p1).not.toContain("Alice Movie");
+    expect(await phase1("notEquals", "alice_smith")).toEqual(["Decoy Movie", "Never Watched"]);
+    expect(phase2("notEquals", "alice_smith")).toEqual(["Decoy Movie", "Never Watched"]);
   });
 
   it("still matches an ordinary username", async () => {
     // The escaping must not break the overwhelmingly common case.
     expect(await phase1("equals", "aliceXsmith")).toEqual(["Decoy Movie"]);
+    expect(phase2("equals", "aliceXsmith")).toEqual(["Decoy Movie"]);
   });
 
   it("is case-insensitive, as both phases document", async () => {

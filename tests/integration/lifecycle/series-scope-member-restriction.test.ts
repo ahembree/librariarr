@@ -29,9 +29,6 @@ vi.mock("@/lib/logger", () => ({
 
 import { evaluateSeriesScope } from "@/lib/rules/lifecycle-engine";
 
-// availableEpisodeCount (aggregate, forces the series path) AND year=2020
-// (per-episode). The aggregate evaluates `year` against the representative
-// episode, so the series matches when the representative is 2020.
 // availableEpisodeCount > 2 — a pure series-aggregate rule, evaluated per
 // aggregated series. Used to prove two same-titled shows are aggregated apart.
 const episodeCountRule: LifecycleRuleGroup[] = [
@@ -45,6 +42,9 @@ const episodeCountRule: LifecycleRuleGroup[] = [
   },
 ];
 
+// availableEpisodeCount (aggregate, forces the series path) AND year=2020
+// (per-episode). The aggregate evaluates `year` against the representative
+// episode, so the series matches when the representative is 2020.
 const mixedRule: LifecycleRuleGroup[] = [
   {
     id: "g1",
@@ -95,6 +95,36 @@ describe("evaluateSeriesScope — member restriction for seriesScope=false + agg
     const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;
     // Only the representative episode (year 2020) — NOT the two 2010 episodes.
     expect(members).toEqual([repId]);
+  });
+
+  it("does not match a show whose episodes pass only as a whole when seriesScope is false", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    for (let e = 1; e <= 3; e++) {
+      await createTestMediaItem(library.id, {
+        type: "SERIES", title: `S1E${e}`, parentTitle: "ShowY",
+        seasonNumber: 1, episodeNumber: e, fileSize: BigInt(1000 * 1024 * 1024),
+      });
+    }
+    // The show sums to 3000 MB; no single 1000 MB episode passes. Matched with
+    // no members, an episode-scoped Unmonitor fell back to an episode that
+    // never matched.
+    const sizeRule: LifecycleRuleGroup[] = [
+      {
+        id: "gs",
+        condition: "AND",
+        rules: [
+          { id: "rs1", field: "availableEpisodeCount", operator: "greaterThan", value: "0", condition: "AND" },
+          { id: "rs2", field: "fileSize", operator: "greaterThan", value: "2000", condition: "AND" },
+        ],
+        groups: [],
+      },
+    ];
+
+    expect(await evaluateSeriesScope(sizeRule, [server.id], undefined, undefined, true)).toHaveLength(0);
+    // Whole-series intent still matches on the summed size.
+    expect(await evaluateSeriesScope(sizeRule, [server.id], undefined, undefined, false)).toHaveLength(1);
   });
 
   it("keeps every episode as a member when seriesScope is true", async () => {

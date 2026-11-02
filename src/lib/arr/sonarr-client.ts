@@ -1,35 +1,4 @@
-import axios, { AxiosInstance } from "axios";
-import { logger } from "@/lib/logger";
-import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
-import { isExistingExclusionError } from "@/lib/arr/exclusion";
-
-// Tracked-download states that mean the item is NOT actively downloading.
-// Anything else (downloading, queued, warning, etc.) counts as an active download.
-const INACTIVE_DOWNLOAD_STATES = new Set([
-  "imported",
-  "importpending",
-  "failed",
-  "failedpending",
-  "ignored",
-]);
-
-/**
- * A queue record is "actively downloading" unless its tracked-download state
- * indicates it has already finished (imported), failed, or is ignored. Falling
- * back to `true` when state is absent preserves the prior behaviour for queues
- * that don't report a state.
- */
-function isActiveDownloadRecord(record: {
-  trackedDownloadState?: string;
-  status?: string;
-}): boolean {
-  const state = (record.trackedDownloadState ?? "").toLowerCase();
-  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
-  const status = (record.status ?? "").toLowerCase();
-  if (status === "completed" || status === "failed") return false;
-  return true;
-}
+import { ArrClientBase } from "@/lib/arr/arr-client-base";
 
 export interface SonarrSeries {
   id: number;
@@ -73,16 +42,6 @@ export interface SonarrSeries {
   }>;
 }
 
-export interface SonarrTag {
-  id: number;
-  label: string;
-}
-
-export interface SonarrQualityProfile {
-  id: number;
-  name: string;
-}
-
 export interface SonarrEpisode {
   id: number;
   seasonNumber: number;
@@ -94,82 +53,9 @@ export interface SonarrEpisode {
   airDate?: string;
 }
 
-export interface SonarrEpisodeFile {
-  id: number;
-  seriesId: number;
-  relativePath: string;
-  size: number;
-}
-
-export interface SonarrExclusion {
-  id?: number;
-  tvdbId: number;
-  title: string;
-}
-
-export interface SonarrMediaManagementConfig {
-  recycleBin: string | null;
-  recycleBinCleanupDays: number;
-}
-
-export class SonarrClient {
-  private client: AxiosInstance;
-
+export class SonarrClient extends ArrClientBase {
   constructor(baseURL: string, apiKey: string) {
-    this.client = axios.create({
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        "X-Api-Key": apiKey,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      timeout: 15000,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, "Sonarr", logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)?.__startTime as number | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug("Sonarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
-            message: error.message,
-          });
-          // Re-throw as a concise IntegrationError so unhandled errors in
-          // API routes don't produce a multi-page AxiosError dump. The
-          // original AxiosError is attached as `cause` for callers that
-          // still need its properties (e.g. extractActionError).
-          return Promise.reject(new IntegrationError("Sonarr", error));
-        }
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
-    try {
-      const response = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
-      const { appName, version } = response.data;
-      if (appName && appName !== "Sonarr") {
-        return { ok: false, error: `Expected Sonarr but connected to ${appName}`, appName, version };
-      }
-      return { ok: true, appName, version };
-    } catch (error: unknown) {
-      const msg =
-        error instanceof Error ? error.message : "Connection failed";
-      return { ok: false, error: msg };
-    }
+    super("Sonarr", "v3", baseURL, apiKey);
   }
 
   async getSeries(): Promise<SonarrSeries[]> {
@@ -202,20 +88,22 @@ export class SonarrClient {
     });
   }
 
-  async updateSeries(id: number, series: Partial<SonarrSeries>): Promise<SonarrSeries> {
-    const current = await this.getSeriesById(id);
+  /**
+   * PUTs `series` over the record. Pass `current` — the record just read —
+   * to skip re-reading it first; without it the record is fetched by id.
+   */
+  async updateSeries(id: number, series: Partial<SonarrSeries>, current?: SonarrSeries): Promise<SonarrSeries> {
+    const base = current ?? (await this.getSeriesById(id));
     const { data } = await this.client.put<SonarrSeries>(
       `/api/v3/series/${id}`,
-      { ...current, ...series }
+      { ...base, ...series }
     );
     return data;
   }
 
-  async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
-    const { data } = await this.client.get<SonarrEpisodeFile[]>("/api/v3/episodefile", {
-      params: { seriesId },
-    });
-    return data;
+  /** Removes `tagIds` from every series in `seriesIds` in one bulk-editor request. */
+  async removeTagsFromSeries(seriesIds: number[], tagIds: number[]): Promise<void> {
+    await this.removeTagsWithEditor("series", "seriesIds", seriesIds, tagIds);
   }
 
   async getEpisodes(seriesId: number): Promise<SonarrEpisode[]> {
@@ -230,13 +118,6 @@ export class SonarrClient {
     await this.client.delete("/api/v3/episodefile/bulk", {
       data: { episodeFileIds },
     });
-  }
-
-  async getQualityProfiles(): Promise<SonarrQualityProfile[]> {
-    const { data } = await this.client.get<SonarrQualityProfile[]>(
-      "/api/v3/qualityprofile"
-    );
-    return data;
   }
 
   /**
@@ -281,73 +162,4 @@ export class SonarrClient {
       seriesId,
     });
   }
-
-  async getQueue(seriesId: number): Promise<{ downloading: boolean; status: string | null }> {
-    try {
-      // `indexes: null` sends `seriesIds=1`; axios' default `seriesIds[]=1` is
-      // not bound, so the filter was skipped (see RadarrClient.getQueue).
-      const { data } = await this.client.get("/api/v3/queue", {
-        params: { seriesIds: [seriesId], pageSize: 50 },
-        paramsSerializer: { indexes: null },
-      });
-      const records = ((data.records || []) as Array<{ seriesId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
-        .filter((r) => r.seriesId === seriesId);
-      if (records.length === 0) return { downloading: false, status: null };
-      const active = records.find(isActiveDownloadRecord);
-      if (!active) {
-        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
-      }
-      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
-    } catch {
-      return { downloading: false, status: null };
-    }
-  }
-
-  async getTags(): Promise<SonarrTag[]> {
-    const { data } = await this.client.get<SonarrTag[]>("/api/v3/tag");
-    return data;
-  }
-
-  async createTag(label: string): Promise<SonarrTag> {
-    const { data } = await this.client.post<SonarrTag>("/api/v3/tag", { label });
-    return data;
-  }
-
-  async deleteTag(id: number): Promise<void> {
-    await this.client.delete(`/api/v3/tag/${id}`);
-  }
-
-  /** Idempotent: an exclusion that already exists counts as added. */
-  async addExclusion(tvdbId: number, title: string): Promise<void> {
-    try {
-      await this.client.post("/api/v3/importlistexclusion", {
-        tvdbId,
-        title,
-      });
-    } catch (error) {
-      if (isExistingExclusionError(error)) return;
-      throw error;
-    }
-  }
-
-  async getLanguages(): Promise<{ id: number; name: string }[]> {
-    const { data } = await this.client.get<{ id: number; name: string }[]>(
-      "/api/v3/language"
-    );
-    return data;
-  }
-
-  /**
-   * Only caller is the rule editor's recycle-bin check, which the Save button
-   * waits on — a probe, so it reports the first failure (NO_RETRY) instead of
-   * holding Save through four timeouts.
-   */
-  async getMediaManagementConfig(): Promise<SonarrMediaManagementConfig> {
-    const { data } = await this.client.get<SonarrMediaManagementConfig>(
-      "/api/v3/config/mediamanagement",
-      { ...NO_RETRY },
-    );
-    return data;
-  }
-
 }

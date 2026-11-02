@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { currentSsoIssuer, isForwardAuthMissingSecret } from "@/lib/sso/config";
 import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 import { apiLogger } from "@/lib/logger";
@@ -15,12 +15,7 @@ import { loadReauthContext, ssoIdentityMatches } from "@/lib/auth/reauth";
  * exactly as for a login — it is required, so without it this route refuses
  * like the login does (see forward-secret.ts).
  */
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   // Charged only on a refused confirmation (see `reserveAuthAttempt`); after
   // the session check, so a request that is not signed in never drains it.
   const attempt = reserveAuthAttempt(request, "sso-forward-reauth");
@@ -74,4 +69,4 @@ export async function POST(request: NextRequest) {
 
   apiLogger.info("Auth", "Identity confirmed with the SSO proxy");
   return NextResponse.json({ verified: true });
-}
+});

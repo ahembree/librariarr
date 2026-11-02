@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import { ThemeProvider } from "@/components/theme-provider";
+import { getRequestSession, loadShellSettings } from "@/lib/settings/shell-settings";
+import { accentStyle } from "@/lib/theme/accent-colors";
 import { Toaster } from "sonner";
 // Self-hosted (Fontsource) rather than next/font/google, which downloads the
 // fonts from Google at build time and fails the build when that request does.
@@ -38,15 +41,26 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Render every page per request: its scripts carry the request's CSP nonce
+  // (`src/proxy.ts`), and a page prerendered at build time would have none, so
+  // the browser would refuse to run it. Only the login pages were static.
+  await connection();
+  const accent = await loadAccentColor();
   return (
-    <html lang="en" className="dark">
+    <html
+      lang="en"
+      className="dark"
+      // The saved accent is in the first paint; applied only by ThemeProvider
+      // after hydration, the default blue showed until its fetch returned.
+      style={accentStyle(accent) as React.CSSProperties | undefined}
+    >
       <body className="antialiased">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider initialAccent={accent}>{children}</ThemeProvider>
         {/* Toasts auto-dismiss after 4s; a close button lets users dismiss
             sooner. On phones sonner spans the bottom edge full-width, so the
             mobileOffset keeps it clear of the home indicator / safe area. */}
@@ -60,4 +74,17 @@ export default function RootLayout({
       </body>
     </html>
   );
+}
+
+async function loadAccentColor(): Promise<string | null> {
+  try {
+    const session = await getRequestSession();
+    if (!session.isLoggedIn || !session.userId) return null;
+    // Shared with the authenticated layout's read in the same request.
+    const settings = await loadShellSettings(session.userId);
+    return settings?.accentColor ?? "default";
+  } catch {
+    // Signed out, no database yet: the provider fetches it client-side.
+    return null;
+  }
 }

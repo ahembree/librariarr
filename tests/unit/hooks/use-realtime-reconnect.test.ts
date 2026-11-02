@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 /**
@@ -50,6 +51,12 @@ class FakeEventSource {
   fireOpen() {
     this.readyState = FakeEventSource.OPEN;
     this.onopen?.();
+  }
+
+  /** The route's first event, as the stream sends it. */
+  fireConnected(data: unknown) {
+    const event = new MessageEvent("connected", { data: typeof data === "string" ? data : JSON.stringify(data) });
+    for (const fn of this.listeners.get("connected") ?? []) fn(event);
   }
 }
 
@@ -117,6 +124,9 @@ describe("useRealtime reconnect machinery", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect((second as unknown as FakeEventSource).closed).toBe(false);
+    // Nor does it schedule a reconnect that would build a duplicate.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeEventSource.instances).toEqual([first, second]);
   });
 
   it("keeps retrying after a 401, slowly, so a re-login recovers without a reload", async () => {
@@ -128,14 +138,15 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/events/stream", expect.objectContaining({ method: "HEAD" }));
 
     // Not on the ordinary 2s backoff — that would hammer a dead session.
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(FakeEventSource.instances.length).toBe(createdBefore);
 
     // But it does come back, on the slow floor.
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
   it("reconnects on the fast backoff for an ordinary drop", async () => {
@@ -145,15 +156,17 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(FakeEventSource.instances.length).toBe(createdBefore);
+    await vi.advanceTimersByTimeAsync(1);
 
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
-  it("a probe that never answers still reconnects, rather than stalling forever", async () => {
-    // The probe is bounded by AbortSignal.timeout; a hung fetch that eventually
-    // rejects must fall through to an ordinary reconnect.
-    fetchMock.mockRejectedValue(new Error("timeout"));
+  it("a probe that fails still reconnects, rather than stalling forever", async () => {
+    // The probe is bounded by AbortSignal.timeout; a hung fetch that is
+    // aborted (it rejects) must fall through to an ordinary reconnect.
+    fetchMock.mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
 
     const first = subscribe();
     (first as unknown as FakeEventSource).fireOpen();
@@ -161,9 +174,9 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
   it("does not fan out a resync burst on every reopen when a proxy flaps the connection", async () => {
@@ -189,6 +202,19 @@ describe("useRealtime reconnect machinery", () => {
     expect(resyncs).toHaveLength(2);
   });
 
+  it("drops the client caches on every reopen, even one whose resync is throttled", () => {
+    // An event lost in a quick flap would otherwise leave a list loaded
+    // before it reading as fresh once the stream was live again.
+    const drops: number[] = [];
+    mod.beforeRealtimeEvents(["sync:completed"], () => drops.push(1));
+    const first = subscribe() as unknown as FakeEventSource;
+    first.fireOpen(); // first open: nothing missed yet
+    expect(drops).toHaveLength(0);
+    first.fireOpen(); // reopen: resync
+    first.fireOpen(); // flap within the floor: resync throttled
+    expect(drops).toHaveLength(2);
+  });
+
   it("holds the connection open across a navigation instead of rebuilding it", async () => {
     // The whole point of the grace period: a route change releases then
     // re-acquires, and must reuse the same connection.
@@ -209,7 +235,114 @@ describe("useRealtime reconnect machinery", () => {
     mod.__testing.releaseSource();
     expect((first as unknown as FakeEventSource).closed).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect((first as unknown as FakeEventSource).closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect((first as unknown as FakeEventSource).closed).toBe(true);
+  });
+
+  describe("resyncIfEventsSince — a page rendered with its data on the server", () => {
+    const RENDERED_AT = 1_000_000;
+
+    function connectedStream() {
+      const source = subscribe() as unknown as FakeEventSource;
+      source.fireOpen();
+      return source;
+    }
+
+    /** Subscribers to "sync:completed" and to "session-changed", counted. */
+    function registerSubscribers() {
+      const resyncs = { sync: 0, sessions: 0 };
+      mod.__testing.registerResync(() => resyncs.sync++, ["sync:completed", "sync:failed"]);
+      mod.__testing.registerResync(() => resyncs.sessions++, ["session-changed"]);
+      return resyncs;
+    }
+
+    it("resyncs the subscribers of a type emitted since the render, and only those", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+
+      source.fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400, "session-changed": RENDERED_AT - 5_000 },
+      });
+      expect(resyncs).toEqual({ sync: 1, sessions: 0 });
+    });
+
+    it("runs a subscriber of several emitted types once", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400, "sync:failed": RENDERED_AT + 500 },
+      });
+      expect(resyncs).toEqual({ sync: 1, sessions: 0 });
+    });
+
+    it("runs the pre-handlers of the emitted types before the subscribers", () => {
+      const order: string[] = [];
+      mod.__testing.registerResync(() => order.push("subscriber"), ["sync:completed"]);
+      mod.beforeRealtimeEvents(["sync:completed"], () => order.push("cache drop"));
+      mod.beforeRealtimeEvents(["session-changed"], () => order.push("other drop"));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400 },
+      });
+      expect(order).toEqual(["cache drop", "subscriber"]);
+    });
+
+    it("an event at the render's own millisecond counts", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "session-changed": RENDERED_AT } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 1 });
+    });
+
+    it("does nothing when every event predates the render, or there was none", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "sync:completed": RENDERED_AT - 1 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("does nothing when the server has emitted nothing since it started", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: {} });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("resyncs every subscriber when it cannot tell (no report, unreadable data)", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900 });
+      expect(resyncs).toEqual({ sync: 1, sessions: 1 });
+    });
+
+    it("checks only the first connected event after the render", async () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      source.fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: {} });
+      await vi.advanceTimersByTimeAsync(10_000);
+      source.fireConnected({ timestamp: RENDERED_AT + 20_000, lastEventAtByType: { "sync:completed": RENDERED_AT + 15_000 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("a page with no server-rendered data never resyncs on the first connected event", () => {
+      const resyncs = registerSubscribers();
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "sync:completed": RENDERED_AT + 400 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("resyncs at once when the stream is already delivering", () => {
+      const resyncs = registerSubscribers();
+      connectedStream().fireConnected({ timestamp: RENDERED_AT, lastEventAtByType: {} });
+      mod.resyncIfEventsSince(RENDERED_AT);
+      expect(resyncs).toEqual({ sync: 1, sessions: 1 });
+    });
   });
 });

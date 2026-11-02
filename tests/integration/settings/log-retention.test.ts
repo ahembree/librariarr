@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -15,6 +15,10 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET, PUT } from "@/app/api/settings/log-retention/route";
+
+const prisma = getTestPrisma();
+const storedRetention = async (userId: string) =>
+  (await prisma.appSettings.findUnique({ where: { userId } }))?.logRetentionDays;
 
 describe("GET /api/settings/log-retention", () => {
   beforeEach(async () => {
@@ -45,7 +49,7 @@ describe("GET /api/settings/log-retention", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, { method: "PUT", body: { logRetentionDays: 30 } });
+    await prisma.appSettings.create({ data: { userId: user.id, logRetentionDays: 30 } });
 
     const res = await callRoute(GET);
     const body = await expectJson<{ logRetentionDays: number }>(res);
@@ -82,6 +86,7 @@ describe("PUT /api/settings/log-retention", () => {
     });
     const body = await expectJson<{ logRetentionDays: number }>(res);
     expect(body.logRetentionDays).toBe(90);
+    expect(await storedRetention(user.id)).toBe(90);
   });
 
   it("accepts minimum value of 1", async () => {
@@ -94,6 +99,7 @@ describe("PUT /api/settings/log-retention", () => {
     });
     const body = await expectJson<{ logRetentionDays: number }>(res);
     expect(body.logRetentionDays).toBe(1);
+    expect(await storedRetention(user.id)).toBe(1);
   });
 
   it("accepts maximum value of 365", async () => {
@@ -106,6 +112,7 @@ describe("PUT /api/settings/log-retention", () => {
     });
     const body = await expectJson<{ logRetentionDays: number }>(res);
     expect(body.logRetentionDays).toBe(365);
+    expect(await storedRetention(user.id)).toBe(365);
   });
 
   it("returns 400 for value below minimum", async () => {
@@ -116,7 +123,9 @@ describe("PUT /api/settings/log-retention", () => {
       method: "PUT",
       body: { logRetentionDays: 0 },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["logRetentionDays: Too small: expected number to be >=1"]);
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 
   it("returns 400 for value above maximum", async () => {
@@ -127,7 +136,9 @@ describe("PUT /api/settings/log-retention", () => {
       method: "PUT",
       body: { logRetentionDays: 366 },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["logRetentionDays: Too big: expected number to be <=365"]);
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 
   it("returns 400 for non-integer value", async () => {
@@ -138,7 +149,20 @@ describe("PUT /api/settings/log-retention", () => {
       method: "PUT",
       body: { logRetentionDays: 7.5 },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^logRetentionDays: /);
+    expect(await storedRetention(user.id)).toBeUndefined();
+  });
+
+  it("returns 400 for a value that is not a number", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, { method: "PUT", body: { logRetentionDays: "thirty" } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["logRetentionDays: Invalid input: expected number, received string"]);
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 
   it("returns 400 for missing field", async () => {
@@ -146,6 +170,8 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 });

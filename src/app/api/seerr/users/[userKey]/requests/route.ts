@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   SeerrClient,
@@ -54,14 +54,11 @@ interface ResolveResult {
   requests: ResolvedRequest[];
 }
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ userKey: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+) => {
   // Next.js has already URL-decoded dynamic params. Decoding again threw on a
   // key containing a literal '%' ("100%Dad" → 500) and rewrote a literal
   // "%41" to "A", resolving a different user.
@@ -70,12 +67,12 @@ export async function GET(
   // Never cache a truncated walk — the next load retries it.
   const result = await appCache.getOrSet(
     `${USER_REQUESTS_CACHE_PREFIX}${userKey}`,
-    () => resolveUserRequests(session.userId!, userKey),
+    () => resolveUserRequests(session.userId, userKey),
     CACHE_TTL_MS,
     { shouldCache: (r) => !r.partial }
   );
   return NextResponse.json(result);
-}
+});
 
 async function resolveUserRequests(
   userId: string,
@@ -165,11 +162,12 @@ async function resolveUserRequests(
   });
   const serverIds = servers.map((s) => s.id);
 
-  // Movies: tmdbId -> matched MediaItem
-  const movieMap = new Map<
-    number,
-    { id: string; title: string; year: number | null; dedupKey: string | null }
-  >();
+  // Movies: tmdbId -> the MediaItem a request links to. Watch correlation
+  // reads EVERY canonical item's dedupKey (`movieDedupToTmdb`), not only the
+  // linked one's, exactly as `request-stats.ts` does: two editions of one film
+  // share a TMDB id, and a play of the second made the stats card count the
+  // request watched while this list called it unwatched.
+  const movieMap = new Map<number, { id: string; title: string; year: number | null }>();
   const movieDedupToTmdb = new Map<string, number>();
   if (tmdbIds.size > 0 && serverIds.length > 0) {
     const movies = await prisma.mediaItem.findMany({
@@ -186,16 +184,16 @@ async function resolveUserRequests(
         dedupKey: true,
         externalIds: { where: { source: "TMDB" }, select: { externalId: true } },
       },
+      // Which edition a request links to is the first one kept below.
+      orderBy: { id: "asc" },
     });
     for (const m of movies) {
       const tmdbStr = m.externalIds[0]?.externalId;
       if (!tmdbStr) continue;
       const tmdb = Number(tmdbStr);
       if (!Number.isFinite(tmdb)) continue;
-      if (!movieMap.has(tmdb)) {
-        movieMap.set(tmdb, { id: m.id, title: m.title, year: m.year, dedupKey: m.dedupKey });
-        if (m.dedupKey) movieDedupToTmdb.set(m.dedupKey, tmdb);
-      }
+      if (!movieMap.has(tmdb)) movieMap.set(tmdb, { id: m.id, title: m.title, year: m.year });
+      if (m.dedupKey) movieDedupToTmdb.set(m.dedupKey, tmdb);
     }
   }
 
@@ -328,7 +326,7 @@ async function resolveUserRequests(
         createdAt: req.createdAt,
         tmdbId: tmdb,
         tvdbId: null,
-        title: local?.title ?? fallback?.title ?? `Movie (TMDB ${tmdb})`,
+        title: local?.title ?? fallback?.title ?? (tmdb > 0 ? `Movie (TMDB ${tmdb})` : "Movie"),
         year: local?.year ?? fallback?.year ?? null,
         posterUrl: local ? `/api/media/${local.id}/image` : fallback?.posterUrl ?? null,
         mediaItem: local ? { id: local.id, route: "movie" } : null,

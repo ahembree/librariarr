@@ -344,7 +344,7 @@ export function peekAuthRateLimit(request: Request, bucket: string): Response | 
  * A reserved attempt: refused with a 429, or held until `succeeded` gives it
  * back. An attempt that fails is simply left charged.
  */
-export type AuthAttempt = { refused: Response } | { refused: null; succeeded: () => void };
+type AuthAttempt = { refused: Response } | { refused: null; succeeded: () => void };
 
 export function reserveAuthAttempt(request: Request, bucket: string): AuthAttempt {
   const ip = getClientIp(request);

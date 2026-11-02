@@ -13,11 +13,15 @@ test.describe("library — movies", () => {
 
     // The toolbar (card/table toggle) renders regardless of data. The toggle's
     // data-backed effect (table actually renders rows) is covered by
-    // seeded-library.spec; here we only assert both controls are interactive.
-    await expect(page.getByRole("button", { name: "Card view" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Table view" })).toBeVisible();
-    await page.getByRole("button", { name: "Table view" }).click();
-    await expect(page.getByRole("button", { name: "Card view" })).toBeVisible();
+    // seeded-library.spec; here the toggle itself must switch modes, the
+    // active one carrying the accent.
+    const cardView = page.getByRole("button", { name: "Card view" });
+    const tableView = page.getByRole("button", { name: "Table view" });
+    await expect(cardView).toHaveClass(/text-brand-bright/);
+    await expect(tableView).not.toHaveClass(/text-brand-bright/);
+    await tableView.click();
+    await expect(tableView).toHaveClass(/text-brand-bright/);
+    await expect(cardView).not.toHaveClass(/text-brand-bright/);
   });
 });
 

@@ -32,19 +32,20 @@ Scaffold a complete feature for: $ARGUMENTS
 Create following the project's exact patterns:
 
 **`src/app/api/<feature>/route.ts`** (list + create):
-- GET: auth check → `findMany({ where: { userId: session.userId! } })` → `sanitize()`
-- POST: auth check → `validateRequest()` → create → return `sanitize()` with status 201
+- GET: `withSession` → `findMany({ where: { userId: session.userId } })` → `sanitize()`
+- POST: `withSession` → `validateRequest()` → create → return `sanitize()` with status 201
 
 **`src/app/api/<feature>/[id]/route.ts`** (read + update + delete):
-- PUT: auth check → validate → `findFirst` for ownership → update → `sanitize()`
-- DELETE: auth check → `findFirst` for ownership → delete → `{ success: true }`
+- PUT: `withSession` → validate → `findFirst` for ownership → update → `sanitize()`
+- DELETE: `withSession` → `findFirst` for ownership → delete → `{ success: true }`
 
 Key conventions:
 - Import prisma from `@/lib/db` (NEVER `@/lib/prisma`)
 - Schemas from `@/lib/validation` (NEVER inline)
 - Wrap responses with `sanitize()` from `@/lib/api/sanitize`
 - Dynamic params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16)
-- Ownership: `findFirst({ where: { id, userId: session.userId! } })` not bare `findUnique`
+- Auth: every handler is `export const METHOD = withSession(async (session, request, ctx) => …)` (`@/lib/auth/with-session`)
+- Ownership: `findFirst({ where: { id, userId: session.userId } })` not bare `findUnique`
 
 ### 4. Integration Tests
 Create at `tests/integration/<category>/<name>.test.ts`:

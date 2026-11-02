@@ -19,7 +19,7 @@ import { isTruthyFlag } from "@/lib/env-flag";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
-export const OIDC_INSECURE_HTTP_ENV = "OIDC_ALLOW_INSECURE_HTTP";
+const OIDC_INSECURE_HTTP_ENV = "OIDC_ALLOW_INSECURE_HTTP";
 
 /** A host no network sits between: `localhost`, `*.localhost`, 127/8, ::1. */
 export function isLoopbackHost(hostname: string): boolean {

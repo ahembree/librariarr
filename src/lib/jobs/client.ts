@@ -92,6 +92,30 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
   return spec;
 }
 
+/**
+ * The `syncJobId` each still-queued (not running) job under `jobKeys` carries,
+ * by job key. A keyed enqueue replaces a queued job's payload, so a caller that
+ * is about to re-enqueue under a key reuses the row that job was going to claim
+ * instead of leaving it PENDING with nothing to claim it. The payload lives on
+ * graphile-worker's private table; its public view leaves it out. `null` when
+ * the lookup fails, so the caller can fall back rather than guess.
+ */
+export async function queuedSyncJobIds(jobKeys: string[]): Promise<Map<string, string> | null> {
+  if (jobKeys.length === 0) return new Map();
+  try {
+    const { rows } = await getJobsPool().query<{ key: string; syncJobId: string | null }>(
+      `SELECT "key", "payload"->>'syncJobId' AS "syncJobId"
+         FROM graphile_worker._private_jobs
+        WHERE "key" = ANY($1::text[]) AND "locked_at" IS NULL`,
+      [jobKeys],
+    );
+    return new Map(rows.flatMap((row) => (row.syncJobId ? [[row.key, row.syncJobId] as const] : [])));
+  } catch (error) {
+    logger.warn("Jobs", "Could not read the queued sync jobs", { error: String(error) });
+    return null;
+  }
+}
+
 /** Release pooled resources. Primarily used by tests. */
 /**
  * Whether the job under `jobKey` failed and is waiting out graphile-worker's

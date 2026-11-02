@@ -54,6 +54,10 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 }));
 
 // Import route handlers AFTER mocks
+import { RadarrClient } from "@/lib/arr/radarr-client";
+import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { POST as radarrTestConnection } from "@/app/api/integrations/radarr/[id]/test-connection/route";
 import { POST as sonarrTestConnection } from "@/app/api/integrations/sonarr/[id]/test-connection/route";
 import { POST as lidarrTestConnection } from "@/app/api/integrations/lidarr/[id]/test-connection/route";
@@ -80,7 +84,7 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
       { id: "nonexistent" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent instance", async () => {
@@ -92,22 +96,24 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
       { id: "nonexistent-id" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestRadarrInstance(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.0" });
+    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
 
     const res = await callRouteWithParams(
       radarrTestConnection,
       { id: instance.id },
       { method: "POST", body: {} }
     );
-    const body = await expectJson<{ ok: boolean }>(res);
-    expect(body.ok).toBe(true);
+    const body = await expectJson(res);
+    expect(body).toEqual({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+    // No overrides: the stored URL and key are tested.
+    expect(RadarrClient).toHaveBeenCalledWith(instance.url, instance.apiKey);
   });
 
   it("returns error when connection fails", async () => {
@@ -125,6 +131,38 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toBe("Connection refused");
   });
+
+  it("tests a new API key against the stored URL", async () => {
+    const user = await createTestUser();
+    const instance = await createTestRadarrInstance(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+
+    const res = await callRouteWithParams(
+      radarrTestConnection,
+      { id: instance.id },
+      { method: "POST", body: { apiKey: "rotated-api-key" } }
+    );
+    expect(await expectJson(res)).toEqual({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+    expect(RadarrClient).toHaveBeenCalledWith(instance.url, "rotated-api-key");
+  });
+
+  it("rejects a URL that is not http(s) without contacting anything", async () => {
+    const user = await createTestUser();
+    const instance = await createTestRadarrInstance(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRouteWithParams(
+      radarrTestConnection,
+      { id: instance.id },
+      { method: "POST", body: { url: "ftp://radarr.test:7878", apiKey: "k" } }
+    );
+    expect(await expectJson(res, 400)).toEqual({
+      error: "Validation failed",
+      details: ["url: URL must start with http:// or https://"],
+    });
+    expect(RadarrClient).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -137,7 +175,7 @@ describe("POST /api/integrations/sonarr/[id]/test-connection", () => {
       { id: "nonexistent" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent instance", async () => {
@@ -149,22 +187,24 @@ describe("POST /api/integrations/sonarr/[id]/test-connection", () => {
       { id: "nonexistent-id" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestSonarrInstance(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0" });
+    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
 
     const res = await callRouteWithParams(
       sonarrTestConnection,
       { id: instance.id },
       { method: "POST", body: {} }
     );
-    const body = await expectJson<{ ok: boolean }>(res);
-    expect(body.ok).toBe(true);
+    const body = await expectJson(res);
+    expect(body).toEqual({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
+    // No overrides: the stored URL and key are tested.
+    expect(SonarrClient).toHaveBeenCalledWith(instance.url, instance.apiKey);
   });
 
   it("returns error when connection fails", async () => {
@@ -194,7 +234,7 @@ describe("POST /api/integrations/lidarr/[id]/test-connection", () => {
       { id: "nonexistent" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent instance", async () => {
@@ -206,22 +246,24 @@ describe("POST /api/integrations/lidarr/[id]/test-connection", () => {
       { id: "nonexistent-id" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestLidarrInstance(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    mockLidarrTestConnection.mockResolvedValue({ ok: true, appName: "Lidarr", version: "2.0" });
+    mockLidarrTestConnection.mockResolvedValue({ ok: true, appName: "Lidarr", version: "2.9.6.4552" });
 
     const res = await callRouteWithParams(
       lidarrTestConnection,
       { id: instance.id },
       { method: "POST", body: {} }
     );
-    const body = await expectJson<{ ok: boolean }>(res);
-    expect(body.ok).toBe(true);
+    const body = await expectJson(res);
+    expect(body).toEqual({ ok: true, appName: "Lidarr", version: "2.9.6.4552" });
+    // No overrides: the stored URL and key are tested.
+    expect(LidarrClient).toHaveBeenCalledWith(instance.url, instance.apiKey);
   });
 
   it("returns error when connection fails", async () => {
@@ -251,7 +293,7 @@ describe("POST /api/integrations/seerr/[id]/test-connection", () => {
       { id: "nonexistent" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent instance", async () => {
@@ -263,22 +305,24 @@ describe("POST /api/integrations/seerr/[id]/test-connection", () => {
       { id: "nonexistent-id" },
       { method: "POST", body: {} }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestSeerrInstance(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr", version: "1.0" });
+    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
 
     const res = await callRouteWithParams(
       seerrTestConnection,
       { id: instance.id },
       { method: "POST", body: {} }
     );
-    const body = await expectJson<{ ok: boolean }>(res);
-    expect(body.ok).toBe(true);
+    const body = await expectJson(res);
+    expect(body).toEqual({ ok: true, appName: "Seerr" });
+    // No overrides: the stored URL and key are tested.
+    expect(SeerrClient).toHaveBeenCalledWith(instance.url, instance.apiKey);
   });
 
   it("returns error when connection fails", async () => {

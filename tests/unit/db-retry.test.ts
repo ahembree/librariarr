@@ -20,6 +20,7 @@ describe("withDeadlockRetry", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -195,8 +196,6 @@ describe("withDeadlockRetry", () => {
     await promise;
 
     expect(delays).toEqual([100, 200, 400]);
-
-    vi.restoreAllMocks();
   });
 
   it("does not retry for null error", async () => {

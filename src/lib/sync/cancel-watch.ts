@@ -7,7 +7,7 @@
  */
 export const CANCEL_POLL_MS = 2_000;
 
-export interface CancelWatch {
+interface CancelWatch {
   /** Aborts once `isCancelled` has reported true. */
   signal: AbortSignal;
   /** End the watch. Must be called when the guarded phase finishes. */

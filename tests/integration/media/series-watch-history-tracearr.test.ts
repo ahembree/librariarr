@@ -128,8 +128,13 @@ const STREAM_QUALITY = {
 
 describe("GET /api/media/series/watch-history — Tracearr detail", () => {
   let userId: string;
+  // A server keeps one provenance: the native one records only NATIVE rows, the
+  // Tracearr-mapped one only TRACEARR rows (the importer drops a mapped
+  // server's native rows), so each kind of row lives on its own server here.
   let serverId: string;
   let libraryId: string;
+  let mappedServerId: string;
+  let mappedLibraryId: string;
 
   /** A NATIVE row: what a media-server scan records, and nothing more. */
   async function addNativeWatch(mediaItemId: string, serverUsername = "alice") {
@@ -145,7 +150,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     });
   }
 
-  /** A TRACEARR row: an imported play event, with the full stream detail. */
+  /** A TRACEARR row on the mapped server: an imported play event, with the full stream detail. */
   async function addTracearrWatch(
     mediaItemId: string,
     overrides: Partial<{
@@ -161,7 +166,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     return getTestPrisma().watchHistory.create({
       data: {
         mediaItemId,
-        mediaServerId: serverId,
+        mediaServerId: mappedServerId,
         serverUsername: overrides.serverUsername ?? "bob",
         watchedAt: overrides.watchedAt ?? new Date("2024-07-04T18:30:00Z"),
         deviceName: "Apple TV",
@@ -185,7 +190,8 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
         videoDecision: "transcode",
         audioDecision: "copy",
         bitrate: 8000,
-        resolution: "4K",
+        // What the client was served: the 4K HEVC source transcoded to 1080p.
+        resolution: "1080p",
         sourceVideoCodec: "hevc",
         sourceAudioCodec: "truehd",
         streamVideoCodec: "h264",
@@ -197,13 +203,14 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     });
   }
 
-  /** Creates an episode row and returns its id. */
+  /** Creates an episode row (on the native server unless told otherwise) and returns its id. */
   async function makeEpisode(
     seasonNumber: number,
     episodeNumber: number,
     title: string,
+    libId = libraryId,
   ): Promise<string> {
-    const item = await createTestMediaItem(libraryId, {
+    const item = await createTestMediaItem(libId, {
       type: "SERIES",
       title,
       parentTitle: "Adventure Time",
@@ -224,6 +231,13 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     serverId = server.id;
     const library = await createTestLibrary(server.id, { type: "SERIES" });
     libraryId = library.id;
+    const mapped = await createTestServer(userId, {
+      name: "Mapped Server",
+      tracearrServerId: "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      tracearrBackfillComplete: true,
+    });
+    mappedServerId = mapped.id;
+    mappedLibraryId = (await createTestLibrary(mapped.id, { type: "SERIES" })).id;
   });
 
   afterAll(async () => {
@@ -231,7 +245,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
   });
 
   it("returns every Tracearr column with its real value", async () => {
-    const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    const episode = await makeEpisode(1, 1, "Slumber Party Panic", mappedLibraryId);
     await addTracearrWatch(episode);
 
     const data = await expectJson<HistoryResponse>(
@@ -260,12 +274,13 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
       videoDecision: "transcode",
       audioDecision: "copy",
       bitrate: 8000,
-      resolution: "4K",
+      resolution: "1080p",
       sourceVideoCodec: "hevc",
       sourceAudioCodec: "truehd",
       streamVideoCodec: "h264",
       streamAudioCodec: "aac",
     });
+    expect(row.server).toEqual({ id: mappedServerId, name: "Mapped Server", type: "PLEX" });
     // Serialised the same way as watchedAt, not left as a Date.
     expect(row.stoppedAt).toBe("2024-07-04T19:15:00.000Z");
     expect(row.watchedAt).toBe("2024-07-04T18:30:00.000Z");
@@ -275,7 +290,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     // The card reads these objects structurally, so what matters is that the
     // stored shape survives jsonb + JSON serialisation unchanged — nested
     // objects, arrays, booleans and floats included.
-    const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    const episode = await makeEpisode(1, 1, "Slumber Party Panic", mappedLibraryId);
     await addTracearrWatch(episode);
 
     const data = await expectJson<HistoryResponse>(
@@ -348,7 +363,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     // Only the watch-state reconcile cares about the completion threshold; this
     // route is display data, and dropping watched=false would hide the plays a
     // household actually made from the history card.
-    const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    const episode = await makeEpisode(1, 1, "Slumber Party Panic", mappedLibraryId);
     await addTracearrWatch(episode, {
       sourceEventId: "chain-partial",
       serverUsername: "carol",
@@ -372,9 +387,11 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
   });
 
   it("keeps NATIVE and TRACEARR rows in one newest-first list", async () => {
+    // The same show on a native server and on a Tracearr-mapped one.
     const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    const mappedCopy = await makeEpisode(1, 1, "Slumber Party Panic", mappedLibraryId);
     await addNativeWatch(episode); // 2024-06-01
-    await addTracearrWatch(episode, {
+    await addTracearrWatch(mappedCopy, {
       sourceEventId: "chain-newest",
       watchedAt: new Date("2024-08-09T21:00:00Z"),
     });
@@ -387,16 +404,21 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     );
 
     expect(data.pagination.totalCount).toBe(2);
-    expect(data.items.map((i) => i.source)).toEqual(["TRACEARR", "NATIVE"]);
+    expect(data.items.map((i) => [i.source, i.server.id])).toEqual([
+      ["TRACEARR", mappedServerId],
+      ["NATIVE", serverId],
+    ]);
   });
 
   it("paginates the mixed list without duplicating or dropping rows", async () => {
     const episode = await makeEpisode(1, 1, "Slumber Party Panic");
+    const mappedCopy = await makeEpisode(1, 1, "Slumber Party Panic", mappedLibraryId);
+    // Every play at one instant: the native rows' fixed time.
     const tie = new Date("2024-06-01T20:00:00Z");
     await addNativeWatch(episode, "native-1");
     await addNativeWatch(episode, "native-2");
     for (let i = 0; i < 3; i++) {
-      await addTracearrWatch(episode, {
+      await addTracearrWatch(mappedCopy, {
         sourceEventId: `chain-${i}`,
         serverUsername: `tracearr-${i}`,
         watchedAt: tie,
@@ -416,8 +438,10 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
 
     expect(pages[0].pagination.totalCount).toBe(5);
     expect(pages.map((p) => p.pagination.hasMore)).toEqual([true, true, false]);
-    const ids = pages.flatMap((p) => p.items).map((i) => i.id);
-    expect(ids).toHaveLength(5);
-    expect(new Set(ids).size).toBe(5);
+    // Within the tie, rows come in id order — every play exactly once.
+    const expected = (
+      await getTestPrisma().watchHistory.findMany({ orderBy: { id: "asc" }, select: { id: true } })
+    ).map((r) => r.id);
+    expect(pages.flatMap((p) => p.items).map((i) => i.id)).toEqual(expected);
   });
 });

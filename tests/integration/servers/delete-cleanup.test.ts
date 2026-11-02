@@ -44,6 +44,8 @@ vi.mock("@/lib/dedup/recompute-canonical", () => ({
 
 // Import route handler AFTER mocks
 import { DELETE } from "@/app/api/servers/[id]/route";
+import { appCache } from "@/lib/cache/memory-cache";
+import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 
 describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
   const prisma = getTestPrisma();
@@ -56,6 +58,31 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
 
   afterAll(async () => {
     await disconnectTestDb();
+  });
+
+  it("recomputes the canonical copies before dropping the caches built on them", async () => {
+    // Dropped first, a listing asked for during the recompute was cached with
+    // the old flags and served to every tab's server:changed refetch.
+    const order: string[] = [];
+    vi.mocked(recomputeCanonical).mockImplementation(async () => {
+      order.push("recompute");
+      return undefined as never;
+    });
+    vi.mocked(appCache.invalidatePrefix).mockImplementation(() => {
+      order.push("invalidate");
+    });
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(
+      DELETE,
+      { id: server.id },
+      { url: `/api/servers/${server.id}`, method: "DELETE" }
+    );
+    expect(response.status).toBe(200);
+    expect(order[0]).toBe("recompute");
+    expect(order).toContain("invalidate");
   });
 
   it("removes deleted server ID from rule set serverIds", async () => {
@@ -74,8 +101,9 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       { id: server1.id },
       { url: `/api/servers/${server1.id}`, method: "DELETE" }
     );
-    await expectJson(response, 200);
+    expect(await expectJson(response, 200)).toEqual({ success: true });
 
+    expect(await prisma.mediaServer.findUnique({ where: { id: server1.id } })).toBeNull();
     const updated = await prisma.ruleSet.findUnique({
       where: { id: ruleSet.id },
     });
@@ -91,7 +119,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     const ruleSet = await createTestRuleSet(user.id, {
       serverIds: [server.id],
       actionEnabled: true,
-      actionType: "DELETE",
+      actionType: "DELETE_RADARR",
     });
 
     // Create a rule match
@@ -110,7 +138,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
         mediaItemId: item.id,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
-        actionType: "DELETE",
+        actionType: "DELETE_RADARR",
         status: "PENDING",
         scheduledFor: new Date(Date.now() + 86400000),
       },
@@ -123,7 +151,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
         mediaItemId: item.id,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
-        actionType: "DELETE",
+        actionType: "DELETE_RADARR",
         status: "COMPLETED",
         scheduledFor: new Date(),
         executedAt: new Date(),
@@ -164,6 +192,12 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     });
     expect(preserved).not.toBeNull();
     expect(preserved!.status).toBe("COMPLETED");
+
+    // Without deleteData the library and its item outlive the server, detached.
+    expect(await prisma.mediaServer.findUnique({ where: { id: server.id } })).toBeNull();
+    const keptLibrary = await prisma.library.findUniqueOrThrow({ where: { id: library.id } });
+    expect(keptLibrary.mediaServerId).toBeNull();
+    expect(await prisma.mediaItem.findUnique({ where: { id: item.id } })).not.toBeNull();
   });
 
   it("cleans up with deleteData=true via cascade and explicit deletes", async () => {
@@ -175,7 +209,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     const ruleSet = await createTestRuleSet(user.id, {
       serverIds: [server.id],
       actionEnabled: true,
-      actionType: "DELETE",
+      actionType: "DELETE_RADARR",
     });
 
     await prisma.ruleMatch.create({
@@ -192,7 +226,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
         mediaItemId: item.id,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
-        actionType: "DELETE",
+        actionType: "DELETE_RADARR",
         status: "PENDING",
         scheduledFor: new Date(Date.now() + 86400000),
       },
@@ -224,6 +258,11 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       where: { ruleSetId: ruleSet.id },
     });
     expect(actions).toHaveLength(0);
+
+    // The synced data goes with the server.
+    expect(await prisma.mediaServer.findUnique({ where: { id: server.id } })).toBeNull();
+    expect(await prisma.library.findUnique({ where: { id: library.id } })).toBeNull();
+    expect(await prisma.mediaItem.findUnique({ where: { id: item.id } })).toBeNull();
   });
 
   it("cleans stale matches from deleted server but preserves other servers' matches", async () => {
@@ -238,7 +277,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     const ruleSet = await createTestRuleSet(user.id, {
       serverIds: [server1.id, server2.id],
       actionEnabled: true,
-      actionType: "DELETE",
+      actionType: "DELETE_RADARR",
     });
 
     // Match for item on server1 (should be cleaned)
@@ -257,7 +296,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
         mediaItemId: item1.id,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
-        actionType: "DELETE",
+        actionType: "DELETE_RADARR",
         status: "PENDING",
         scheduledFor: new Date(Date.now() + 86400000),
       },
@@ -294,6 +333,8 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
     });
     expect(matches).toHaveLength(1);
     expect(matches[0].mediaItemId).toBe(item2.id);
+    // The item itself is kept (deleteData=false); only its match went.
+    expect(await prisma.mediaItem.findUnique({ where: { id: item1.id } })).not.toBeNull();
 
     // Pending action for server1's item should be cleaned
     const pendingActions = await prisma.lifecycleAction.findMany({

@@ -124,12 +124,12 @@ describe("getDuplicateServerNames", () => {
     expect(result.size).toBe(1);
   });
 
-  it("preserves extra fields on objects (generic constraint only needs name)", () => {
+  it("accepts server rows with extra fields, comparing names only", () => {
     const result = getDuplicateServerNames([
-      { name: "A", id: 1 },
-      { name: "A", id: 2 },
+      { name: "A", id: "srv-1", type: "PLEX" },
+      { name: "A", id: "srv-2", type: "JELLYFIN" },
     ]);
-    expect(result.has("A")).toBe(true);
+    expect(result).toEqual(new Set(["A"]));
   });
 
   it("is case-sensitive when comparing names", () => {

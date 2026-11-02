@@ -6,6 +6,7 @@ import {
   acceptsGzip,
   mapInSlices,
   stringifyYielding,
+  writeJsonYielding,
   MIN_COMPRESS_BYTES,
   STRINGIFY_SLICE_ROWS,
 } from "@/lib/api/json-response";
@@ -140,9 +141,46 @@ describe("stringifyYielding", () => {
   });
 
   it("does not look past three levels", async () => {
-    // Deeper lists are serialised whole — still the same output.
-    const body = { a: [{ b: [{ c: rows(STRINGIFY_SLICE_ROWS + 1) }] }] };
-    expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+    // Deeper lists are serialised whole, in one call — still the same output,
+    // but nothing queued gets to run before it finishes.
+    const order: string[] = [];
+    setImmediate(() => order.push("queued"));
+    const body = { a: [{ b: [{ c: rows(STRINGIFY_SLICE_ROWS * 2) }] }] };
+    const text = await stringifyYielding(body);
+    order.push("done");
+    expect(text).toBe(JSON.stringify(body));
+    expect(order).toEqual(["done"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["done", "queued"]);
+  });
+});
+
+describe("writeJsonYielding", () => {
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `item-${i}`, gone: undefined, tags: i % 2 ? ["a"] : [] }));
+  const written = async (body: unknown) => {
+    const chunks: string[] = [];
+    await writeJsonYielding(body, (chunk) => chunks.push(chunk));
+    return chunks;
+  };
+
+  it("writes JSON.stringify's text in pieces, never the whole document at once", async () => {
+    const body = {
+      type: "result",
+      result: { items: rows(STRINGIFY_SLICE_ROWS * 3 + 2), count: 3002, skip: undefined },
+      groups: [{ name: "g", items: rows(STRINGIFY_SLICE_ROWS + 1) }, undefined],
+    };
+    const chunks = await written(body);
+    expect(chunks.join("")).toBe(JSON.stringify(body));
+    const whole = JSON.stringify(body).length;
+    expect(chunks.length).toBeGreaterThan(4);
+    expect(Math.max(...chunks.map((c) => c.length))).toBeLessThan(whole / 2);
+  });
+
+  it("writes a body with no long list as one piece, and nothing for one with no JSON form", async () => {
+    expect(await written({ a: 1, list: rows(3) })).toEqual([JSON.stringify({ a: 1, list: rows(3) })]);
+    expect(await written(undefined)).toEqual([]);
+    expect(await stringifyYielding(undefined)).toBe(JSON.stringify(undefined));
   });
 });
 

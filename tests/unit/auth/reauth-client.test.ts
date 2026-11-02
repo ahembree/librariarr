@@ -82,8 +82,10 @@ describe("fetchWithReauth", () => {
     expect(res.status).toBe(403);
     // Not the server's "confirm it's you" — the prompt that offered that is gone.
     const body = (await res.json()) as { code: string; error: string };
-    expect(body.code).toBe("reauth_cancelled");
-    expect(body.error).toMatch(/cancelled/i);
+    expect(body).toEqual({
+      code: "reauth_cancelled",
+      error: "Cancelled — confirm it's you to continue. Try again when you're ready.",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -187,11 +189,18 @@ describe("reauthWithOidcPopup", () => {
   // it reads as closed here and has no `window.opener` when it comes back, so
   // only the channel carries the report.
   it("takes the report from the BroadcastChannel even though the popup reads as closed", async () => {
+    vi.useFakeTimers();
     const { popup, win, nonce } = fakeWindow();
     const result = reauthWithOidcPopup();
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
     await started(popup);
     popup.closed = true;
-    await new Promise((r) => setTimeout(r, 50));
+    // Minutes of a closed-reading popup (short of the timeout) end nothing.
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(settled).toBe(false);
 
     const sender = new BroadcastChannel(REAUTH_CHANNEL);
     sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: true, nonce: nonce() });
@@ -233,13 +242,27 @@ describe("reauthWithOidcPopup", () => {
     await started(popup);
     expect(nonce()).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
 
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    // A second receiver on the channel: once it has the stray report, the
+    // prompt's own channel (opened earlier) has been handed it too.
+    const probe = new BroadcastChannel(REAUTH_CHANNEL);
+    const delivered = new Promise((resolve) => {
+      probe.onmessage = resolve;
+    });
     const sender = new BroadcastChannel(REAUTH_CHANNEL);
     sender.postMessage({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "state_mismatch", nonce: "someone-elses-attempt" });
     win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: false, error: "state_mismatch" });
-    await new Promise((r) => setTimeout(r, 50));
+    await delivered;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
     win.dispatch({ type: REAUTH_MESSAGE_TYPE, ok: true, nonce: nonce() });
     expect(await result).toEqual({ ok: true });
     sender.close();
+    probe.close();
   });
 
   it("ends at once when the popup was closed before the sign-in started", async () => {

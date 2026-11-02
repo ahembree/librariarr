@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import { computeLibraryStats } from "@/lib/media/library-stats";
@@ -12,16 +12,11 @@ import { computeLibraryStats } from "@/lib/media/library-stats";
  */
 const STATS_TTL_MS = 10 * 60_000;
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const serverId = searchParams.get("serverId");
 
-  const scope = await resolveStatsScope(session.userId!, serverId);
+  const scope = await resolveStatsScope(session.userId, serverId);
   if (scope === "server-not-found") {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
@@ -62,4 +57,4 @@ export async function GET(request: NextRequest) {
     STATS_TTL_MS,
   );
   return NextResponse.json(result);
-}
+});

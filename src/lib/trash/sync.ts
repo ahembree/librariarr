@@ -60,7 +60,7 @@ interface ProfileOverlay {
   formats: ProfileCfSelection["formats"];
 }
 
-export interface SyncOptions {
+interface SyncOptions {
   dryRun: boolean;
   /**
    * Scope the run to specific items.

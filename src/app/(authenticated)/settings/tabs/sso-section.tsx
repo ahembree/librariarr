@@ -91,8 +91,14 @@ const codeClass = "font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5";
  * (save, enable toggle, unlink, revert): that decides whether the password is
  * accepted at all, which the rest of the Authentication tab reads from
  * `/api/settings/auth` — whether it asks for the current password.
+ *
+ * `read` answers the opening reads; the Settings page passes one that serves
+ * them from its settings bundle, already loaded with the tab.
  */
-export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
+export function SsoSection({
+  onChanged,
+  read = (path) => fetch(path),
+}: { onChanged?: () => void; read?: (path: string) => Promise<Response> } = {}) {
   const [config, setConfig] = useState<SsoConfig | null>(null);
   // The last-saved snapshot of config (sans ssoEnabled, which is its own
   // toggle). Used to detect unsaved changes in step 1.
@@ -128,10 +134,7 @@ export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const [configRes, linkRes] = await Promise.all([
-          fetch("/api/settings/sso"),
-          fetch("/api/settings/sso/me"),
-        ]);
+        const [configRes, linkRes] = await Promise.all([read("/api/settings/sso"), read("/api/settings/sso/me")]);
         if (cancelled) return;
         if (configRes.ok) {
           const data = (await configRes.json()) as SsoConfig;
@@ -148,6 +151,8 @@ export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
     return () => {
       cancelled = true;
     };
+    // The opening read only: a new `read` must not reload the form over edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

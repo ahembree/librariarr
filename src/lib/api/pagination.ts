@@ -71,7 +71,7 @@ export function parsePage(searchParams: URLSearchParams): number {
   return Math.min(Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1), MAX_SKIP);
 }
 
-export interface ListPagination {
+interface ListPagination {
   /** 1-based page number. */
   page: number;
   /** Page size; 0 means "no limit". */

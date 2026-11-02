@@ -16,7 +16,9 @@ describe("withTimeout", () => {
     vi.useFakeTimers();
     const onTimeout = vi.fn();
     const result = withTimeout(new Promise<string>(() => {}), 10_000, onTimeout);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await expect(result).resolves.toBeNull();
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });

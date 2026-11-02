@@ -1,7 +1,5 @@
-import axios, { AxiosInstance } from "axios";
-import { logger } from "@/lib/logger";
-import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import type { AxiosInstance } from "axios";
+import { apiKeyHeaders, createIntegrationHttp } from "@/lib/integrations/http";
 import type {
   ServiceType,
   ArrCustomFormat,
@@ -21,63 +19,10 @@ import type {
  */
 export class GuideArrClient {
   private client: AxiosInstance;
-  readonly service: ServiceType;
 
   constructor(baseURL: string, apiKey: string, service: ServiceType) {
-    this.service = service;
     const label = service === "SONARR" ? "Sonarr" : "Radarr";
-    this.client = axios.create({
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        "X-Api-Key": apiKey,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      timeout: 20000,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, label, logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)?.__startTime as
-            | number
-            | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug(
-            label,
-            `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`,
-            { message: error.message },
-          );
-          return Promise.reject(new IntegrationError(label, error));
-        }
-        return Promise.reject(error);
-      },
-    );
-  }
-
-  async testConnection(): Promise<{ ok: boolean; error?: string; version?: string }> {
-    try {
-      const { data } = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
-      const expected = this.service === "SONARR" ? "Sonarr" : "Radarr";
-      if (data.appName && data.appName !== expected) {
-        return { ok: false, error: `Expected ${expected} but connected to ${data.appName}` };
-      }
-      return { ok: true, version: data.version };
-    } catch (error: unknown) {
-      return { ok: false, error: error instanceof Error ? error.message : "Connection failed" };
-    }
+    this.client = createIntegrationHttp(label, baseURL, apiKeyHeaders(apiKey), { timeout: 20000 });
   }
 
   // ─── Custom formats ───

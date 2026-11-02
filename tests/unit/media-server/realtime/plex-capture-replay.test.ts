@@ -60,8 +60,12 @@ class FakeSocket implements RealtimeSocket {
 
 const plexServer = {
   id: "p1", name: "Test Plex", type: "PLEX" as const,
-  url: "http://plex", accessToken: "t", tlsSkipVerify: false,
+  url: "http://plex", accessToken: "t", tlsSkipVerify: false, userId: "u1",
 };
+
+// Every manager a test builds, so its connections and debouncers are torn down
+// before the fake clock goes away.
+const managers: RealtimeManager[] = [];
 
 async function replay(frames: unknown[]) {
   h.appSettings.findFirst.mockResolvedValue({ realtimeSync: true });
@@ -73,6 +77,7 @@ async function replay(frames: unknown[]) {
     return s;
   };
   const mgr = new RealtimeManager(factory);
+  managers.push(mgr);
   await mgr.reconcile();
   for (const frame of frames) sockets[0].fireMessage({ NotificationContainer: frame });
   // Past the 5s quiet window so the debouncer flushes.
@@ -91,7 +96,10 @@ describe("Plex realtime — replay of captured frames", () => {
     h.enqueueJob.mockResolvedValue(true);
     h.runEnforcerTick.mockResolvedValue(undefined);
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    for (const mgr of managers.splice(0)) mgr.stopAll();
+    vi.useRealTimers();
+  });
 
   it("adding one movie syncs exactly that movie, not the whole server", async () => {
     // 34 timeline frames naming 28 distinct ratingKeys (the movie plus 27

@@ -4,13 +4,13 @@
  * summed width of the pinned columns before them.
  */
 
-export interface PinnableColumn {
+interface PinnableColumn {
   id: string;
   /** Always pinned and never offered an unpin (e.g. a row-selection checkbox). */
   alwaysPinned?: boolean;
 }
 
-export interface PinnedLayout<C> {
+interface PinnedLayout<C> {
   /** Pinned columns first, then the rest, each group in its original order. */
   ordered: C[];
   /** How many of `ordered` are pinned. */
@@ -22,9 +22,9 @@ export interface PinnedLayout<C> {
 }
 
 /** Share of the table's visible width pinned columns may take before further pins pause. */
-export const MAX_PINNED_SHARE = 0.6;
+const MAX_PINNED_SHARE = 0.6;
 
-export function isColumnPinned(col: PinnableColumn, pinned: ReadonlySet<string>): boolean {
+function isColumnPinned(col: PinnableColumn, pinned: ReadonlySet<string>): boolean {
   return !!col.alwaysPinned || pinned.has(col.id);
 }
 

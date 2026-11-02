@@ -1,9 +1,16 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useChipColors } from "@/components/chip-color-provider";
 import { cn } from "@/lib/utils";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  audioCodecChipLabel,
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  resolutionChipLabel,
+} from "@/lib/media/quality-chips";
+import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/stream-detection";
+import { QualityChip } from "@/components/quality-chips";
+import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -21,15 +28,26 @@ import {
 } from "@/components/ui/carousel";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { ServerChips } from "@/components/server-chips";
-import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
+import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { FadeImage } from "@/components/ui/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "Unknown";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
+/** The detected range, or the stream's own value when it names none. */
+function streamRangeLabel(raw: string, detected: string): string {
+  return detected === "SDR" && raw.trim().toUpperCase() !== "SDR" ? raw.trim() : detected;
+}
+
+/** A detail row's value as a quality chip, or "-" when there is none. */
+function chipValue(category: ChipColorCategory, label: string | null, raw?: string | null) {
+  if (!label) return "-";
+  return (
+    <QualityChip
+      chip={{ category, label }}
+      title={raw && raw !== label ? raw : undefined}
+    />
+  );
 }
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -200,18 +218,27 @@ interface MediaDetailContentProps {
    * round trip after the first, before the streams and credits appeared.
    */
   detailLoaded?: boolean;
+  /**
+   * The `/api/media/[id]` record the caller already loaded, exactly as the
+   * route sent it: the "All Database Metadata" section shows it without
+   * fetching the same record again. (A record this component fetched itself
+   * is used the same way.)
+   */
+  record?: MediaItemWithRelations | null;
 }
 
 function audioStreamCount(streams: MediaItemWithRelations["streams"] | undefined): number {
   return (streams ?? []).filter((s) => s.streamType === 2).length;
 }
 
-export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded }: MediaDetailContentProps) {
-  const { getBadgeStyle } = useChipColors();
+export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded, record }: MediaDetailContentProps) {
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
-  const [streams, setStreams] = useState<MediaItemWithRelations["streams"]>(() => (detailLoaded ? item.streams ?? [] : []));
+  // With `detailLoaded` the streams are the item's own — the caller may swap a
+  // seed for the full record under the same id, so they are read, not copied.
+  const [fetchedStreams, setStreams] = useState<MediaItemWithRelations["streams"]>([]);
+  const streams = detailLoaded ? item.streams ?? [] : fetchedStreams;
   const [history, setHistory] = useState<WatchHistoryEntry[]>([]);
   const [serverHistories, setServerHistories] = useState<ServerHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -242,10 +269,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
   const fetchItemDetail = useCallback(async (itemId: string, token: number) => {
     try {
-      const response = await fetch(`/api/media/${itemId}`);
-      const data = await response.json();
+      const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations }>(mediaRecordUrl(itemId));
       if (token !== reqToken.current) return;
-      if (data.item) {
+      if (data?.item) {
         const itemStreams = data.item.streams ?? [];
         setStreams(itemStreams);
         setAudioOpen(audioStreamCount(itemStreams) <= 2);
@@ -275,8 +301,22 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     }
   }, []);
 
+  // The record already in hand for this item: the caller's, else the one
+  // fetched above (which lacks `streams` and `library` — both left out of the
+  // metadata list anyway).
+  const loadedRecord: Record<string, unknown> | null =
+    record && record.id === item.id
+      ? (record as unknown as Record<string, unknown>)
+      : detailData && detailData.id === item.id
+        ? (detailData as Record<string, unknown>)
+        : null;
+
   const fetchAllMetadata = useCallback(async (cacheKey: string, mediaItemId?: string) => {
     const fetchId = mediaItemId ?? cacheKey;
+    if (loadedRecord && loadedRecord.id === fetchId) {
+      setMetadataMap((prev) => ({ ...prev, [cacheKey]: loadedRecord }));
+      return;
+    }
     setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: true }));
     try {
       const response = await fetch(`/api/media/${fetchId}`);
@@ -287,7 +327,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     } finally {
       setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: false }));
     }
-  }, []);
+  }, [loadedRecord]);
 
   // Reset cached detail/history/metadata when the underlying item changes.
   // (set-state-during-render is React 19's idiom for "reset state on prop change" — see
@@ -296,12 +336,20 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
   if (prevItemId !== item.id) {
     setPrevItemId(item.id);
     setDetailData(null);
-    setStreams(detailLoaded ? item.streams ?? [] : []);
-    if (detailLoaded) setAudioOpen(audioStreamCount(item.streams) <= 2);
+    setStreams([]);
     setHistory([]);
     setMetadataMap({});
     setMetadataLoadingMap({});
     setMetadataOpenMap({});
+  }
+
+  // The audio card opens when there are few tracks to list. With the streams
+  // read off `item`, that is decided again whenever they change — the full
+  // record landing over a seed that carried none, or another item.
+  const [prevStreams, setPrevStreams] = useState(item.streams);
+  if (detailLoaded && prevStreams !== item.streams) {
+    setPrevStreams(item.streams);
+    setAudioOpen(audioStreamCount(item.streams) <= 2);
   }
 
   // A boolean, not the node itself: a fresh element every render would re-run
@@ -580,7 +628,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 }
               />
               <DetailRow label="Last Played" value={formatDate(merged.lastPlayedAt, "Never")} />
-              {merged.originallyAvailableAt && <DetailRow label="Released" value={formatDate(merged.originallyAvailableAt)} />}
+              {merged.originallyAvailableAt && <DetailRow label="Released" value={formatDateOnly(merged.originallyAvailableAt)} />}
               <DetailRow label="Added" value={formatDate(merged.addedAt)} />
             </div>
           </section>
@@ -724,6 +772,11 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 <div className="mt-2">
                   {videoStreams.length > 0 ? (
                     <div className="space-y-3">
+                      {resolutionChipLabel(merged.resolution) && (
+                        <div className="text-sm">
+                          <DetailRow label="Resolution" value={chipValue("resolution", resolutionChipLabel(merged.resolution))} />
+                        </div>
+                      )}
                       {videoStreams.map((vs, i) => (
                         <div key={vs.id} className={cn(videoStreams.length > 1 && "rounded-lg border border-white/5 bg-muted/50 p-3")}>
                           {videoStreams.length > 1 && (
@@ -742,13 +795,14 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                             {vs.frameRate != null && <DetailRow label="Frame Rate" value={`${vs.frameRate} fps`} />}
                             {vs.bitDepth != null && <DetailRow label="Bit Depth" value={`${vs.bitDepth}-bit`} />}
                             {vs.videoRangeType && (
+                              // The stream reports the server's own spelling
+                              // (DOVIWithHDR10, HDR10Plus, PQ); the chip shows the
+                              // range it names, as the item's does. A value that
+                              // names no range ("Unknown") keeps its own spelling
+                              // rather than reading as SDR.
                               <DetailRow
                                 label="Dynamic Range"
-                                value={
-                                  <ColorChip style={getBadgeStyle("dynamicRange", vs.videoRangeType)}>
-                                    {vs.videoRangeType}
-                                  </ColorChip>
-                                }
+                                value={chipValue("dynamicRange", streamRangeLabel(vs.videoRangeType, detectStreamDynamicRange(vs)), vs.videoRangeType)}
                               />
                             )}
                             {vs.chromaSubsampling && <DetailRow label="Chroma" value={vs.chromaSubsampling} />}
@@ -764,14 +818,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                     </div>
                   ) : (
                     <div className="text-sm">
-                      <DetailRow
-                        label="Resolution"
-                        value={
-                          <ColorChip style={getBadgeStyle("resolution", formatResolution(merged.resolution))}>
-                            {formatResolution(merged.resolution)}
-                          </ColorChip>
-                        }
-                      />
+                      <DetailRow label="Resolution" value={chipValue("resolution", resolutionChipLabel(merged.resolution))} />
                       {merged.videoWidth && merged.videoHeight && (
                         <DetailRow label="Dimensions" value={`${merged.videoWidth}x${merged.videoHeight}`} />
                       )}
@@ -783,15 +830,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                       {merged.videoFrameRate && <DetailRow label="Frame Rate" value={merged.videoFrameRate} />}
                       {merged.videoBitDepth && <DetailRow label="Bit Depth" value={`${merged.videoBitDepth}-bit`} />}
                       {merged.aspectRatio && <DetailRow label="Aspect Ratio" value={merged.aspectRatio} />}
-                      {merged.dynamicRange && (
-                        <DetailRow
-                          label="Dynamic Range"
-                          value={
-                            <ColorChip style={getBadgeStyle("dynamicRange", merged.dynamicRange)}>
-                              {merged.dynamicRange}
-                            </ColorChip>
-                          }
-                        />
+                      {dynamicRangeChipLabel(merged.dynamicRange) && (
+                        <DetailRow label="Dynamic Range" value={chipValue("dynamicRange", dynamicRangeChipLabel(merged.dynamicRange))} />
                       )}
                       {merged.videoChromaSubsampling && <DetailRow label="Chroma" value={merged.videoChromaSubsampling} />}
                       <DetailRow label="Container" value={merged.container?.toUpperCase() ?? "-"} />
@@ -831,15 +871,15 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                         )}
                         <div className="text-sm">
                           {as.extendedDisplayTitle && <DetailRow label="Title" value={as.extendedDisplayTitle} />}
-                          <DetailRow label="Codec" value={as.codec?.toUpperCase() ?? "-"} />
+                          <DetailRow label="Codec" value={chipValue("audioCodec", audioCodecChipLabel(as.codec))} />
                           {as.profile && (
+                            // A stream's profile is the codec's own ("LC",
+                            // "ma"); only one naming an audio profile is a chip.
                             <DetailRow
                               label="Profile"
-                              value={
-                                <ColorChip style={getBadgeStyle("audioProfile", as.profile)}>
-                                  {as.profile}
-                                </ColorChip>
-                              }
+                              value={detectStreamAudioProfile(as)
+                                ? chipValue("audioProfile", detectStreamAudioProfile(as), as.profile)
+                                : as.profile}
                             />
                           )}
                           <DetailRow label="Channels" value={as.channels ? `${as.channels} ch` : "-"} />
@@ -852,16 +892,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                   </div>
                 ) : (
                   <div className="text-sm">
-                    <DetailRow label="Codec" value={merged.audioCodec?.toUpperCase() ?? "-"} />
-                    {merged.audioProfile && (
-                      <DetailRow
-                        label="Profile"
-                        value={
-                          <ColorChip style={getBadgeStyle("audioProfile", merged.audioProfile)}>
-                            {merged.audioProfile}
-                          </ColorChip>
-                        }
-                      />
+                    <DetailRow label="Codec" value={chipValue("audioCodec", audioCodecChipLabel(merged.audioCodec))} />
+                    {audioProfileChipLabel(merged.audioProfile) && (
+                      <DetailRow label="Profile" value={chipValue("audioProfile", audioProfileChipLabel(merged.audioProfile))} />
                     )}
                     <DetailRow label="Channels" value={merged.audioChannels ? `${merged.audioChannels} channels` : "-"} />
                     {merged.audioBitrate && <DetailRow label="Bitrate" value={`${merged.audioBitrate} kbps`} />}

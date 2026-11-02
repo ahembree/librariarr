@@ -1,18 +1,15 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, savedQueryCreateSchema } from "@/lib/validation";
 import { findFieldsInvalidForTypes, type LibraryType } from "@/lib/conditions";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const queries = await prisma.savedQuery.findMany({
-    where: { userId: session.userId! },
-    orderBy: { updatedAt: "desc" },
+    where: { userId: session.userId },
+    // `id` breaks ties: two queries saved in the same millisecond otherwise
+    // came back in either order and swapped places in the list between loads.
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
     select: {
       id: true,
       name: true,
@@ -23,14 +20,9 @@ export async function GET() {
   });
 
   return NextResponse.json({ queries });
-}
+});
 
-export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: Request) => {
   const { data, error } = await validateRequest(request, savedQueryCreateSchema);
   if (error) return error;
 
@@ -50,7 +42,7 @@ export async function POST(request: Request) {
 
   const query = await prisma.savedQuery.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name: data.name,
       query: data.query as object,
     },
@@ -64,4 +56,4 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ query }, { status: 201 });
-}
+});

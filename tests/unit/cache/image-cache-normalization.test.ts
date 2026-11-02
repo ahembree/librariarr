@@ -39,18 +39,18 @@ describe("normalizeCacheUrl", () => {
 
   describe("Jellyfin/Emby URLs", () => {
     it("passes through Jellyfin primary image URLs unchanged", () => {
-      expect(normalizeCacheUrl("/Items/abc123/Images/Primary"))
-        .toBe("/Items/abc123/Images/Primary");
+      expect(normalizeCacheUrl("/Items/0f3c9a7d2b6e4c1f8a5d7e9b3c2a1f40/Images/Primary"))
+        .toBe("/Items/0f3c9a7d2b6e4c1f8a5d7e9b3c2a1f40/Images/Primary");
     });
 
     it("passes through Jellyfin backdrop URLs unchanged", () => {
-      expect(normalizeCacheUrl("/Items/abc123/Images/Backdrop"))
-        .toBe("/Items/abc123/Images/Backdrop");
+      expect(normalizeCacheUrl("/Items/0f3c9a7d2b6e4c1f8a5d7e9b3c2a1f40/Images/Backdrop"))
+        .toBe("/Items/0f3c9a7d2b6e4c1f8a5d7e9b3c2a1f40/Images/Backdrop");
     });
 
     it("passes through Jellyfin series image URLs unchanged", () => {
-      expect(normalizeCacheUrl("/Items/series-id/Images/Primary"))
-        .toBe("/Items/series-id/Images/Primary");
+      expect(normalizeCacheUrl("/Items/7b1e2d4c9a8f4e6db3c5a1f0e2d4b6a8/Images/Primary"))
+        .toBe("/Items/7b1e2d4c9a8f4e6db3c5a1f0e2d4b6a8/Images/Primary");
     });
   });
 

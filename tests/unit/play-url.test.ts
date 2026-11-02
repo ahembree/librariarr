@@ -36,7 +36,8 @@ describe("buildPlayUrl", () => {
         ratingKey: "123",
       });
       const url = buildPlayUrl(server);
-      expect(url).toContain("key=%2Flibrary%2Fmetadata%2F123");
+      // The slashes of /library/metadata/123 must not end the hash route.
+      expect(new URL(url).hash).toBe("#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F123");
     });
 
     it("uses externalUrl for Plex when specified", () => {
@@ -50,19 +51,6 @@ describe("buildPlayUrl", () => {
       const url = buildPlayUrl(server);
       expect(url).toBe(
         "https://plex.example.com/web/index.html#!/server/details?key=%2Flibrary%2Fmetadata%2F123"
-      );
-    });
-
-    it("uses externalUrl for Jellyfin when specified", () => {
-      const server = makeServer({
-        serverType: "JELLYFIN",
-        serverUrl: "http://192.168.1.100:8096",
-        externalUrl: "https://jellyfin.example.com",
-        ratingKey: "abc",
-      });
-      const url = buildPlayUrl(server);
-      expect(url).toBe(
-        "https://jellyfin.example.com/web/index.html#/details?id=abc"
       );
     });
 
@@ -87,7 +75,7 @@ describe("buildPlayUrl", () => {
         ratingKey: "789",
       });
       const url = buildPlayUrl(server);
-      expect(url).toMatch(/^https:\/\/app\.plex\.tv\/desktop/);
+      expect(url).toBe("https://app.plex.tv/desktop/#!/details?key=%2Flibrary%2Fmetadata%2F789");
     });
   });
 
@@ -96,11 +84,26 @@ describe("buildPlayUrl", () => {
       const server = makeServer({
         serverType: "JELLYFIN",
         serverUrl: "http://jellyfin.local:8096",
-        ratingKey: "item-abc-123",
+        machineId: null,
+        ratingKey: "f1d2a3b4c5d6e7f8091a2b3c4d5e6f70",
       });
       const url = buildPlayUrl(server);
       expect(url).toBe(
-        "http://jellyfin.local:8096/web/index.html#/details?id=item-abc-123"
+        "http://jellyfin.local:8096/web/index.html#/details?id=f1d2a3b4c5d6e7f8091a2b3c4d5e6f70"
+      );
+    });
+
+    it("uses externalUrl for Jellyfin when specified", () => {
+      const server = makeServer({
+        serverType: "JELLYFIN",
+        serverUrl: "http://192.168.1.100:8096",
+        externalUrl: "https://jellyfin.example.com",
+        machineId: null,
+        ratingKey: "f1d2a3b4c5d6e7f8091a2b3c4d5e6f70",
+      });
+      const url = buildPlayUrl(server);
+      expect(url).toBe(
+        "https://jellyfin.example.com/web/index.html#/details?id=f1d2a3b4c5d6e7f8091a2b3c4d5e6f70"
       );
     });
 
@@ -121,23 +124,25 @@ describe("buildPlayUrl", () => {
     it("builds Emby web URL", () => {
       const server = makeServer({
         serverType: "EMBY",
-        serverUrl: "http://emby.local:8920",
-        ratingKey: "emby-item-789",
+        serverUrl: "http://emby.local:8096",
+        machineId: null,
+        ratingKey: "198245",
       });
       const url = buildPlayUrl(server);
       expect(url).toBe(
-        "http://emby.local:8920/web/index.html#!/item?id=emby-item-789"
+        "http://emby.local:8096/web/index.html#!/item?id=198245"
       );
     });
 
     it("strips trailing slashes from server URL", () => {
       const server = makeServer({
         serverType: "EMBY",
-        serverUrl: "http://emby.local:8920//",
-        ratingKey: "emby-item",
+        serverUrl: "http://emby.local:8096//",
+        machineId: null,
+        ratingKey: "198245",
       });
       const url = buildPlayUrl(server);
-      expect(url).toMatch(/^http:\/\/emby\.local:8920\/web\//);
+      expect(url).toBe("http://emby.local:8096/web/index.html#!/item?id=198245");
     });
   });
 
@@ -177,9 +182,7 @@ describe("buildPlayLinks", () => {
   it("creates a single link for a single level", () => {
     const server = makeServer({ ratingKey: "100" });
     const links = buildPlayLinks([server], [["Movie", "ratingKey"]]);
-    expect(links).toHaveLength(1);
-    expect(links[0].ratingKey).toBe("100");
-    expect(links[0].label).toBe("Movie");
+    expect(links).toEqual([{ ...server, ratingKey: "100", label: "Movie" }]);
   });
 
   it("creates multiple links for multiple levels with available keys", () => {

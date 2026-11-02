@@ -12,6 +12,10 @@ describe("getPageMeta", () => {
     expect(getPageMeta("/lifecycle/rules")).toEqual({ group: "Lifecycle", title: "Rules" });
     expect(getPageMeta("/lifecycle/matches")).toEqual({ group: "Lifecycle", title: "Rule Matches" });
     expect(getPageMeta("/tools/preroll")).toEqual({ group: "Tools", title: "Prerolls" });
+    // The sidebar names these "TRaSH Sync" and "AI Analysis"; unmapped, the
+    // breadcrumb fell back to "Librariarr › Trash" / "Librariarr › Ai".
+    expect(getPageMeta("/tools/trash")).toEqual({ group: "Tools", title: "TRaSH Sync" });
+    expect(getPageMeta("/tools/ai")).toEqual({ group: "Tools", title: "AI Analysis" });
     expect(getPageMeta("/settings")).toEqual({ group: "System", title: "Settings" });
     expect(getPageMeta("/system/logs")).toEqual({ group: "System", title: "Logs" });
   });
@@ -29,10 +33,10 @@ describe("getPageMeta", () => {
     expect(getPageMeta("/library/music/")).toEqual({ group: "Library", title: "Music" });
   });
 
-  it("does not let a shorter prefix shadow a more specific one", () => {
-    // /library/query must not match /library/* generically — there is no
-    // generic /library entry, and the longest prefix wins regardless.
+  it("matches whole path segments, so a longer sibling name does not inherit a section", () => {
     expect(getPageMeta("/library/query")).toEqual({ group: "Library", title: "Query" });
+    // "/library/movies-archive" starts with "/library/movies" but is not under it.
+    expect(getPageMeta("/library/movies-archive")).toEqual({ group: "Librariarr", title: "Movies archive" });
   });
 
   it("falls back to a title-cased last segment for unknown routes", () => {

@@ -196,7 +196,7 @@ const RULE_SET = {
 };
 
 const RULE_MATCH_GROUP = {
-  ruleSet: { ...RULE_SET, collectionName: "Leaving Soon" },
+  ruleSet: { ...RULE_SET, collectionName: "Leaving Soon", collectionSort: "ALPHABETICAL" },
   items: [],
   count: 1333,
 };

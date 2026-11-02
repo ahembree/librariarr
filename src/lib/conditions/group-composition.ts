@@ -17,14 +17,14 @@ import { isStreamQueryGroup } from "./stream-query";
 import { pushDownGroupNegation } from "./negation";
 import { buildStreamQueryClause, streamQueryNeedsInMemory } from "./stream-query-where";
 
-export type RuleToWhereFn = (rule: Condition) => Prisma.MediaItemWhereInput;
+type RuleToWhereFn = (rule: Condition) => Prisma.MediaItemWhereInput;
 
 /**
  * Recursively reduce a single ConditionGroup to a Prisma WHERE clause.
  * Returns `null` when the group is disabled or yields no DB-expressible
  * constraints (the caller skips null groups).
  */
-export function evaluateGroup(
+function evaluateGroup(
   group: ConditionGroup,
   ruleToWhere: RuleToWhereFn,
 ): Prisma.MediaItemWhereInput | null {
@@ -112,10 +112,10 @@ export function buildGroupConditions(
 //   EXTERNAL OR  X = EXTERNAL   (the dropped branch might match anything)
 //   EXTERNAL AND X = X          (a dropped conjunct is safely relaxed)
 
-export const EXTERNAL_RULE = "EXTERNAL_RULE" as const;
-export type PreFilterClause = Prisma.MediaItemWhereInput | typeof EXTERNAL_RULE;
+const EXTERNAL_RULE = "EXTERNAL_RULE" as const;
+type PreFilterClause = Prisma.MediaItemWhereInput | typeof EXTERNAL_RULE;
 
-export function combinePreFilter(
+function combinePreFilter(
   left: PreFilterClause,
   right: PreFilterClause,
   condition: "AND" | "OR",

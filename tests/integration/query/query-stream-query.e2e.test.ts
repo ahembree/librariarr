@@ -104,7 +104,7 @@ describe("Query builder — stream query 'all' quantifier must not vacuously mat
     expect(matches).toEqual([withAudioId].sort());
   });
 
-  it("all + language equals nonexistent codec: matches nothing (no item has all streams = X)", async () => {
+  it("all + language equals a language no stream has: matches nothing", async () => {
     const matches = await streamMatchIds("all", [{ field: "sqLanguage", operator: "equals", value: "Klingon" }]);
     expect(matches).toEqual([]);
   });

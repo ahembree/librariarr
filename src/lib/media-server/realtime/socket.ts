@@ -1,5 +1,6 @@
 import WebSocket, { type RawData } from "ws";
 import type { MediaServerType } from "@/generated/prisma/client";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * Minimal transport interface the connection layer depends on, so unit tests
@@ -22,7 +23,7 @@ export type SocketFactory = (
 
 /** Convert an http(s) base URL to a ws(s) URL, stripping trailing slashes. */
 export function toWsBase(url: string): string {
-  const trimmed = url.replace(/\/+$/, "");
+  const trimmed = stripTrailingSlashes(url);
   if (trimmed.startsWith("https://")) return "wss://" + trimmed.slice("https://".length);
   if (trimmed.startsWith("http://")) return "ws://" + trimmed.slice("http://".length);
   if (trimmed.startsWith("wss://") || trimmed.startsWith("ws://")) return trimmed;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { resolveInstance, guideClientFor } from "@/lib/trash/status";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import type { ServiceType } from "@/lib/trash/types";
@@ -7,12 +7,7 @@ import type { ServiceType } from "@/lib/trash/types";
 // Lists the quality profiles that exist on an instance (including ones the user
 // created directly in the app), each with its current custom-format scores, so
 // the UI can attach guide custom formats to any profile.
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serviceType = searchParams.get("serviceType")?.toUpperCase();
   const instanceId = searchParams.get("instanceId");
@@ -23,7 +18,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "instanceId is required" }, { status: 400 });
   }
 
-  const inst = await resolveInstance(session.userId!, serviceType as ServiceType, instanceId);
+  const inst = await resolveInstance(session.userId, serviceType as ServiceType, instanceId);
   if (!inst) {
     return NextResponse.json({ error: "Instance not found" }, { status: 404 });
   }
@@ -57,4 +52,4 @@ export async function GET(request: NextRequest) {
       { status: 502 },
     );
   }
-}
+});

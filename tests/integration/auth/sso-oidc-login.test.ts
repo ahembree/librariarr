@@ -28,8 +28,6 @@ vi.mock("@/lib/sso/oidc-client", () => ({
 const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   checkAuthRateLimit: mockCheckAuthRateLimit,
-  authRateLimiter: { check: () => ({ limited: false }) },
-  getClientIp: () => "127.0.0.1",
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -52,6 +50,8 @@ describe("GET /api/auth/sso/oidc/login", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // mockReset: one test's discovery answer must not reach the next.
+    mockDiscover.mockReset();
     mockCheckAuthRateLimit.mockReturnValue(null);
     mockGeneratePkce.mockReturnValue({ verifier: "test-verifier", challenge: "test-challenge" });
     mockGenerateState.mockReturnValue("test-state");
@@ -65,7 +65,9 @@ describe("GET /api/auth/sso/oidc/login", () => {
   it("rejects when SSO is not configured", async () => {
     const res = await callRoute(GET, { method: "GET" });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toMatch(/not configured/);
+    expect(body.error).toBe("OIDC SSO is not configured");
+    expect(mockDiscover).not.toHaveBeenCalled();
+    expect(getMockSession().oidcState).toBeUndefined();
   });
 
   it("rejects when mode is FORWARD_AUTH (this route is OIDC-only)", async () => {
@@ -80,7 +82,9 @@ describe("GET /api/auth/sso/oidc/login", () => {
     });
 
     const res = await callRoute(GET, { method: "GET" });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("OIDC SSO is not configured");
+    expect(mockDiscover).not.toHaveBeenCalled();
   });
 
   it("redirects to the IdP authorization endpoint and stashes state+verifier", async () => {
@@ -105,6 +109,18 @@ describe("GET /api/auth/sso/oidc/login", () => {
     expect(res.headers.get("location")).toBe(
       "https://idp.example.com/auth?state=test-state"
     );
+
+    // The request the IdP sees: the configured client and scopes, the
+    // callback URL, and the state + PKCE challenge of this handshake.
+    expect(mockDiscover).toHaveBeenCalledWith("https://idp.example.com");
+    expect(mockBuildAuthUrl).toHaveBeenCalledWith({
+      discovery: expect.objectContaining({ authorization_endpoint: "https://idp.example.com/auth" }),
+      clientId: "client",
+      redirectUri: "http://localhost:3000/api/auth/sso/oidc/callback",
+      scope: "openid profile email",
+      state: "test-state",
+      codeChallenge: "test-challenge",
+    });
 
     // PKCE verifier + state are written to session so callback can verify.
     const session = getMockSession();
@@ -151,7 +167,8 @@ describe("GET /api/auth/sso/oidc/login", () => {
 
     const res = await callRoute(GET, { method: "GET" });
     const body = await expectJson<{ error: string }>(res, 500);
-    expect(body.error).toMatch(/Failed to initiate/);
+    expect(body.error).toBe("Failed to initiate SSO login");
+    expect(getMockSession().oidcState).toBeUndefined();
   });
 
   it("honors rate limiting", async () => {
@@ -161,5 +178,7 @@ describe("GET /api/auth/sso/oidc/login", () => {
 
     const res = await callRoute(GET, { method: "GET" });
     expect(res.status).toBe(429);
+    expect(mockCheckAuthRateLimit).toHaveBeenCalledWith(expect.anything(), "sso-oidc-init");
+    expect(mockDiscover).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { validateRequest, trashSyncSchema } from "@/lib/validation";
 import { resolveInstance } from "@/lib/trash/status";
 import { runTrashSync } from "@/lib/trash/sync";
@@ -9,16 +9,11 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 // resources the user has assigned/managed — on apply, `items` only narrows the
 // run to a subset of the managed rows, so nothing is ever written to an Arr
 // without an explicit managed row.
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, trashSyncSchema);
   if (error) return error;
 
-  const inst = await resolveInstance(session.userId!, data.serviceType, data.instanceId);
+  const inst = await resolveInstance(session.userId, data.serviceType, data.instanceId);
   if (!inst) {
     return NextResponse.json({ error: "Instance not found" }, { status: 404 });
   }
@@ -31,7 +26,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const report = await runTrashSync(session.userId!, inst, {
+    const report = await runTrashSync(session.userId, inst, {
       dryRun,
       items: data.items,
     });
@@ -45,4 +40,4 @@ export async function POST(request: NextRequest) {
       { status: 502 },
     );
   }
-}
+});

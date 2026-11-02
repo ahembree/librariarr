@@ -53,20 +53,20 @@ describe("latestEpisodeViewDate", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "before", value: "2024-01-01" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s2")).toHaveLength(1);
   });
 
   it("after operator", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "after", value: "2024-01-01" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
   it("equals (day-level comparison)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "equals", value: "2024-08-15" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
@@ -74,7 +74,7 @@ describe("latestEpisodeViewDate", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "notEquals", value: "2024-08-15" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s2")).toHaveLength(1);
   });
 
   it("inLastDays", () => {
@@ -86,15 +86,15 @@ describe("latestEpisodeViewDate", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "inLastDays", value: "30" })])];
     const result = matched(recentItems, rules);
-    expect(result.get("r1")!.length).toBeGreaterThan(0);
+    expect(result.get("r1")).toHaveLength(1);
     expect(result.get("r2")).toHaveLength(0);
   });
 
   it("notInLastDays", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "notInLastDays", value: "30" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0); // 2024-08 is more than 30 days ago
-    expect(result.get("s2")!.length).toBeGreaterThan(0); // 2023-01 is more than 30 days ago
+    expect(result.get("s1")).toHaveLength(1); // 2024-08 is more than 30 days ago
+    expect(result.get("s2")).toHaveLength(1); // 2023-01 is more than 30 days ago
   });
 
   it("returns false when null", () => {
@@ -115,13 +115,13 @@ describe("lastEpisodeAddedAt", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "before", value: "2024-01-01" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s2")).toHaveLength(1);
   });
 
   it("after operator", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "after", value: "2024-01-01" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
@@ -134,7 +134,7 @@ describe("lastEpisodeAddedAt", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "inLastDays", value: "30" })])];
     const result = matched(dynamicItems, rules);
-    expect(result.get("r1")!.length).toBeGreaterThan(0);
+    expect(result.get("r1")).toHaveLength(1);
     expect(result.get("r2")).toHaveLength(0);
   });
 
@@ -159,20 +159,20 @@ describe("lastEpisodeAiredAt", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "before", value: "2020-06-01" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0); // recent date is NOT before 2020
-    expect(result.get("s2")!.length).toBeGreaterThan(0); // 2019 IS before 2020-06
+    expect(result.get("s2")).toHaveLength(1); // 2019 IS before 2020-06
   });
 
   it("after operator", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "after", value: "2024-01-01" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0); // recent date is after 2024
+    expect(result.get("s1")).toHaveLength(1); // recent date is after 2024
     expect(result.get("s2")).toHaveLength(0); // 2019 is NOT after 2024
   });
 
   it("inLastDays", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "inLastDays", value: "30" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0); // 10 days ago is within 30 days
+    expect(result.get("s1")).toHaveLength(1); // 10 days ago is within 30 days
     expect(result.get("s2")).toHaveLength(0); // 2019 is NOT within 30 days
   });
 
@@ -180,7 +180,7 @@ describe("lastEpisodeAiredAt", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "notInLastDays", value: "30" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0); // 10 days ago is within 30 days, so notInLastDays is false
-    expect(result.get("s2")!.length).toBeGreaterThan(0); // 2019 is more than 30 days ago
+    expect(result.get("s2")).toHaveLength(1); // 2019 is more than 30 days ago
   });
 
   it("returns false when null", () => {
@@ -204,14 +204,14 @@ describe("availableEpisodeCount", () => {
   it("equals", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "equals", value: "50" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
   it("greaterThan", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "greaterThan", value: "20" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
@@ -219,13 +219,13 @@ describe("availableEpisodeCount", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "lessThan", value: "20" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s2")).toHaveLength(1);
   });
 
   it("handles zero", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "availableEpisodeCount", operator: "equals", value: "0" })])];
     const result = matched(items, rules);
-    expect(result.get("s3")!.length).toBeGreaterThan(0);
+    expect(result.get("s3")).toHaveLength(1);
   });
 });
 
@@ -239,21 +239,21 @@ describe("watchedEpisodeCount", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodeCount", operator: "equals", value: "0" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s2")).toHaveLength(1);
   });
 
   it("greaterThan", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodeCount", operator: "greaterThan", value: "10" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
   it("lessThanOrEqual", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodeCount", operator: "lessThanOrEqual", value: "25" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
+    expect(result.get("s2")).toHaveLength(1);
   });
 });
 
@@ -267,14 +267,14 @@ describe("watchedEpisodePercentage", () => {
   it("equals 100 for fully watched", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "equals", value: "100" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
   it("greaterThan 50", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "50" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
     expect(result.get("s3")).toHaveLength(0);
   });
@@ -284,13 +284,13 @@ describe("watchedEpisodePercentage", () => {
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
     expect(result.get("s2")).toHaveLength(0);
-    expect(result.get("s3")!.length).toBeGreaterThan(0);
+    expect(result.get("s3")).toHaveLength(1);
   });
 
   it("equals 0 for unwatched", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "equals", value: "0" })])];
     const result = matched(items, rules);
-    expect(result.get("s3")!.length).toBeGreaterThan(0);
+    expect(result.get("s3")).toHaveLength(1);
     expect(result.get("s1")).toHaveLength(0);
   });
 });
@@ -301,17 +301,18 @@ describe("watchedEpisodePercentage", () => {
 
 describe("SERIES type Arr lookup uses TVDB", () => {
   it("looks up arr data by TVDB ID for SERIES", () => {
-    const tvdbId = "tvdb-42";
+    const tvdbId = "81189";
     const items = [{ id: "s1", externalIds: [{ source: "TVDB", externalId: tvdbId }] }];
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "SERIES", arrData);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
   });
 
   it("does not match TMDB ID for SERIES type", () => {
-    const items = [{ id: "s1", externalIds: [{ source: "TMDB", externalId: "tmdb-99" }] }];
-    const arrData: ArrDataMap = { "tmdb-99": makeArrMeta({ monitored: true }) };
+    // Sonarr's map is keyed by TVDB id; a TMDB id with the same digits must not resolve.
+    const items = [{ id: "s1", externalIds: [{ source: "TMDB", externalId: "1396" }] }];
+    const arrData: ArrDataMap = { "1396": makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "SERIES", arrData);
     // SERIES uses TVDB, not TMDB, so arr data won't be found
@@ -325,17 +326,17 @@ describe("SERIES type Arr lookup uses TVDB", () => {
 
 describe("MUSIC type Arr lookup uses MUSICBRAINZ", () => {
   it("looks up arr data by MUSICBRAINZ ID for MUSIC", () => {
-    const mbId = "mb-abc-123";
+    const mbId = "a74b1b7f-71a5-4011-9441-d0b5e4122711";
     const items = [{ id: "m1", externalIds: [{ source: "MUSICBRAINZ", externalId: mbId }] }];
     const arrData: ArrDataMap = { [mbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "MUSIC", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("does not match TMDB ID for MUSIC type", () => {
-    const items = [{ id: "m1", externalIds: [{ source: "TMDB", externalId: "tmdb-55" }] }];
-    const arrData: ArrDataMap = { "tmdb-55": makeArrMeta({ monitored: true }) };
+    const items = [{ id: "m1", externalIds: [{ source: "TMDB", externalId: "550" }] }];
+    const arrData: ArrDataMap = { "550": makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(items, rules, "MUSIC", arrData);
     expect(result.get("m1")).toHaveLength(0);
@@ -368,6 +369,6 @@ describe("Negate flag on series aggregate fields", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedEpisodePercentage", operator: "greaterThan", value: "50", negate: true })])];
     const result = matched(items, rules);
     // 20 > 50 is false, negate makes it true
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
   });
 });

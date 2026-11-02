@@ -44,10 +44,38 @@ function buildTruncatedList(titles: string[], limit = 1024): string {
   return value.trimEnd();
 }
 
-export async function sendDiscordNotification(
-  webhookUrl: string,
-  payload: DiscordWebhookPayload
-): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Longest rate-limit wait (a 429's `retry_after`) honoured before the one
+ * retry. Discord limits a webhook to about five requests every two seconds,
+ * and the scheduled executor posts a success and a failure summary per rule
+ * set back to back, so the later ones were refused and lost. A longer wait (a
+ * global or sustained limit) is not worth holding the caller for.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 5_000;
+
+type WebhookAttempt =
+  | { ok: true }
+  | { ok: false; error: string; status?: number; retryAfterMs?: number };
+
+/** The wait a 429 asks for: the body's `retry_after` (seconds), else the `Retry-After` header. */
+function rateLimitWaitMs(response: Response, body: string): number | undefined {
+  let seconds: number | undefined;
+  try {
+    const parsed = JSON.parse(body) as { retry_after?: unknown } | null;
+    if (typeof parsed?.retry_after === "number") seconds = parsed.retry_after;
+  } catch {
+    // Not JSON — fall back to the header.
+  }
+  if (seconds === undefined) {
+    const header = response.headers?.get?.("retry-after");
+    if (header) seconds = Number(header);
+  }
+  return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0
+    ? Math.ceil(seconds * 1000)
+    : undefined;
+}
+
+async function postWebhook(webhookUrl: string, payload: DiscordWebhookPayload): Promise<WebhookAttempt> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
   try {
@@ -59,7 +87,12 @@ export async function sendDiscordNotification(
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "Unknown error");
-      return { ok: false, error: `Discord webhook returned ${response.status}: ${text}` };
+      return {
+        ok: false,
+        error: `Discord webhook returned ${response.status}: ${text}`,
+        status: response.status,
+        ...(response.status === 429 ? { retryAfterMs: rateLimitWaitMs(response, text) } : {}),
+      };
     }
     return { ok: true };
   } catch (error) {
@@ -71,6 +104,26 @@ export async function sendDiscordNotification(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function sendDiscordNotification(
+  webhookUrl: string,
+  payload: DiscordWebhookPayload
+): Promise<{ ok: boolean; error?: string }> {
+  let result = await postWebhook(webhookUrl, payload);
+  if (!result.ok && result.retryAfterMs !== undefined && result.retryAfterMs <= MAX_RATE_LIMIT_WAIT_MS) {
+    const wait = result.retryAfterMs;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    result = await postWebhook(webhookUrl, payload);
+  }
+  if (result.ok) return { ok: true };
+  // Every lifecycle and API-key caller discards the result, so without this a
+  // rate-limited, deleted (404) or refused (400) webhook dropped notifications
+  // with no trace at all. Never the URL: it is the webhook's credential.
+  if (result.status !== undefined) {
+    logger.warn("Discord", `Notification not delivered: ${result.error.slice(0, 300)}`);
+  }
+  return { ok: false, error: result.error };
 }
 
 // Green for batched successes
@@ -85,9 +138,8 @@ export function buildSuccessSummaryEmbed(
     { name: "Completed", value: String(titles.length), inline: true },
   ];
 
-  const uniqueTitles = [...new Set(titles)];
-  const itemLines = uniqueTitles.map((t) => `• ${t}`);
-  fields.push({ name: "Items", value: buildTruncatedList(itemLines) });
+  // Plain titles: `buildTruncatedList` adds the bullet (a "• " here made every line "• • title").
+  fields.push({ name: "Items", value: buildTruncatedList([...new Set(titles)]) });
 
   return {
     title: `${titles.length} Action${titles.length !== 1 ? "s" : ""} Completed`,
@@ -111,7 +163,8 @@ export function buildFailureSummaryEmbed(
     { name: "Failed", value: String(failures.length), inline: true },
   ];
 
-  const itemLines = [...new Set(failures.map((f) => `• ${f.title}: ${f.error}`))];
+  // No bullet here: `buildTruncatedList` adds it.
+  const itemLines = [...new Set(failures.map((f) => `${f.title}: ${f.error}`))];
   fields.push({ name: "Items", value: buildTruncatedList(itemLines) });
 
   return {

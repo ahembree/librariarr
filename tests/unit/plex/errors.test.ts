@@ -11,7 +11,7 @@ function makeAxiosError(opts: {
 }): AxiosError {
   const config = {
     method: opts.method ?? "put",
-    url: opts.url ?? "/library/collections/col1/items",
+    url: opts.url ?? "/library/collections/48211/items",
     headers: new AxiosHeaders(),
   };
   const err = new AxiosError(
@@ -44,13 +44,12 @@ describe("describePlexError", () => {
     const msg = describePlexError(
       makeAxiosError({ status: 400, data: { message: "unknown metadata item" } }),
     );
-    expect(msg).toBe("PUT /library/collections/col1/items → HTTP 400: unknown metadata item");
+    expect(msg).toBe("PUT /library/collections/48211/items → HTTP 400: unknown metadata item");
   });
 
   it("stringifies an object body with no message field", () => {
     const msg = describePlexError(makeAxiosError({ status: 400, data: { error: "bad" } }));
-    expect(msg).toContain("HTTP 400");
-    expect(msg).toContain('{"error":"bad"}');
+    expect(msg).toBe('PUT /library/collections/48211/items → HTTP 400: {"error":"bad"}');
   });
 
   it("drops HTML error pages (reverse-proxy 400s) and falls back to the axios message", () => {
@@ -59,30 +58,32 @@ describe("describePlexError", () => {
     );
     expect(msg).not.toContain("<html>");
     expect(msg).toBe(
-      "PUT /library/collections/col1/items → HTTP 400 (Request failed with status code 400)",
+      "PUT /library/collections/48211/items → HTTP 400 (Request failed with status code 400)",
     );
   });
 
   it("strips the query string (which carries the token) from the path", () => {
     const msg = describePlexError(
-      makeAxiosError({ url: "/library/collections/col1/items?X-Plex-Token=secret", status: 400, data: "nope" }),
+      makeAxiosError({ url: "/library/collections/48211/items?X-Plex-Token=secret", status: 400, data: "nope" }),
     );
-    expect(msg).not.toContain("secret");
-    expect(msg).toContain("PUT /library/collections/col1/items → HTTP 400");
+    expect(msg).toBe("PUT /library/collections/48211/items → HTTP 400: nope");
   });
 
   it("masks an X-Plex-Token echoed back inside the response body", () => {
     const msg = describePlexError(
       makeAxiosError({ status: 400, data: "failed for uri X-Plex-Token=abc123&foo=1" }),
     );
-    expect(msg).not.toContain("abc123");
-    expect(msg).toContain("X-Plex-Token=***");
+    expect(msg).toBe("PUT /library/collections/48211/items → HTTP 400: failed for uri X-Plex-Token=***&foo=1");
   });
 
   it("reports NETWORK when there is no response", () => {
-    const msg = describePlexError(makeAxiosError({ message: "connect ECONNREFUSED" }));
-    expect(msg).toContain("HTTP NETWORK");
-    expect(msg).toContain("connect ECONNREFUSED");
+    const msg = describePlexError(makeAxiosError({ message: "connect ECONNREFUSED 192.168.1.20:32400" }));
+    expect(msg).toBe("PUT /library/collections/48211/items → HTTP NETWORK (connect ECONNREFUSED 192.168.1.20:32400)");
+  });
+
+  it("caps a long body at 500 characters", () => {
+    const msg = describePlexError(makeAxiosError({ status: 500, data: "x".repeat(800) }));
+    expect(msg).toBe(`PUT /library/collections/48211/items → HTTP 500: ${"x".repeat(500)}`);
   });
 
   it("falls back to the message for a plain Error", () => {

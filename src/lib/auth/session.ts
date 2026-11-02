@@ -10,6 +10,7 @@ import { dirname } from "path";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { apiKeySession, getApiKeyPrincipal } from "@/lib/api-keys/principal";
+import { sharedSessionRead } from "@/lib/auth/shared-session";
 
 /**
  * What the sealed cookie carries: WHO is signed in and whether that sign-in is
@@ -210,8 +211,9 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
  * honoured. A logged-in session whose `userId` no longer exists, or whose
  * `sessionVersion` no longer matches the row (a credential change, an SSO
  * link/unlink — everything that increments it "to invalidate other
- * sessions"), comes back with `isLoggedIn` false and no `userId`, so every
- * `if (!session.isLoggedIn) return 401` guard downstream refuses it.
+ * sessions"), comes back with `isLoggedIn` false and no `userId`, so
+ * `withSession` (`src/lib/auth/with-session.ts`), and every route that still
+ * checks `isLoggedIn` inline, refuses it with a 401.
  *
  * This lives in `getSession` itself, rather than in a second helper the
  * routes would have to remember to call, because the check was previously
@@ -247,6 +249,12 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
 export async function getSession(): Promise<IronSession<SessionData>> {
   const principal = getApiKeyPrincipal();
   if (principal) return apiKeySession(principal);
+  // Inside `withSharedSession` (a route answering several handlers at once)
+  // the cookie is unsealed and checked once for all of them.
+  return sharedSessionRead(readValidatedSession);
+}
+
+async function readValidatedSession(): Promise<IronSession<SessionData>> {
   const session = await getRawSession();
   const carriedPlexToken = LEGACY_PLEX_TOKEN_FIELD in session;
   if (carriedPlexToken) delete (session as Record<string, unknown>)[LEGACY_PLEX_TOKEN_FIELD];

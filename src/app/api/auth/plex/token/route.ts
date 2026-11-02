@@ -6,6 +6,8 @@ import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
 import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { isSsoOverrideActive } from "@/lib/sso/config";
+import { installedVersion } from "@/lib/version/whats-new";
+import { userHasServers } from "@/lib/api/has-servers";
 
 const PLEX_TOKEN_BUCKET = "plex-token";
 
@@ -82,6 +84,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         authenticated: true,
         user: { id: existingUser.id, username: plexUser.username },
+        // Where the login page goes next (see `userHasServers`).
+        hasServers: await userHasServers(existingUser.id),
       });
     }
 
@@ -123,7 +127,7 @@ export async function POST(request: NextRequest) {
           },
         });
         await tx.appSettings.create({
-          data: { userId: created.id, localAuthEnabled: false },
+          data: { userId: created.id, localAuthEnabled: false, lastSeenVersion: installedVersion() },
         });
         return created;
       },
@@ -154,6 +158,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       authenticated: true,
       user: { id: user.id, username: user.username },
+      // The account was created just now: it has no server yet.
+      hasServers: false,
     });
   } catch (error) {
     apiLogger.error("Auth", "Plex token auth failed", { error: String(error) });

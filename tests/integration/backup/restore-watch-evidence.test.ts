@@ -45,7 +45,7 @@ const { checkWatchHistoryCompleteness } = await import("@/lib/lifecycle/evaluabi
 async function seed(tracearrMapped: boolean) {
   const prisma = getTestPrisma();
   const user = await prisma.user.create({
-    data: { username: `restore-${Math.random().toString(36).slice(2)}`, passwordHash: "x" },
+    data: { username: "admin", passwordHash: "x" },
   });
   const server = await prisma.mediaServer.create({
     data: {
@@ -54,11 +54,11 @@ async function seed(tracearrMapped: boolean) {
       type: "PLEX",
       url: "http://plex:32400",
       accessToken: "x",
-      machineId: `restore-${Math.random().toString(36).slice(2)}`,
+      machineId: "0123456789abcdef0123456789abcdef01234567",
       // A synced server, so the pre-restore sanity check is meaningful.
       watchHistorySyncedAt: new Date(),
       ...(tracearrMapped
-        ? { tracearrServerId: "trc-server", tracearrBackfillComplete: true }
+        ? { tracearrServerId: "6f1c2b8e-4d3a-4f6b-9c2e-8a7d5e4f3b21", tracearrBackfillComplete: true }
         : {}),
     },
   });
@@ -110,7 +110,11 @@ describe("restoring a config-only backup", () => {
 
     await expect(
       checkWatchHistoryCompleteness(userId, [serverId]),
-    ).resolves.toMatchObject({ complete: false });
+    ).resolves.toMatchObject({
+      complete: false,
+      incomplete: 1,
+      reason: expect.stringContaining('"Plex" (no sync has established what was played there'),
+    });
   });
 
   it("does not let a restored tracearrBackfillComplete flag vouch for an empty history", async () => {
@@ -130,9 +134,15 @@ describe("restoring a config-only backup", () => {
     expect(server.tracearrBackfillComplete).toBe(true);
     expect(server.watchHistorySyncedAt).toBeNull();
 
+    // Refused for the withdrawn marker, not for an unfinished import: the
+    // remedy is a sync, not waiting.
     await expect(
       checkWatchHistoryCompleteness(userId, [serverId]),
-    ).resolves.toMatchObject({ complete: false });
+    ).resolves.toMatchObject({
+      complete: false,
+      incomplete: 1,
+      reason: expect.stringContaining('"Plex" (no sync has established what was played there'),
+    });
   });
 
   it("restores the TracearrInstance rather than destroying it", async () => {
@@ -143,7 +153,7 @@ describe("restoring a config-only backup", () => {
     const prisma = getTestPrisma();
     const { userId } = await seed(true);
     await prisma.tracearrInstance.create({
-      data: { userId, name: "Tracearr", url: "http://tracearr:8080", apiKey: "k", enabled: true },
+      data: { userId, name: "Tracearr", url: "http://tracearr:3000", apiKey: "trr_pub_8f3a1c9e5b7d2f4a6c8e0b1d3f5a7c9e", enabled: true },
     });
 
     const filename = await createBackup(undefined, true);
@@ -151,6 +161,6 @@ describe("restoring a config-only backup", () => {
 
     const instances = await prisma.tracearrInstance.findMany();
     expect(instances).toHaveLength(1);
-    expect(instances[0].url).toBe("http://tracearr:8080");
+    expect(instances[0]).toMatchObject({ userId, name: "Tracearr", url: "http://tracearr:3000", enabled: true });
   });
 });

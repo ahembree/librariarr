@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "crypto";
 import { appCache } from "@/lib/cache/memory-cache";
 import { getExternalBaseUrl } from "@/lib/url";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * Minimal OIDC client for the Authorization Code + PKCE flow.
@@ -46,7 +47,7 @@ export interface OidcUserInfo {
   [key: string]: unknown;
 }
 
-export interface OidcTokenResponse {
+interface OidcTokenResponse {
   access_token: string;
   token_type: string;
   expires_in?: number;
@@ -70,7 +71,7 @@ export function invalidateOidcDiscoveryCache(): void {
 }
 
 function normalizeIssuer(issuer: string): string {
-  return issuer.replace(/\/+$/, "");
+  return stripTrailingSlashes(issuer);
 }
 
 /** Max bytes accepted from any IdP response. Discovery docs are ~5KB,
@@ -142,7 +143,7 @@ function enforceMaxBytes(res: Response, url: string): Response {
   });
 }
 
-export interface DiscoverOptions {
+interface DiscoverOptions {
   /** Bypass the in-process cache and force a fresh fetch. Used by the
    *  Test Discovery endpoint so admins see live results. */
   skipCache?: boolean;

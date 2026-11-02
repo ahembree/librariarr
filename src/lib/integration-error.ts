@@ -66,8 +66,15 @@ export class IntegrationError extends Error {
         }
       } else if (data && typeof data === "object") {
         const obj = data as Record<string, unknown>;
+        // OpenAI-compatible servers and Anthropic nest the reason one level
+        // down (`{ error: { message } }`); unread, the AI Test button said
+        // only "AI HTTP 401" without the provider's explanation.
+        const nested = obj.error && typeof obj.error === "object"
+          ? (obj.error as Record<string, unknown>).message
+          : undefined;
         if (typeof obj.message === "string") detail = obj.message.slice(0, 200);
         else if (typeof obj.error === "string") detail = obj.error.slice(0, 200);
+        else if (typeof nested === "string" && nested.trim().length > 0) detail = nested.trim().slice(0, 200);
       }
     }
 

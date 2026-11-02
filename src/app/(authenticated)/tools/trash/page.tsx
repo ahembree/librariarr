@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -46,16 +47,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { useSetState } from "@/hooks/use-set-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -210,19 +204,19 @@ interface QualityProfileSelection {
 // ─── Status presentation ───
 
 const STATUS_META: Record<ItemStatus, { label: string; className: string; dot: string }> = {
-  NEW: { label: "Not added", className: "border-white/15 text-muted-foreground", dot: "bg-muted-foreground/50" },
-  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/40 text-amber", dot: "bg-amber" },
-  MANAGED: { label: "Managed", className: "border-green/40 text-green", dot: "bg-green" },
-  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/40 text-blue-400", dot: "bg-blue-400" },
-  MANAGED_MISSING: { label: "Missing in app", className: "border-destructive/40 text-destructive", dot: "bg-destructive" },
+  NEW: { label: "Not added", className: "bg-muted/40 text-muted-foreground", dot: "bg-muted-foreground/50" },
+  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/25 bg-amber-dim text-amber", dot: "bg-amber" },
+  MANAGED: { label: "Managed", className: "border-green/25 bg-green-dim text-green", dot: "bg-green" },
+  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/25 bg-blue-400/15 text-blue-400", dot: "bg-blue-400" },
+  MANAGED_MISSING: { label: "Missing in app", className: "border-red/25 bg-red-dim text-red", dot: "bg-destructive" },
 };
 
 const ACTION_META: Record<PlanItem["action"], { label: string; className: string }> = {
-  CREATE: { label: "Create", className: "text-green" },
-  UPDATE: { label: "Update", className: "text-blue-400" },
-  NOOP: { label: "No change", className: "text-muted-foreground" },
-  SKIP: { label: "Skipped", className: "text-amber" },
-  ERROR: { label: "Error", className: "text-destructive" },
+  CREATE: { label: "Create", className: "border-green/25 bg-green-dim text-green" },
+  UPDATE: { label: "Update", className: "border-blue-400/25 bg-blue-400/15 text-blue-400" },
+  NOOP: { label: "No change", className: "bg-muted/40 text-muted-foreground" },
+  SKIP: { label: "Skipped", className: "border-amber/25 bg-amber-dim text-amber" },
+  ERROR: { label: "Error", className: "border-red/25 bg-red-dim text-red" },
 };
 
 function fmt(value: unknown): string {
@@ -1083,19 +1077,27 @@ export default function TrashSyncPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Button
+              <LoadingButton
                 variant="outline"
                 size="sm"
                 onClick={() => preview()}
+                loading={busyIds.has("__all__")}
+                icon={Eye}
+                iconClassName="mr-1.5 h-4 w-4"
                 disabled={syncing || counts.managed === 0 || busyIds.size > 0}
               >
-                {busyIds.has("__all__") ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
                 Dry run
-              </Button>
-              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0 || busyIds.size > 0}>
-                {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+              </LoadingButton>
+              <LoadingButton
+                size="sm"
+                onClick={applySync}
+                loading={syncing}
+                icon={Play}
+                iconClassName="mr-1.5 h-4 w-4"
+                disabled={counts.managed === 0 || busyIds.size > 0}
+              >
                 Sync managed
-              </Button>
+              </LoadingButton>
             </div>
           </div>
 
@@ -1184,30 +1186,24 @@ export default function TrashSyncPage() {
       )}
 
       {/* Take-over confirmation */}
-      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Let Librariarr manage this?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <span className="font-medium text-foreground">{confirmItem?.name}</span> already exists in{" "}
-              {selected?.name}. Assigning it to Librariarr means the next sync will{" "}
-              <span className="font-medium text-amber">overwrite</span> it with the TRaSH Guides
-              version. You can preview the exact changes before syncing.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
-                setConfirmTarget(null);
-              }}
-            >
-              Manage &amp; allow overwrite
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={!!confirmItem}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title="Let Librariarr manage this?"
+        description={
+          <>
+            <span className="font-medium text-foreground">{confirmItem?.name}</span> already exists in{" "}
+            {selected?.name}. Assigning it to Librariarr means the next sync will{" "}
+            <span className="font-medium text-amber">overwrite</span> it with the TRaSH Guides
+            version. You can preview the exact changes before syncing.
+          </>
+        }
+        confirmLabel={<>Manage &amp; allow overwrite</>}
+        onConfirm={() => {
+          if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
+          setConfirmTarget(null);
+        }}
+      />
 
       {/* Per-profile options (score set + reset unmatched scores) */}
       <QualityProfileOptionsDialog
@@ -1298,8 +1294,8 @@ function ResourceList({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "managed" | "unmanaged" | "new">("all");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, expandedActions] = useSetState<string>();
+  const [selected, selectedActions] = useSetState<string>();
   const [confirmManage, setConfirmManage] = useState(false);
 
   const filtered = items.filter((i) => {
@@ -1322,21 +1318,13 @@ function ResourceList({
   const selectedNew = selectedItems.filter((i) => i.status === "NEW");
   const selectedExisting = selectedItems.filter((i) => i.status === "UNMANAGED_CONFLICT");
 
-  const toggleOne = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const toggleAll = () =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allSelected) selectableFiltered.forEach((i) => next.delete(i.trashId));
-      else selectableFiltered.forEach((i) => next.add(i.trashId));
-      return next;
-    });
-  const clearSelection = () => setSelected(new Set());
+  const toggleOne = selectedActions.toggle;
+  const toggleAll = () => {
+    const ids = selectableFiltered.map((i) => i.trashId);
+    if (allSelected) selectedActions.remove(...ids);
+    else selectedActions.add(...ids);
+  };
+  const clearSelection = selectedActions.clear;
 
   // Clear the selection once the action went through; on a failure (already
   // toasted by the caller) keep it so the user can simply retry.
@@ -1352,13 +1340,7 @@ function ResourceList({
   // While searching, auto-expand everything so matches are visible.
   const searching = query.trim().length > 0;
   const isOpen = (name: string) => searching || expanded.has(name);
-  const toggle = (name: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+  const toggle = expandedActions.toggle;
 
   const renderRow = (item: StatusItem) => (
     <ResourceRow
@@ -1424,11 +1406,10 @@ function ResourceList({
               variant="ghost"
               size="sm"
               className="text-muted-foreground"
-              onClick={() =>
-                setExpanded((prev) =>
-                  prev.size >= grouped.length ? new Set() : new Set(grouped.map((g) => g.name)),
-                )
-              }
+              onClick={() => {
+                if (expanded.size >= grouped.length) expandedActions.clear();
+                else expandedActions.replace(grouped.map((g) => g.name));
+              }}
             >
               {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
             </Button>
@@ -1443,10 +1424,9 @@ function ResourceList({
             </span>
             <div className="ml-auto flex flex-wrap items-center gap-2">
               {selectedNew.length > 0 && (
-                <Button size="sm" onClick={doAdd} disabled={syncing}>
-                  {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                <LoadingButton size="sm" onClick={doAdd} loading={syncing} icon={Plus} iconClassName="mr-1.5 h-4 w-4">
                   Add ({selectedNew.length})
-                </Button>
+                </LoadingButton>
               )}
               {selectedExisting.length > 0 && (
                 <Button
@@ -1495,24 +1475,22 @@ function ResourceList({
       </CardContent>
 
       {/* Bulk take-over confirmation */}
-      <AlertDialog open={confirmManage} onOpenChange={(o) => !o && setConfirmManage(false)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Manage {selectedExisting.length} existing item{selectedExisting.length === 1 ? "" : "s"}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              These already exist in the app. Assigning them to Librariarr means the next sync will{" "}
-              <span className="font-medium text-amber">overwrite</span> them with the TRaSH Guides
-              versions. Nothing changes in the app until you sync.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={doManage}>Manage &amp; allow overwrite</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmManage}
+        onOpenChange={setConfirmManage}
+        title={`Manage ${selectedExisting.length} existing item${selectedExisting.length === 1 ? "" : "s"}?`}
+        description={
+          <>
+            These already exist in the app. Assigning them to Librariarr means the next sync will{" "}
+            <span className="font-medium text-amber">overwrite</span> them with the TRaSH Guides
+            versions. Nothing changes in the app until you sync.
+          </>
+        }
+        confirmLabel={<>Manage &amp; allow overwrite</>}
+        onConfirm={() => {
+          void doManage();
+        }}
+      />
     </Card>
   );
 }
@@ -1677,7 +1655,7 @@ function SingletonCard({
             <CardTitle className="text-base">{item.name}</CardTitle>
             <CardDescription>{item.description}</CardDescription>
           </div>
-          <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
+          <ColorChip className={meta.className}>{meta.label}</ColorChip>
         </div>
       </CardHeader>
       <CardContent className="flex items-center gap-2">
@@ -1750,7 +1728,7 @@ function NamingCard({
               Choose the naming variants to apply, then let Librariarr manage them.
             </CardDescription>
           </div>
-          <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
+          <ColorChip className={meta.className}>{meta.label}</ColorChip>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1996,7 +1974,7 @@ function ProfileFormatsTab({
 
   // A score only applies to a custom format that already exists in the app. The
   // page's status (resolved by trash_id against the CURRENT guide name, matched
-  // trimmed and case-insensitively like the backend's findArrCfByName) is the
+  // trimmed and case-insensitively like the backend's findManagedArrResource) is the
   // authority: a saved row's name is from save time and goes stale on a guide
   // rename. Only a format the status doesn't know falls back to a name check
   // against the instance's format list — an exact match there would call "hdr"
@@ -2463,21 +2441,19 @@ function ProfileFormatsTab({
                                 <span className="min-w-0 flex-1 truncate text-sm">
                                   {f.name}
                                   {isRemovedFromGuide(f) ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="ml-2 border-destructive/40 text-[10px] text-destructive"
+                                    <ColorChip
+                                      className="ml-2 border-red/25 bg-red-dim text-red"
                                       title="No longer in the TRaSH guide — it's dropped on the next save; remove it to clear this"
                                     >
                                       removed from guide
-                                    </Badge>
+                                    </ColorChip>
                                   ) : !isInApp(f) ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="ml-2 border-amber/40 text-[10px] text-amber"
+                                    <ColorChip
+                                      className="ml-2 border-amber/25 bg-amber-dim text-amber"
                                       title="Not in this app yet — add & sync it from the Custom Formats tab"
                                     >
                                       not in app
-                                    </Badge>
+                                    </ColorChip>
                                   ) : (
                                     f.score === 0 && (
                                       <span
@@ -2630,29 +2606,24 @@ function ProfileFormatsTab({
       </CardContent>
 
       {/* Switching profile with unsaved edits */}
-      <AlertDialog open={pendingProfile !== null} onOpenChange={(o) => !o && setPendingProfile(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your edits to <span className="font-medium text-foreground">{selectedProfile}</span> haven&apos;t
-              been saved. Switching to{" "}
-              <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingProfile !== null) selectProfile(pendingProfile);
-                setPendingProfile(null);
-              }}
-            >
-              Discard &amp; switch
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={pendingProfile !== null}
+        onOpenChange={(o) => { if (!o) setPendingProfile(null); }}
+        title="Discard unsaved changes?"
+        description={
+          <>
+            Your edits to <span className="font-medium text-foreground">{selectedProfile}</span> haven&apos;t
+            been saved. Switching to{" "}
+            <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
+          </>
+        }
+        cancelLabel="Keep editing"
+        confirmLabel={<>Discard &amp; switch</>}
+        onConfirm={() => {
+          if (pendingProfile !== null) selectProfile(pendingProfile);
+          setPendingProfile(null);
+        }}
+      />
     </Card>
   );
 }
@@ -2834,7 +2805,7 @@ function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
                   <CheckCircle2 className="h-4 w-4 text-green" />
                 ) : null}
                 <span className="text-sm font-medium">{item.name}</span>
-                <Badge variant="outline" className={cn("text-[10.5px]", meta.className)}>{meta.label}</Badge>
+                <ColorChip className={meta.className}>{meta.label}</ColorChip>
               </div>
               {item.error && <p className="text-xs text-destructive">{item.error}</p>}
               {item.warnings.map((w, idx) => (

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { computeDeletionStats } from "@/lib/lifecycle/deletion-stats";
 
@@ -13,12 +13,8 @@ import { computeDeletionStats } from "@/lib/lifecycle/deletion-stats";
  * reports them (enabled rule sets only); the deletion figures are the same
  * computation `/api/lifecycle/stats` returns.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = session.userId!;
+export const GET = withSession(async (session) => {
+  const userId = session.userId;
 
   const [ruleSets, matchCounts, deletion] = await Promise.all([
     prisma.ruleSet.findMany({ where: { userId }, select: { enabled: true } }),
@@ -40,4 +36,4 @@ export async function GET() {
     reclaimedBytes: deletion.totalBytesDeleted,
     reclaimedActions: deletion.actionCount,
   });
-}
+});

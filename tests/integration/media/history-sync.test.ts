@@ -6,7 +6,7 @@
  * server history and used to sit behind an indefinite spinner. The contract
  * this test pins down:
  *
- *  - Auth, validation and the ownership check happen BEFORE the stream opens,
+ *  - Auth, validation and the server lookup happen BEFORE the stream opens,
  *    so they still carry real 401/400/404 statuses. Once streaming starts the
  *    status is committed to 200 and failures are in-band.
  *  - One phase per server (`key` = server id, `label` = server name).
@@ -17,6 +17,7 @@
  *    `{ success: true, counts }`, with -1 for a server whose sync threw.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -140,18 +141,13 @@ describe("POST /api/media/history/sync", () => {
     expect(mockSyncWatchHistory).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for a server owned by another user", async () => {
-    const otherUser = await createTestUser({
-      username: "other",
-      email: "other@example.com",
-    });
-    const otherServer = await createTestServer(otherUser.id, { name: "Theirs" });
-
+  it("returns 404 for a server that does not exist", async () => {
     const response = await callRoute(POST, {
       method: "POST",
-      body: { serverId: otherServer.id },
+      body: { serverId: "nonexistent" },
     });
-    await expectJson<{ error: string }>(response, 404);
+    const data = await expectJson<{ error: string }>(response, 404);
+    expect(data.error).toBe("Server not found");
     expect(mockSyncWatchHistory).not.toHaveBeenCalled();
   });
 
@@ -178,16 +174,39 @@ describe("POST /api/media/history/sync", () => {
       { key: server.id, label: "Plex Main" },
     ]);
 
-    const phases = phaseEvents(events);
-    expect(phases.length).toBeGreaterThan(0);
-    expect(phases.every((p) => p.key === server.id)).toBe(true);
-    expect(phases.some((p) => p.detail === "120 plays")).toBe(true);
+    // The opening event marks the server current before any work, then the
+    // sync's own report follows — with no fraction, since none was given.
+    expect(phaseEvents(events)).toEqual([
+      { type: "phase", key: server.id },
+      { type: "phase", key: server.id, detail: "120 plays" },
+    ]);
+    expect(mockSyncWatchHistory).toHaveBeenCalledTimes(1);
+    expect(mockSyncWatchHistory).toHaveBeenCalledWith(server.id, expect.any(Function), expect.any(AbortSignal));
 
     expect(result).toEqual({
       success: true,
       counts: { [server.id]: 120 },
       cancelled: false,
     });
+  });
+
+  it("gzips the stream for a client that accepts it", async () => {
+    const server = await createTestServer(userId, { name: "Plex Main" });
+    mockSyncWatchHistory.mockResolvedValue({ count: 7 });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { serverId: server.id },
+      headers: { "Accept-Encoding": "gzip" },
+    });
+    expect(response.headers.get("Content-Encoding")).toBe("gzip");
+    const lines = gunzipSync(Buffer.from(await response.arrayBuffer()))
+      .toString()
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; result?: SyncResult });
+    expect(lines.map((l) => l.type)).toEqual(["plan", "phase", "result"]);
+    expect(lines[2].result).toEqual({ success: true, counts: { [server.id]: 7 }, cancelled: false });
   });
 
   it("drops every media-derived cache, not only the filter dropdowns", async () => {
@@ -202,7 +221,7 @@ describe("POST /api/media/history/sync", () => {
     });
     await expectStreamResult<SyncResult>(response);
 
-    expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+    expect(mockInvalidateMediaCaches).toHaveBeenCalledTimes(1);
   });
 
   it("emits one phase per enabled server when no serverId is given", async () => {
@@ -226,9 +245,9 @@ describe("POST /api/media/history/sync", () => {
       { key: alpha.id, label: "Alpha" },
       { key: bravo.id, label: "Bravo" },
     ]);
-    expect(phaseEvents(events).map((p) => p.key)).toContain(bravo.id);
+    expect(phaseEvents(events).map((p) => p.key)).toEqual([alpha.id, bravo.id]);
     expect(result.counts).toEqual({ [alpha.id]: 10, [bravo.id]: 20 });
-    expect(result.counts[disabled.id]).toBeUndefined();
+    expect(mockSyncWatchHistory.mock.calls.map((c) => c[0])).not.toContain(disabled.id);
   });
 
   it("records -1 for a server whose sync throws and still completes the others", async () => {
@@ -252,7 +271,7 @@ describe("POST /api/media/history/sync", () => {
       cancelled: false,
     });
     // The failing server still got its phase, so the bar advanced past it.
-    expect(phaseEvents(events).map((p) => p.key)).toContain(bad.id);
+    expect(phaseEvents(events).map((p) => p.key)).toEqual([good.id, bad.id]);
   });
 
   it("forwards fraction when the sync reports one and omits it when it does not", async () => {
@@ -305,7 +324,7 @@ describe("POST /api/media/history/sync", () => {
     });
 
     it("ends with a well-formed result, not an error, when the request is already aborted", async () => {
-      await createTestServer(userId, { name: "Plex Main" });
+      const server = await createTestServer(userId, { name: "Plex Main" });
 
       const controller = new AbortController();
       controller.abort();
@@ -322,7 +341,8 @@ describe("POST /api/media/history/sync", () => {
 
       expect(result).toEqual({ success: true, counts: {}, cancelled: true });
       // The plan was still emitted — the stream is well-formed, just empty.
-      expect(planEvent(events)?.phases).toHaveLength(1);
+      expect(planEvent(events)?.phases).toEqual([{ key: server.id, label: "Plex Main" }]);
+      expect(phaseEvents(events)).toEqual([]);
       // Nothing was started for a client that had already gone.
       expect(mockSyncWatchHistory).not.toHaveBeenCalled();
     });

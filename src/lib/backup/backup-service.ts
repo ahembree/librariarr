@@ -6,6 +6,7 @@ import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
 import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import { compareSemver } from "@/lib/version/semver";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -62,7 +63,7 @@ function decryptBuffer(data: Buffer, passphrase: string): Buffer {
   }
 }
 
-export interface BackupMetadata {
+interface BackupMetadata {
   version: number;
   appVersion: string;
   createdAt: string;
@@ -70,7 +71,7 @@ export interface BackupMetadata {
   configOnly?: boolean;
 }
 
-export interface BackupInfo {
+interface BackupInfo {
   filename: string;
   createdAt: string;
   size: number;
@@ -181,16 +182,16 @@ export async function createBackup(passphrase?: string, configOnly = true): Prom
       tables[table] = 0;
       continue;
     }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await (prisma as any)[table].findMany();
-      data[table] = rows;
-      tables[table] = rows.length;
-    } catch {
-      // Table may not exist in some schema versions
-      data[table] = [];
-      tables[table] = 0;
-    }
+    // A read that fails fails the backup. It used to be caught and stored as an
+    // empty table ("may not exist in some schema versions" — every table here
+    // exists, see table-order.test.ts), so a database hiccup mid-backup wrote a
+    // file reported as successful that silently lacked the table: restoring it
+    // truncated the table and refilled nothing, and the scheduled run then
+    // pruned an older, complete backup to make room for it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any)[table].findMany();
+    data[table] = rows;
+    tables[table] = rows.length;
   }
 
   const metadata: BackupMetadata = {
@@ -280,14 +281,30 @@ export async function restoreBackup(
 
   // Wrap truncate + insert in a transaction so a mid-restore failure rolls back cleanly
   await prisma.$transaction(async (tx) => {
+    // The highest session version in use, read before the rows are dropped —
+    // see `revokeRestoredSessions`.
+    const sessionVersionInUse =
+      (await tx.user.aggregate({ _max: { sessionVersion: true } }))._max.sessionVersion ?? 0;
+    // The newest release-notes version already seen, likewise — see
+    // `keepSeenReleaseNotes`.
+    const seenVersionInUse = newestVersion(
+      (await tx.appSettings.findMany({ select: { lastSeenVersion: true } })).map(
+        (row) => row.lastSeenVersion,
+      ),
+    );
+
     // Step 2: Truncate all tables in reverse dependency order
     onProgress?.({ phase: "truncate", message: "Clearing existing data..." });
     const reversedTables = [...TABLE_ORDER].reverse();
     for (const table of reversedTables) {
       try {
         await tx.$executeRawUnsafe(`TRUNCATE TABLE "${tableToDbName(table)}" CASCADE`);
-      } catch {
-        // Table may not exist
+      } catch (error) {
+        // Never swallowed: a failed statement aborts the whole transaction, so
+        // every later one fails with "current transaction is aborted" and the
+        // restore would report a later table instead of this cause.
+        logger.error("Backup", `Failed to clear table ${table}`, { error: String(error) });
+        throw new Error(`Failed to clear table ${table}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -308,6 +325,12 @@ export async function restoreBackup(
 
       if (table === "ruleSet") {
         rows = detachMissingCollections(rows, restorableCollectionIds);
+      }
+      if (table === "user") {
+        rows = revokeRestoredSessions(rows, sessionVersionInUse);
+      }
+      if (table === "appSettings") {
+        rows = keepSeenReleaseNotes(rows, seenVersionInUse);
       }
 
       onProgress?.({
@@ -508,15 +531,6 @@ const LEGACY_FIELD_RENAMES: Record<string, Record<string, string>> = {
   lifecycleAction: { searchAfterDelete: "searchAfterAction" },
 };
 
-// Strict, FULLY-ANCHORED ISO-8601 datetime matcher (matches what serializeRow
-// emits via Date#toISOString, plus common offset/precision variants). The old
-// matcher was unanchored at the end, so any string value that merely STARTED
-// ISO-like — a media title, rule name, log message, or a collection label such
-// as "2024-01-01T00:00:00 Retrospective" — was coerced to a Date, corrupting
-// string columns or failing the whole-table createMany. Anchoring both ends
-// means only a value that is ENTIRELY a timestamp is converted.
-const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?$/;
-
 /**
  * Field names the CURRENT schema has for a table, from Prisma's generated
  * per-model scalar-field enums. Generated, so it cannot drift from the schema.
@@ -552,8 +566,80 @@ function detachMissingCollections(rows: unknown[], collectionIds: Set<unknown>):
   return result;
 }
 
-// Deserialize date strings back to Date objects for Prisma, and migrate any
-// legacy field names so older backups still restore cleanly.
+/**
+ * Give every restored user a session version above both the one in the file
+ * and the highest in use before the restore, which signs out every session.
+ *
+ * Revoking a session is bumping `User.sessionVersion` (logout, a password
+ * change): `getSession()` refuses a cookie sealed with any other version. The
+ * file holds the version as it was when the backup was taken, so restoring it
+ * verbatim moved the version BACK, and every cookie sealed at that value —
+ * one stolen before the backup and revoked since included — was honoured
+ * again for the rest of its 30 days. Same reasoning as leaving `apiKey` out of
+ * backups: a restore must not undo a revocation. The restore route signs the
+ * browser that ran it out as well.
+ */
+function revokeRestoredSessions(rows: unknown[], versionInUse: number): unknown[] {
+  const floor = sessionVersionFloor();
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const restored = typeof r.sessionVersion === "number" ? r.sessionVersion : 0;
+    return { ...r, sessionVersion: Math.max(restored, versionInUse, floor) + 1 };
+  });
+}
+
+/**
+ * Keep the "What's new" dialog closed for every release already seen. The
+ * file holds `AppSettings.lastSeenVersion` as it was when the backup was taken
+ * (null in any backup from before the column), so restoring it verbatim
+ * reopened the dialog for releases the admin had already read.
+ */
+export function keepSeenReleaseNotes(rows: unknown[], versionInUse: string | null): unknown[] {
+  if (versionInUse === null) return rows;
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const restored = typeof r.lastSeenVersion === "string" ? r.lastSeenVersion : null;
+    return { ...r, lastSeenVersion: newestVersion([restored, versionInUse]) };
+  });
+}
+
+/** The highest of some version numbers, ignoring nulls; null when there are none. */
+function newestVersion(versions: (string | null)[]): string | null {
+  let newest: string | null = null;
+  for (const version of versions) {
+    if (version !== null && (newest === null || compareSemver(version, newest) > 0)) newest = version;
+  }
+  return newest;
+}
+
+const SESSION_VERSION_EPOCH_MS = Date.UTC(2024, 0, 1);
+
+/**
+ * A session version no cookie issued before now can carry. The version in use
+ * is unknown when the restore runs from the setup screen — no user row is left
+ * (after `reset-auth delete-user`, or a lost database volume beside a kept
+ * session secret) — so a cookie sealed at a version issued after the backup
+ * was taken, and revoked since, came back. Versions grow by one per sign-out
+ * or password change, and every restore lands on at least this many seconds
+ * since 2024, so nothing issued earlier reaches it; it stays inside the
+ * column's 32-bit Int until 2092.
+ */
+function sessionVersionFloor(now = Date.now()): number {
+  return Math.floor((now - SESSION_VERSION_EPOCH_MS) / 1000);
+}
+
+// Migrate legacy field names and drop removed columns so older backups still
+// restore cleanly.
+//
+// Values are passed on as the file holds them — a Date is the ISO string
+// JSON.stringify wrote — and never turned back into a Date by their shape.
+// Prisma's DateTime input takes that string (`Date | string` in the generated
+// types) and only a DateTime field reads it as a date, so the field's own type
+// decides. Converting every string that looked like a timestamp turned a String
+// column's value into a Date whenever the whole value was one — a title, a rule
+// set name, a log message such as "2024-01-01T00:00:00Z" — and Prisma refused
+// the batch ("Expected String, provided DateTime"), so the backup could not be
+// restored at all.
 function deserializeRow(row: Record<string, unknown>, table?: string): Record<string, unknown> {
   const renames = table ? LEGACY_FIELD_RENAMES[table] : undefined;
   // Drop columns the current schema no longer has. Prisma validates createMany
@@ -570,12 +656,7 @@ function deserializeRow(row: Record<string, unknown>, table?: string): Record<st
       dropped.push(mappedKey);
       continue;
     }
-    // Only coerce when the ENTIRE string is a valid ISO timestamp.
-    if (typeof value === "string" && ISO_DATETIME.test(value) && !Number.isNaN(Date.parse(value))) {
-      result[mappedKey] = new Date(value);
-    } else {
-      result[mappedKey] = value;
-    }
+    result[mappedKey] = value;
   }
   if (dropped.length > 0 && table && !droppedFieldsReported.has(table)) {
     droppedFieldsReported.add(table);

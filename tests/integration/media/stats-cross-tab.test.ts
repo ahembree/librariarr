@@ -34,7 +34,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -129,18 +135,21 @@ describe("GET /api/media/stats/cross-tab", () => {
       type: "MOVIE",
       resolution: "1080p",
       videoCodec: "h264",
+      dynamicRange: "SDR",
     });
     await createTestMediaItem(lib.id, {
       title: "Movie B",
       type: "MOVIE",
       resolution: "1080p",
-      videoCodec: "h265",
+      videoCodec: "hevc",
+      dynamicRange: "HDR10",
     });
     await createTestMediaItem(lib.id, {
       title: "Movie C",
       type: "MOVIE",
       resolution: "4k",
-      videoCodec: "h265",
+      videoCodec: "hevc",
+      dynamicRange: "HDR10",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -153,27 +162,24 @@ describe("GET /api/media/stats/cross-tab", () => {
       rows: { dim1: string; dim2: string; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.rows.length).toBeGreaterThan(0);
-    // All items should be type MOVIE
-    for (const row of body.rows) {
-      expect(row.type).toBe("MOVIE");
-      expect(row._count).toBeGreaterThan(0);
-    }
+    expect([...body.rows].sort((a, b) => a.dim1.localeCompare(b.dim1))).toEqual([
+      { dim1: "h264", dim2: "SDR", type: "MOVIE", _count: 1 },
+      { dim1: "hevc", dim2: "HDR10", type: "MOVIE", _count: 2 },
+    ]);
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
       searchParams: {
         dimension1: "resolution",
         dimension2: "videoCodec",
-        serverId: server.id,
+        serverId: "nonexistent",
       },
     });
     const body = await expectJson<{ error: string }>(response, 404);
@@ -195,7 +201,7 @@ describe("GET /api/media/stats/cross-tab", () => {
     await createTestMediaItem(lib2.id, {
       title: "S2 Movie",
       type: "MOVIE",
-      videoCodec: "h265",
+      videoCodec: "hevc",
       ratingKey: "s2m1",
     });
 
@@ -213,11 +219,8 @@ describe("GET /api/media/stats/cross-tab", () => {
       rows: { dim1: string; dim2: string; _count: number }[];
     }>(response, 200);
 
-    // Should only have data from server1
-    expect(body.rows.length).toBeGreaterThan(0);
-    const codecs = body.rows.map((r) => r.dim1);
-    expect(codecs).toContain("h264");
-    expect(codecs).not.toContain("h265");
+    // Only server1's movie.
+    expect(body.rows).toEqual([{ dim1: "h264", dim2: "SDR", type: "MOVIE", _count: 1 }]);
   });
 
   it("counts an item once per stream language, not once per track", async () => {
@@ -240,9 +243,10 @@ describe("GET /api/media/stats/cross-tab", () => {
       rows: { dim1: string; dim2: string; type: string; _count: number }[];
     }>(response, 200);
 
-    const cell = (lang: string) => body.rows.find((r) => r.dim1 === lang && r.dim2 === "h264");
-    expect(cell("English")?._count).toBe(1);
-    expect(cell("French")?._count).toBe(1);
+    expect([...body.rows].sort((a, b) => a.dim1.localeCompare(b.dim1))).toEqual([
+      { dim1: "English", dim2: "h264", type: "MOVIE", _count: 1 },
+      { dim1: "French", dim2: "h264", type: "MOVIE", _count: 1 },
+    ]);
   });
 
   it("caps direct x direct cells per type, so a small type is not crowded out", async () => {
@@ -283,5 +287,56 @@ describe("GET /api/media/stats/cross-tab", () => {
     expect(body.rows.filter((r) => r.type === "MUSIC")).toEqual([
       { dim1: "1999", dim2: "Label", type: "MUSIC", _count: 1 },
     ]);
+  });
+
+  it("buckets dates in UTC, like the breakdown, whatever the process timezone", async () => {
+    // The Unraid template defaults TZ=America/New_York. Bucketed in local time,
+    // an item added 02:00 UTC on March 1st landed in February on the heatmap
+    // while the Added Date breakdown (SQL TO_CHAR) put it in March.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id);
+      await createTestMediaItem(library.id, {
+        addedAt: new Date("2024-03-01T02:00:00Z"),
+        videoCodec: "hevc",
+      });
+
+      const body = await expectJson<{ rows: { dim1: string | null }[] }>(
+        await callRoute(GET, {
+          url: "/api/media/stats/cross-tab",
+          searchParams: { dimension1: "addedAt", dimension2: "videoCodec" },
+        }),
+        200,
+      );
+      expect(body.rows.map((r) => r.dim1)).toEqual(["2024-03"]);
+    } finally {
+      // `process.env.X = undefined` stores the string "undefined".
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
+  it("leaves out the types either dimension does not apply to", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(movies.id, { videoCodec: "h264", audioCodec: "aac" });
+    const track = await createTestMediaItem(music.id, { type: "MUSIC", audioCodec: "flac" });
+    await getTestPrisma().mediaItem.update({ where: { id: track.id }, data: { videoCodec: null } });
+
+    // Video codec × audio codec: a track has no video codec (excludeTypes MUSIC).
+    for (const [dimension1, dimension2] of [["videoCodec", "audioCodec"], ["resolution", "audioCodec"]]) {
+      const body = await expectJson<{ rows: { type: string }[] }>(
+        await callRoute(GET, { url: "/api/media/stats/cross-tab", searchParams: { dimension1, dimension2 } }),
+        200,
+      );
+      expect(body.rows.map((r) => r.type), `${dimension1} x ${dimension2}`).toEqual(["MOVIE"]);
+    }
   });
 });

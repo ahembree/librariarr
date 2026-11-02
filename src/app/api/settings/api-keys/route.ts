@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { logger } from "@/lib/logger";
@@ -37,32 +37,22 @@ import {
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const apiKeys = await prisma.apiKey.findMany({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: API_KEY_PUBLIC_SELECT,
     orderBy: { createdAt: "desc" },
   });
 
   return NextResponse.json({ apiKeys }, { headers: NO_STORE });
-}
+});
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, apiKeyCreateSchema);
   if (error) return error;
 
   const user = await prisma.user.findUnique({
-    where: { id: session.userId! },
+    where: { id: session.userId },
     select: { passwordHash: true },
   });
   if (!user) {
@@ -102,7 +92,7 @@ export async function POST(request: NextRequest) {
     // Names the ways to confirm the identity in place (Plex, SSO — never the
     // password while password sign-in is off), which the settings dialog
     // offers instead of making the user sign out and back in.
-    return reauthRequired(session.userId!, "Creating an API key");
+    return reauthRequired(session.userId, "Creating an API key");
   }
 
   const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
@@ -124,12 +114,12 @@ export async function POST(request: NextRequest) {
     apiKey = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT pg_advisory_xact_lock(hashtext('api-key-create:' || $1))`,
-        session.userId!,
+        session.userId,
       );
-      const existing = await tx.apiKey.count({ where: { userId: session.userId! } });
+      const existing = await tx.apiKey.count({ where: { userId: session.userId } });
       if (existing >= MAX_API_KEYS) return null;
       return tx.apiKey.create({
-        data: { userId: session.userId!, name: data.name, prefix, keyHash, scopes, expiresAt },
+        data: { userId: session.userId, name: data.name, prefix, keyHash, scopes, expiresAt },
         select: API_KEY_PUBLIC_SELECT,
       });
     });
@@ -153,9 +143,9 @@ export async function POST(request: NextRequest) {
     "Auth",
     `API key "${apiKey.name}" (${apiKey.prefix}…) created — scopes: ${scopes.join(", ")}; expires: ${expiresAt ? expiresAt.toISOString() : "never"}`,
   );
-  void notifyApiKeyChange(session.userId!, "created", apiKey);
+  void notifyApiKeyChange(session.userId, "created", apiKey);
 
   // The only time the plaintext key ever leaves the server. Only its hash was
   // stored, so it cannot be shown again; `no-store` keeps it out of caches.
   return NextResponse.json({ apiKey, key }, { status: 201, headers: NO_STORE });
-}
+});

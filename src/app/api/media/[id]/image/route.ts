@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
@@ -20,15 +20,11 @@ import {
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
@@ -37,9 +33,12 @@ export async function GET(
   const item = await appCache.getOrSet(
     `image-meta:${id}`,
     () =>
-      prisma.mediaItem.findUnique({
-        where: { id },
+      prisma.mediaItem.findFirst({
+        where: { id, library: { mediaServer: { userId: session.userId } } },
         select: {
+          // The image cache is keyed within the item's library: artwork paths
+          // are per-server ids (see computeCacheKey).
+          libraryId: true,
           thumbUrl: true,
           artUrl: true,
           parentThumbUrl: true,
@@ -49,7 +48,6 @@ export async function GET(
             select: {
               mediaServer: {
                 select: {
-                  userId: true,
                   url: true,
                   accessToken: true,
                   tlsSkipVerify: true,
@@ -69,10 +67,6 @@ export async function GET(
 
   if (!item.library.mediaServer) {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
-  }
-
-  if (item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Resolve thumb path based on type. Everything but `role` goes through the
@@ -98,7 +92,7 @@ export async function GET(
   const maxWidth = type === "art" ? CACHE_WIDTH_ART : parseImageWidth(searchParams.get("w")) ?? undefined;
 
   // Fast path: check if cached image exists and handle ETag/304
-  const cached = await getCachedImageInfo(thumbPath, { maxWidth });
+  const cached = await getCachedImageInfo(item.libraryId, thumbPath, { maxWidth });
   if (cached) {
     const etag = `"${cached.cacheKey}"`;
 
@@ -148,6 +142,7 @@ export async function GET(
     // it can resize before sending instead of shipping the full-size original.
     const effectiveWidth = maxWidth ?? CACHE_WIDTH_DEFAULT;
     const result = await cacheImage(
+      item.libraryId,
       thumbPath,
       () => client.fetchImage(thumbPath, { width: effectiveWidth }),
       maxWidth ? { maxWidth } : undefined,
@@ -169,4 +164,4 @@ export async function GET(
       { status: 502 }
     );
   }
-}
+});

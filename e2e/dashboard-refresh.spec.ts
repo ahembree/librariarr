@@ -1,4 +1,6 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
+import { storeDashboardLayout } from "./seed";
+import { openDashboardInBrowser } from "./dashboard-nav";
 
 /**
  * Dashboard behaviour across a realtime refresh. The page reloads its data on
@@ -8,9 +10,10 @@ import { test, expect, type Page, type Request } from "@playwright/test";
  * deleted or disabled selection was kept, freezing the figures on a 404.
  *
  * The data routes are stubbed so the spec controls exactly which servers exist
- * and what each one's stats say, and `/api/events/stream` is held open until
- * the test releases one `sync:completed` event — the same event a real sync
- * delivers.
+ * and what each one's stats say — the dashboard is opened by a client-side
+ * navigation, since a full load reads them on the server — and
+ * `/api/events/stream` is held open until the test releases one event — `sync:completed` as a real sync delivers it,
+ * or `server:changed` as every server add, edit, disable and delete does.
  */
 
 const ALL_MOVIES = 111;
@@ -49,6 +52,13 @@ function server(id: string, name: string, enabled: boolean) {
   return { id, name, type: "PLEX", enabled, libraries: [], syncJobs: [] };
 }
 
+let restoreLayout: (() => Promise<void>) | undefined;
+
+test.afterEach(async () => {
+  await restoreLayout?.();
+  restoreLayout = undefined;
+});
+
 const isStats = (url: string) => new URL(url).pathname === "/api/media/stats";
 const isPath = (path: string) => (url: URL) => url.pathname === path;
 
@@ -61,8 +71,10 @@ interface Harness {
   setServers: (list: ReturnType<typeof server>[]) => void;
   /** Library types `/api/media/library-types` reports from now on. */
   setTypes: (types: string[]) => void;
-  /** Deliver one `sync:completed` event and wait for the page to refetch. */
+  /** Deliver one `sync:completed` event and wait for the page to refetch its stats. */
   fireSyncCompleted: () => Promise<void>;
+  /** Deliver one `server:changed` event and wait for the page to re-read the servers. */
+  fireServerChanged: () => Promise<void>;
 }
 
 async function setup(page: Page): Promise<Harness> {
@@ -74,7 +86,7 @@ async function setup(page: Page): Promise<Harness> {
   let types = ["MOVIE"];
   let layoutGets = 0;
   const statsRequests: Request[] = [];
-  let releaseStream: (() => void) | null = null;
+  let releaseStream: ((event: string) => void) | null = null;
 
   await page.route(isPath("/api/servers"), (route) =>
     route.request().method() === "GET"
@@ -101,11 +113,12 @@ async function setup(page: Page): Promise<Harness> {
     if (route.request().method() === "GET") layoutGets++;
     return route.continue();
   });
-  // Held open until the test releases it; `retry` keeps the browser from
-  // reconnecting (and resyncing every subscriber) for the rest of the test.
+  // Held open until the test releases it with one event; `retry` keeps the
+  // browser from reconnecting (and resyncing every subscriber) for the rest of
+  // the test.
   await page.route(isPath("/api/events/stream"), async (route) => {
     if (route.request().method() !== "GET") return route.fulfill({ status: 200 });
-    await new Promise<void>((resolve) => {
+    const event = await new Promise<string>((resolve) => {
       releaseStream = resolve;
     });
     await route.fulfill({
@@ -113,10 +126,18 @@ async function setup(page: Page): Promise<Harness> {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
       body:
         "retry: 600000\n\n" +
-        "event: connected\ndata: {}\n\n" +
-        `event: sync:completed\ndata: ${JSON.stringify({ type: "sync:completed", timestamp: Date.now() })}\n\n`,
+        `event: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n` +
+        // The route's own framing: the event name, then `{ timestamp, ...meta }`.
+        `event: ${event}\ndata: ${JSON.stringify({ timestamp: Date.now(), serverId: "srv-b" })}\n\n`,
     });
   });
+
+  const fire = async (event: string, refetched: (url: URL) => boolean) => {
+    await expect.poll(() => releaseStream !== null).toBe(true);
+    const response = page.waitForResponse((res) => refetched(new URL(res.url())));
+    releaseStream!(event);
+    await response;
+  };
 
   return {
     statsRequests,
@@ -127,14 +148,10 @@ async function setup(page: Page): Promise<Harness> {
     setTypes: (list) => {
       types = list;
     },
-    fireSyncCompleted: async () => {
-      await expect.poll(() => releaseStream !== null).toBe(true);
-      const refetched = page.waitForResponse(
-        (res) => new URL(res.url()).pathname === "/api/servers",
-      );
-      releaseStream!();
-      await refetched;
-    },
+    // A sync moves the figures; the server list is `server:changed`'s.
+    fireSyncCompleted: () => fire("sync:completed", (url) => url.pathname === "/api/media/stats"),
+    // Every route that adds, edits, disables or deletes a server emits it.
+    fireServerChanged: () => fire("server:changed", (url) => url.pathname === "/api/servers"),
   };
 }
 
@@ -155,7 +172,7 @@ async function selectServer(page: Page, name: string) {
 test.describe("dashboard refresh", () => {
   test("does not offer a disabled server", async ({ page }) => {
     await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
 
     await page.getByRole("combobox").filter({ hasText: "All Servers" }).first().click();
@@ -166,7 +183,7 @@ test.describe("dashboard refresh", () => {
 
   test("a refresh keeps the selected server's stats", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
 
     await selectServer(page, "Alpha");
@@ -182,26 +199,72 @@ test.describe("dashboard refresh", () => {
     await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
   });
 
+  test("the end of a sync asks for the stats once", async ({ page }) => {
+    const h = await setup(page);
+    let finished = false;
+    const job = () => ({
+      id: "job-1",
+      mediaServerId: "srv-b",
+      status: finished ? "COMPLETED" : "RUNNING",
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      completedAt: finished ? new Date().toISOString() : null,
+      error: null,
+      itemsProcessed: 5,
+      totalItems: 10,
+      currentLibrary: null,
+      mediaServer: { name: "Bravo", type: "PLEX" },
+    });
+    await page.route(isPath("/api/sync/status"), (route) => route.fulfill({ json: { jobs: [job()] } }));
+    await openDashboardInBrowser(page);
+    await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
+    await expect(page.getByText(/Syncing Bravo/)).toBeVisible();
+    const before = h.statsRequests.length;
+
+    finished = true;
+    await h.fireSyncCompleted();
+    // The indicator has seen the sync end by the time it announces it. It used
+    // to refresh the stats itself there, beside the page's own refetch.
+    await expect(page.getByText("Sync complete: Bravo")).toBeVisible();
+    expect(h.statsRequests.length - before).toBe(1);
+  });
+
   test("a refresh does not re-read the saved layout", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
-    expect(h.layoutGets()).toBe(1);
+    // The saved layout comes with the server render; the page never asks.
+    expect(h.layoutGets()).toBe(0);
 
     await h.fireSyncCompleted();
 
-    expect(h.layoutGets()).toBe(1);
+    expect(h.layoutGets()).toBe(0);
+  });
+
+  test("a visit after a client-side navigation reads the library types again", async ({ page }) => {
+    const h = await setup(page);
+    // The layout read none (the e2e database has no libraries), which the
+    // dashboard reads as every tile. Since then only Series is left.
+    h.setTypes(["SERIES"]);
+    await page.goto("/system/logs");
+    await page.getByRole("link", { name: /^Dashboard$/ }).first().click();
+    await page.waitForURL((url) => url.pathname === "/");
+
+    const library = page.locator("section", {
+      has: page.getByRole("heading", { name: "Library", exact: true }),
+    });
+    await expect(library.locator('a[href="/library/series"]')).toBeVisible();
+    await expect(movieTile(page)).toHaveCount(0);
   });
 
   test("a deleted selection falls back to all servers", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await selectServer(page, "Alpha");
     await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
 
     h.setServers([server("srv-b", "Bravo", true), server("srv-c", "Charlie", true)]);
     const before = h.statsRequests.length;
-    await h.fireSyncCompleted();
+    await h.fireServerChanged();
 
     await expect(
       page.getByRole("combobox").filter({ hasText: "All Servers" }).first(),
@@ -218,6 +281,14 @@ test.describe("dashboard refresh", () => {
 
   test("a server picked during the first stats load shows that server, not a failure", async ({ page }) => {
     await setup(page);
+    // Records whether the failure state was EVER rendered, however briefly.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __sawDashboardFailure: boolean };
+      w.__sawDashboardFailure = false;
+      new MutationObserver(() => {
+        if (document.body?.textContent?.includes("Failed to load dashboard")) w.__sawDashboardFailure = true;
+      }).observe(document, { childList: true, subtree: true, characterData: true });
+    });
     // Hold the first (all-servers) stats request and the picked server's one,
     // so the first can be answered — and dropped as stale — while the second
     // is still in flight. Registered after setup(), so it takes precedence;
@@ -235,7 +306,7 @@ test.describe("dashboard refresh", () => {
       },
     );
 
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect.poll(() => "all" in held).toBe(true);
     await selectServer(page, "Alpha");
     await expect.poll(() => "srv-a" in held).toBe(true);
@@ -245,13 +316,18 @@ test.describe("dashboard refresh", () => {
     );
     held.all();
     await firstAnswered;
-    // Every other first-load request is answered by now; the page used to
-    // read "settled with no stats" as a failure and replace the dashboard.
-    await page.waitForTimeout(500);
+    // Wait until every other first-load request has been applied — the saved
+    // layout and library types (Customize enabled) and the schedule info (the
+    // Next runs tile filled in) — which is when the page used to read
+    // "settled with no stats" as a failure and replace the dashboard.
+    await expect(page.getByRole("button", { name: /^Customize$/ })).toBeEnabled();
+    await expect(page.locator('a[href="/settings#scheduling"]', { hasText: "Next runs" })).toContainText("Detection");
     await expect(page.getByText("Failed to load dashboard")).toHaveCount(0);
 
     held["srv-a"]();
     await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
+    // Not even for a moment while the picked server's stats were in flight.
+    expect(await page.evaluate(() => (window as unknown as { __sawDashboardFailure: boolean }).__sawDashboardFailure)).toBe(false);
   });
 
   test("a type filter whose type has gone falls back to all types", async ({ page }) => {
@@ -259,7 +335,7 @@ test.describe("dashboard refresh", () => {
     h.setTypes(["MOVIE", "SERIES"]);
     // One custom timeline card, binned by year so its requests are told apart
     // from the library tiles' monthly sparklines; it sends the Insights filter
-    // as `type`. Registered after setup(), so it takes precedence.
+    // as `type`. Stored, not stubbed: the layout comes with the server render.
     const layout = {
       main: [
         {
@@ -272,18 +348,19 @@ test.describe("dashboard refresh", () => {
       series: [],
       music: [],
     };
-    await page.route(isPath("/api/settings/dashboard-layout"), (route) =>
-      route.fulfill({ json: { layout } }),
-    );
+    restoreLayout = await storeDashboardLayout(layout);
+    // Every custom card's data comes in one batch request; this card's entry
+    // is the timeline binned by year.
     const cardTypes: (string | null)[] = [];
     page.on("request", (req) => {
-      const url = new URL(req.url());
-      if (url.pathname === "/api/media/stats/timeline" && url.searchParams.get("bin") === "year") {
-        cardTypes.push(url.searchParams.get("type"));
+      if (new URL(req.url()).pathname !== "/api/media/stats/custom-batch") return;
+      const { cards } = req.postDataJSON() as { cards: { kind: string; bin?: string; type?: string }[] };
+      for (const card of cards) {
+        if (card.kind === "timeline" && card.bin === "year") cardTypes.push(card.type ?? null);
       }
     });
 
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     // Recently Added has its own "All Types" selector above this one.
     const insights = page.locator("section", {
       has: page.getByRole("heading", { name: "Insights", exact: true }),
@@ -302,25 +379,30 @@ test.describe("dashboard refresh", () => {
 
   test("a shelf tile retries artwork when a newer item takes it over", async ({ page }) => {
     const h = await setup(page);
-    const shelfItem = (id: string) => ({
-      id,
-      groupKey: "movie:group-1",
-      title: "Arrival",
-      year: 2016,
-      type: "MOVIE",
-      parentTitle: null,
-      albumTitle: null,
-      seasonNumber: null,
-      episodeNumber: null,
+    // A season tile: the route keys it by show and season, and its
+    // representative is one of the season's episodes — the newest arrival
+    // takes that over while the tile (keyed by `groupKey`) stays. A movie
+    // cannot: its group key is `item:<id>`, so a new id is a new tile.
+    const shelfItem = (id: string, episodeNumber: number) => ({
+      groupKey: "series:tvdb:305288::1",
+      memberCount: episodeNumber,
       addedAt: new Date().toISOString(),
-      thumbUrl: null,
-      parentThumbUrl: null,
-      seasonThumbUrl: null,
-      memberCount: 1,
+      id,
+      title: `Chapter ${episodeNumber}`,
+      year: 2016,
+      type: "SERIES",
+      parentTitle: "Stranger Things",
+      albumTitle: null,
+      seasonNumber: 1,
+      episodeNumber,
+      thumbUrl: `/library/metadata/${id}/thumb/1700000000`,
+      parentThumbUrl: "/library/metadata/1000/thumb/1700000000",
+      seasonThumbUrl: "/library/metadata/1001/thumb/1700000000",
+      groupTotal: 1,
     });
-    let representative = "old-item";
+    let representative = shelfItem("old-item", 2);
     await page.route(isPath("/api/media/recently-added"), (route) =>
-      route.fulfill({ json: { items: [shelfItem(representative)], total: 1 } }),
+      route.fulfill({ json: { items: [representative], total: 1 } }),
     );
     // 1x1 transparent PNG.
     const png = Buffer.from(
@@ -335,15 +417,17 @@ test.describe("dashboard refresh", () => {
           : route.fulfill({ status: 200, contentType: "image/png", body: png }),
     );
 
-    await page.goto("/");
-    const tile = page.getByRole("button", { name: "Arrival (2016)" });
-    await expect(tile).toBeVisible();
-    // The old row's art 404s: the tile falls back to the icon.
+    await openDashboardInBrowser(page);
+    const tile = page.getByRole("button", { name: /^Stranger Things — Season 1 \(\d+ episodes\)$/ });
+    await expect(tile).toContainText("2 episodes");
+    // The old row's season art and its series fallback both 404: the tile
+    // falls back to the icon.
     await expect(tile.locator("img")).toHaveCount(0);
 
-    representative = "new-item";
+    representative = shelfItem("new-item", 3);
     await h.fireSyncCompleted();
 
-    await expect(tile.locator('img[src*="/api/media/new-item/image"]')).toHaveCount(1);
+    await expect(tile).toContainText("3 episodes");
+    await expect(tile.locator('img[src*="/api/media/new-item/image?type=season"]')).toHaveCount(1);
   });
 });

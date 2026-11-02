@@ -5,8 +5,15 @@ import {
   formatDuration,
   formatDurationClock,
   formatDate,
+  formatDateOnly,
   formatRelativeDate,
   formatUntil,
+  formatSyncEta,
+  formatDateTime,
+  formatWatchedAt,
+  localDateString,
+  toDatetimeLocalValue,
+  formatChannels,
 } from "@/lib/format";
 
 describe("formatFileSize", () => {
@@ -207,19 +214,52 @@ describe("formatDate", () => {
     expect(formatDate("", "Unknown")).toBe("Unknown");
   });
 
+  // formatDate renders the instant on the viewer's local calendar (always in
+  // en-US), so the inputs are built from local noon: the expected day then
+  // holds in every timezone.
   it("formats an ISO date string", () => {
-    // Use a UTC date to avoid timezone issues
-    const result = formatDate("2024-01-15T00:00:00.000Z");
-    // The exact output depends on the system locale, but should contain "January" and "2024"
-    expect(result).toContain("2024");
-    expect(result).toContain("January");
+    expect(formatDate(new Date(2024, 0, 15, 12).toISOString())).toBe("January 15, 2024");
   });
 
   it("formats another date correctly", () => {
-    const result = formatDate("2023-12-25T12:00:00.000Z");
-    expect(result).toContain("December");
-    expect(result).toContain("2023");
-    expect(result).toContain("25");
+    expect(formatDate(new Date(2023, 11, 25, 12).toISOString())).toBe("December 25, 2023");
+  });
+});
+
+describe("formatDateOnly", () => {
+  const origTZ = process.env.TZ;
+  afterEach(() => {
+    if (origTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = origTZ;
+  });
+
+  // A release date is a calendar day the sync stores as UTC midnight
+  // (`new Date("2010-07-16")`); read in local time it was the day before
+  // anywhere west of UTC.
+  it.each(["UTC", "America/Los_Angeles", "Pacific/Kiritimati", "Asia/Kolkata"])(
+    "shows the stored calendar day in %s",
+    (tz) => {
+      process.env.TZ = tz;
+      const stored = new Date("2010-07-16");
+      expect(formatDateOnly(stored.toISOString())).toBe("July 16, 2010");
+      expect(formatDateOnly(stored)).toBe("July 16, 2010");
+      expect(formatDateOnly("2010-07-16", "-", "short")).toBe("Jul 16, 2010");
+      expect(formatDateOnly("2023-01-01T00:00:00Z", "-", "short")).toBe("Jan 1, 2023");
+    },
+  );
+
+  it("keeps formatDate on the local calendar for real instants", () => {
+    process.env.TZ = "America/Los_Angeles";
+    // 03:00 UTC on the 16th is the evening of the 15th in Los Angeles.
+    expect(formatDate("2010-07-16T03:00:00Z")).toBe("July 15, 2010");
+  });
+
+  it("returns the fallback for a missing or unreadable value", () => {
+    expect(formatDateOnly(null)).toBe("-");
+    expect(formatDateOnly(undefined)).toBe("-");
+    expect(formatDateOnly("")).toBe("-");
+    expect(formatDateOnly(null, "Never")).toBe("Never");
+    expect(formatDateOnly("not a date", "N/A")).toBe("N/A");
   });
 });
 
@@ -341,5 +381,128 @@ describe("formatUntil", () => {
   it("returns weeks for 7+ days", () => {
     expect(formatUntil("2024-06-22T12:00:00.000Z")).toBe("in 1w");
     expect(formatUntil("2024-06-29T12:00:00.000Z")).toBe("in 2w");
+  });
+});
+
+describe("formatRelativeDate with largestUnit day", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-06-15T12:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts in days past the first, never weeks or 'Yesterday'", () => {
+    const opts = { largestUnit: "day" } as const;
+    expect(formatRelativeDate("2024-06-15T11:59:30.000Z", opts)).toBe("just now");
+    expect(formatRelativeDate("2024-06-15T11:00:00.000Z", opts)).toBe("1h ago");
+    expect(formatRelativeDate("2024-06-14T12:00:00.000Z", opts)).toBe("1d ago");
+    expect(formatRelativeDate("2024-05-16T12:00:00.000Z", opts)).toBe("30d ago");
+  });
+
+  it("takes a Date as well as a string", () => {
+    expect(formatRelativeDate(new Date("2024-06-15T11:55:00.000Z"))).toBe("5m ago");
+  });
+});
+
+describe("formatSyncEta", () => {
+  const start = "2024-06-15T12:00:00.000Z";
+  const at = (seconds: number) => new Date(start).getTime() + seconds * 1000;
+
+  it("has no estimate without a rate", () => {
+    expect(formatSyncEta(start, 0, 100, at(60))).toBeNull();
+    expect(formatSyncEta(start, 10, 0, at(60))).toBeNull();
+    expect(formatSyncEta(start, 10, 100, at(4))).toBeNull();
+  });
+
+  it("estimates from the rate so far, in seconds, minutes, then hours and minutes", () => {
+    // 10 items in 10s, 90 left: 90s.
+    expect(formatSyncEta(start, 10, 100, at(10))).toBe("~2m left");
+    expect(formatSyncEta(start, 50, 100, at(10))).toBe("~10s left");
+    expect(formatSyncEta(start, 10, 1000, at(60))).toBe("~1h 39m left");
+  });
+});
+
+describe("formatDateTime", () => {
+  it("writes the locale's date and time, or the fallback", () => {
+    const d = new Date("2024-06-15T12:34:56.000Z");
+    expect(formatDateTime(d.toISOString())).toBe(d.toLocaleString());
+    expect(formatDateTime(d)).toBe(d.toLocaleString());
+    expect(formatDateTime(null)).toBe("-");
+    expect(formatDateTime(null, "Never")).toBe("Never");
+    expect(formatDateTime("nonsense", "Never")).toBe("Never");
+  });
+});
+
+describe("formatWatchedAt", () => {
+  const now = new Date(2024, 5, 15, 20, 0);
+  const time = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  it("always carries the clock time", () => {
+    const today = new Date(2024, 5, 15, 9, 5);
+    const yesterday = new Date(2024, 5, 14, 23, 30);
+    const earlier = new Date(2024, 5, 3, 21, 4);
+    expect(formatWatchedAt(today.toISOString(), undefined, now)).toBe(`Today ${time(today)}`);
+    expect(formatWatchedAt(yesterday, undefined, now)).toBe(`Yesterday ${time(yesterday)}`);
+    const day = earlier.toLocaleDateString([], { month: "short", day: "numeric" });
+    expect(formatWatchedAt(earlier, undefined, now)).toBe(`${day} ${time(earlier)}`);
+  });
+
+  it("adds the year once it is not this one", () => {
+    const old = new Date(2022, 0, 2, 8, 0);
+    const day = old.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+    expect(formatWatchedAt(old, undefined, now)).toBe(`${day} ${time(old)}`);
+  });
+
+  it("answers the fallback for a missing or unreadable date", () => {
+    expect(formatWatchedAt(null)).toBe("Unknown date");
+    expect(formatWatchedAt(null, "-")).toBe("-");
+    expect(formatWatchedAt("nope", "-")).toBe("-");
+  });
+});
+
+describe("local date input values", () => {
+  it("writes the date and date-time input formats in local time", () => {
+    const d = new Date(2024, 0, 5, 7, 3);
+    expect(localDateString(d)).toBe("2024-01-05");
+    expect(toDatetimeLocalValue(d)).toBe("2024-01-05T07:03");
+  });
+});
+
+describe("formatChannels", () => {
+  it("names the common layouts, and counts the rest", () => {
+    expect(formatChannels(1)).toBe("Mono");
+    expect(formatChannels(2)).toBe("Stereo");
+    expect(formatChannels(6)).toBe("5.1");
+    expect(formatChannels(8)).toBe("7.1");
+    expect(formatChannels(4)).toBe("4ch");
+  });
+
+  it("spells them out when verbose", () => {
+    expect(formatChannels(1, { verbose: true })).toBe("Mono (1.0)");
+    expect(formatChannels(2, { verbose: true })).toBe("Stereo (2.0)");
+    expect(formatChannels(3, { verbose: true })).toBe("2.1");
+    expect(formatChannels(6, { verbose: true })).toBe("5.1 Surround");
+    expect(formatChannels(8, { verbose: true })).toBe("7.1 Surround");
+    expect(formatChannels(5, { verbose: true })).toBe("5ch");
+  });
+});
+
+describe("formatRelativeDate and formatUntil against a given time", () => {
+  // A server-rendered page formats against its render time until it has
+  // hydrated, so the two renders write the same text.
+  const now = Date.parse("2026-03-10T12:00:00Z");
+
+  it("measures from `now`, not the clock", () => {
+    expect(formatRelativeDate("2026-03-10T11:55:00Z", { now })).toBe("5m ago");
+    expect(formatRelativeDate("2026-03-08T12:00:00Z", { now, largestUnit: "day" })).toBe("2d ago");
+    expect(formatUntil("2026-03-10T15:00:00Z", now)).toBe("in 3h");
+  });
+
+  it("falls back to the clock when `now` is undefined", () => {
+    const soon = new Date(Date.now() + 2 * 3_600_000 + 60_000).toISOString();
+    expect(formatUntil(soon, undefined)).toBe("in 2h");
+    expect(formatRelativeDate(new Date(Date.now() - 120_000), { now: undefined })).toBe("2m ago");
   });
 });

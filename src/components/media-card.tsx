@@ -3,7 +3,10 @@
 import { useState, memo } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { intentHandlers } from "@/lib/intent-prefetch";
+import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 import { cn } from "@/lib/utils";
+import type { QualitySegment } from "@/lib/media/quality-chips";
 import { Card } from "@/components/ui/card";
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
@@ -23,10 +26,28 @@ interface ServerPresence {
   serverType: string;
 }
 
-export interface QualitySegment {
-  color: string;
-  weight: number;
-  label?: string;
+/**
+ * The thin coloured bar under a card's artwork, one segment per quality chip
+ * (`qualitySegments` in `src/lib/media/quality-chips.ts`). Rendered even when
+ * empty so a card keeps its height in a virtualized grid.
+ */
+export function QualityBar({ segments, className }: { segments?: QualitySegment[]; className?: string }) {
+  return (
+    <div className={cn("flex w-full shrink-0 gap-1 px-2 py-1 bg-card", className)} aria-hidden="true">
+      {segments && segments.length > 0 ? (
+        segments.map((seg, i) => (
+          <div
+            key={i}
+            className="h-1 min-w-1 rounded-full"
+            style={{ backgroundColor: seg.color, flex: seg.weight }}
+            title={seg.label}
+          />
+        ))
+      ) : (
+        <div className="h-1" />
+      )}
+    </div>
+  );
 }
 
 /** Fixed height of the text block under the poster, in px. Exported so the
@@ -48,7 +69,7 @@ const GRID_IMAGE_WIDTH = {
  *  without the split the browser races the visible row against off-screen ones. */
 export const PRIORITY_ROWS = 2;
 
-export interface MediaCardProps {
+interface MediaCardProps {
   imageUrl: string;
   title: string;
   href?: string;
@@ -64,6 +85,12 @@ export interface MediaCardProps {
   /** Set on the first rows of a grid so the artwork the user is actually
    *  looking at loads eagerly instead of queuing behind off-screen cards. */
   priority?: boolean;
+  /**
+   * The media item the card opens. Its record is fetched when the pointer
+   * rests on the card (or it is pressed or focused), so the detail page or
+   * panel the click opens finds it already loaded.
+   */
+  prefetchMediaId?: string;
 }
 
 const FALLBACK_ICONS = {
@@ -86,9 +113,12 @@ export const MediaCard = memo(function MediaCard({
   fallbackIcon = "movie",
   hoverContent,
   priority = false,
+  prefetchMediaId,
 }: MediaCardProps) {
   const [imgError, setImgError] = useState(false);
   const FallbackComponent = FALLBACK_ICONS[fallbackIcon];
+
+  const intent = intentHandlers(prefetchMediaId ? () => prefetchMediaRecord(prefetchMediaId) : undefined);
 
   const card = (
     <Card
@@ -97,6 +127,7 @@ export const MediaCard = memo(function MediaCard({
         !href && "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
       )}
       {...(!href && {
+        ...intent,
         onClick,
         onKeyDown: (e: React.KeyboardEvent) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -136,17 +167,7 @@ export const MediaCard = memo(function MediaCard({
       </div>
 
       {/* Quality bar — always rendered for consistent card height in virtualizer */}
-      <div className="flex w-full shrink-0 gap-1 px-2 py-1 bg-card" aria-hidden="true">
-        {qualityBar && qualityBar.length > 0 && qualityBar.map((seg, i) => (
-          <div
-            key={i}
-            className="h-1 min-w-1 rounded-full"
-            style={{ backgroundColor: seg.color, flex: seg.weight }}
-            title={seg.label}
-          />
-        ))}
-        {(!qualityBar || qualityBar.length === 0) && <div className="h-1" />}
-      </div>
+      <QualityBar segments={qualityBar} />
 
       {/* Content block — fixed height for virtualizer stability:
           title (2 lines reserved), stacked icon metadata rows, footer chips. */}
@@ -193,6 +214,7 @@ export const MediaCard = memo(function MediaCard({
     <Link
       href={href}
       onClick={onClick}
+      {...intent}
       className="block rounded-xl focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
     >
       {card}

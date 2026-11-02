@@ -58,12 +58,20 @@ const STALE = Date.now() - 60 * 60 * 1000;
 const ATTACKER = "https://attacker.example";
 
 const families = [
-  { name: "radarr", create: createTestRadarrInstance, put: radarrPut, test: radarrTest, model: "radarrInstance" },
-  { name: "sonarr", create: createTestSonarrInstance, put: sonarrPut, test: sonarrTest, model: "sonarrInstance" },
-  { name: "lidarr", create: createTestLidarrInstance, put: lidarrPut, test: lidarrTest, model: "lidarrInstance" },
-  { name: "seerr", create: createTestSeerrInstance, put: seerrPut, test: seerrTest, model: "seerrInstance" },
-  { name: "tracearr", create: createTestTracearrInstance, put: tracearrPut, test: tracearrTest, model: "tracearrInstance" },
+  { name: "radarr", label: "Radarr", create: createTestRadarrInstance, put: radarrPut, test: radarrTest, model: "radarrInstance" },
+  { name: "sonarr", label: "Sonarr", create: createTestSonarrInstance, put: sonarrPut, test: sonarrTest, model: "sonarrInstance" },
+  { name: "lidarr", label: "Lidarr", create: createTestLidarrInstance, put: lidarrPut, test: lidarrTest, model: "lidarrInstance" },
+  { name: "seerr", label: "Seerr", create: createTestSeerrInstance, put: seerrPut, test: seerrTest, model: "seerrInstance" },
+  { name: "tracearr", label: "Tracearr", create: createTestTracearrInstance, put: tracearrPut, test: tracearrTest, model: "tracearrInstance" },
 ] as const;
+
+/** The refusal `reauthRequired` sends for `refuseStoredKeyToNewUrl`. */
+function expectStoredKeyRefusal(body: { code: string; error: string }, label: string) {
+  expect(body.code).toBe("reauth_required");
+  expect(body.error).toContain(
+    `Pointing ${label} at a new URL with its saved API key needs a sign-in from the last 15 minutes.`,
+  );
+}
 
 describe("an integration's stored API key never goes to a new URL on a stale session", () => {
   beforeEach(async () => {
@@ -89,8 +97,8 @@ describe("an integration's stored API key never goes to a new URL on a stale ses
           method: "POST",
           body: { url: ATTACKER },
         });
-        const body = await expectJson<{ code: string }>(res, 403);
-        expect(body.code).toBe("reauth_required");
+        const body = await expectJson<{ code: string; error: string }>(res, 403);
+        expectStoredKeyRefusal(body, fam.label);
         expect(built).toEqual([]);
       });
 
@@ -105,11 +113,13 @@ describe("an integration's stored API key never goes to a new URL on a stale ses
           // Disabling skips the connection test: the URL would still be stored.
           body: { url: ATTACKER, enabled: false },
         });
-        await expectJson(res, 403);
+        const body = await expectJson<{ code: string; error: string }>(res, 403);
+        expectStoredKeyRefusal(body, fam.label);
         expect(built).toEqual([]);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const row = await (getTestPrisma() as any)[fam.model].findUnique({ where: { id: instance.id } });
         expect(row.url).toBe("http://inside:1234");
+        expect(row.enabled).toBe(true);
       });
 
       it("allows a new URL after a recent sign-in", async () => {
@@ -122,7 +132,7 @@ describe("an integration's stored API key never goes to a new URL on a stale ses
           method: "POST",
           body: { url: "https://moved.example" },
         });
-        await expectJson(res, 200);
+        expect(await expectJson(res, 200)).toEqual({ ok: true });
         expect(built).toEqual([{ url: "https://moved.example", key: "stored-secret" }]);
       });
 
@@ -136,14 +146,14 @@ describe("an integration's stored API key never goes to a new URL on a stale ses
           method: "POST",
           body: { url: "https://moved.example", apiKey: "brand-new" },
         });
-        await expectJson(withKey, 200);
+        expect(await expectJson(withKey, 200)).toEqual({ ok: true });
 
         const sameUrl = await callRouteWithParams(fam.test, { id: instance.id }, {
           url: `/api/integrations/${fam.name}/${instance.id}/test-connection`,
           method: "POST",
           body: { url: "http://inside:1234/" },
         });
-        await expectJson(sameUrl, 200);
+        expect(await expectJson(sameUrl, 200)).toEqual({ ok: true });
         expect(built).toEqual([
           { url: "https://moved.example", key: "brand-new" },
           { url: "http://inside:1234/", key: "stored-secret" },
@@ -162,8 +172,9 @@ describe("an integration's stored API key never goes to a new URL on a stale ses
           body: {},
         });
         const body = await expectJson<{ ok: boolean; error: string }>(res, 200);
-        expect(body.ok).toBe(false);
-        expect(body.error).not.toContain("192.168.1.20");
+        expect(body).toEqual({ ok: false, error: "connect ECONNREFUSED [internal]:7878" });
+        // The stored URL and key were tested — no new URL, nothing to refuse.
+        expect(built).toEqual([{ url: instance.url, key: instance.apiKey }]);
       });
     });
   }

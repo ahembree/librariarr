@@ -1,18 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useState, useCallback, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel, QUALITY_ORDER } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import { cn } from "@/lib/utils";
 import { MediaDetailHero } from "@/components/media-detail-hero";
+import { DetailPageStates, genreChips } from "@/components/media-detail-parts";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
 import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
@@ -21,47 +22,64 @@ import { useCardDisplay, SEASON_EPISODE_TOGGLES } from "@/hooks/use-card-display
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
-import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import type { MediaListItem } from "@/lib/types";
+import { useBackOverride, useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+import { useDetailChildren } from "@/hooks/use-detail-children";
 import { IntegrationsSection } from "@/components/integrations-section";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 import { PlayHistory } from "@/components/play-history";
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "Unknown";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
+const PLAY_LINKS: Parameters<typeof useMediaDetailRecord>[1]["playLinks"] = [
+  ["Season", "parentRatingKey"],
+  ["Series", "grandparentRatingKey"],
+  ["Episode", "ratingKey"],
+];
+
+const BACK_LABELS = {
+  "/library/series/seasons": "All Seasons",
+  "/library/series/episodes": "All Episodes",
+};
+
+const pickEpisodes = (body: Record<string, unknown>) => body.items as MediaListItem[] | undefined;
+
+// Named by its own title: the show and season are the page's heading.
+function episodeTableHover(ep: MediaListItem) {
+  return (
+    <MediaHoverPopover
+      summaryUrl={hoverSummaryUrl(ep.id)}
+      imageUrl={`/api/media/${ep.id}/image?type=parent`}
+      data={hoverDataFromListItem(ep)}
+    />
+  );
 }
 
 export default function SeasonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { getBadgeStyle, getHex } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { size, setSize, landscapeGridStyle } = useCardSize();
-  const [item, setItem] = useState<MediaItemWithRelations | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [episodes, setEpisodes] = useState<MediaListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  // Token guards against a stale slow response landing after a quick id change.
-  const reqToken = useRef(0);
+  // The episodes are asked for by this page's id, beside the record — they
+  // used to wait for it, to read its show and season — and both are re-read
+  // together on every `sync:completed` (new/removed items) without a manual
+  // refresh. The Arr/Seerr cards need only the id, so their requests start
+  // with them, once per id.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "SERIES",
+    plays: false,
+    playLinks: PLAY_LINKS,
+    refetchOnTick: true,
+    children: "episodes",
+  });
+  const episodeList = useDetailChildren(id, "episodes", syncTick, pickEpisodes);
+  const episodes = episodeList.items;
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
     "season-detail-view-mode",
     "cards",
   );
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const searchParams = useSearchParams();
-  const backOverride = useMemo(() => {
-    const from = searchParams.get("from");
-    if (!from) return null;
-    const labels: Record<string, string> = {
-      "/library/series/seasons": "All Seasons",
-      "/library/series/episodes": "All Episodes",
-    };
-    const label = labels[from];
-    return label ? { href: from, label } : null;
-  }, [searchParams]);
+  const backOverride = useBackOverride(BACK_LABELS);
 
   const handleSort = useCallback(
     (field: string) => {
@@ -75,48 +93,7 @@ export default function SeasonDetailPage() {
     [sortBy]
   );
 
-  const [syncTick, setSyncTick] = useState(0);
-  // Auto-update on real-time sync (new/removed items) without a manual refresh.
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchData() {
-      try {
-        const itemRes = await fetch(`/api/media/${id}`);
-        const itemData = await itemRes.json();
-        if (token !== reqToken.current) return;
-        if (!itemData.item) return;
-        setItem(itemData.item);
-        setPlayServers(buildPlayLinks(itemData.playServers || [], [
-          ["Season", "parentRatingKey"],
-          ["Series", "grandparentRatingKey"],
-          ["Episode", "ratingKey"],
-        ]));
-
-        const parentTitle = itemData.item.parentTitle;
-        const seasonNumber = itemData.item.seasonNumber ?? 0;
-        if (!parentTitle) return;
-
-        // Scope episodes by series identity when available so a season of one
-        // show never pulls in a same-titled show's episodes.
-        const seriesParam = itemData.item.seriesKey
-          ? `seriesKey=${encodeURIComponent(itemData.item.seriesKey)}`
-          : `parentTitle=${encodeURIComponent(parentTitle)}`;
-        const episodesRes = await fetch(
-          `/api/media/series?${seriesParam}&seasonNumber=${seasonNumber}&sortBy=episodeNumber&sortOrder=asc&limit=0`
-        );
-        const episodesData = await episodesRes.json();
-        if (token !== reqToken.current) return;
-        setEpisodes(episodesData.items || []);
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchData();
-  }, [id, syncTick]);
+  const openEpisode = useCallback((ep: MediaListItem) => router.push(`/library/series/episode/${ep.id}`), [router]);
 
   const sortedEpisodes = useMemo(() => {
     const sorted = [...episodes].sort((a, b) => {
@@ -132,29 +109,16 @@ export default function SeasonDetailPage() {
     return sortOrder === "desc" ? sorted.reverse() : sorted;
   }, [episodes, sortBy, sortOrder]);
 
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
-
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Season not found</p>
-      </div>
-    );
-  }
+  // The page renders with its episodes, as it did when it waited for both in turn.
+  const pending = loading || (item !== null && !episodeList.loaded);
+  if (pending || !item) return <DetailPageStates loading={pending} notFoundLabel="Season not found" />;
 
   const seriesTitle = item.parentTitle || item.title;
   const seasonNumber = item.seasonNumber ?? 0;
   const seasonLabel = seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`;
   const totalSize = episodes.reduce((sum, ep) => sum + (ep.fileSize ? Number(ep.fileSize) : 0), 0);
 
-  // Quality breakdown (normalize to standard labels so QUALITY_ORDER works)
+  // Quality breakdown, under the standard labels the aggregate routes use
   const qualityCounts: Record<string, number> = {};
   for (const ep of episodes) {
     const label = normalizeResolutionLabel(ep.resolution);
@@ -174,27 +138,15 @@ export default function SeasonDetailPage() {
       }
       badges={
         <>
-          {QUALITY_ORDER
-            .filter((q) => qualityCounts[q])
-            .map((label) => (
-              <ColorChip key={label} style={getBadgeStyle("resolution", label)}>
-                {label}: {qualityCounts[label]}
-              </ColorChip>
-            ))}
+          {qualityChips({ qualityCounts }, "video").map((chip) => (
+            <QualityChip key={chip.label} chip={chip} />
+          ))}
           {totalSize > 0 && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
         </>
       }
-      genres={
-        item.genres && item.genres.length > 0
-          ? item.genres.map((genre) => (
-              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
-                {genre}
-              </ColorChip>
-            ))
-          : undefined
-      }
+      genres={genreChips(item.genres)}
       backHref={backOverride?.href ?? `/library/series/show/${item.id}`}
       backLabel={backOverride?.label ?? seriesTitle}
       useParentArt
@@ -249,38 +201,13 @@ export default function SeasonDetailPage() {
           {viewMode === "table" ? (
             <MediaTable
               items={sortedEpisodes}
-              onItemClick={(ep) => router.push(`/library/series/episode/${ep.id}`)}
+              onItemClick={openEpisode}
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSort={handleSort}
               mediaType="SERIES"
               hideParentTitle
-              renderHoverContent={(ep) => (
-                <MediaHoverPopover
-                  summaryUrl={`/api/media/${ep.id}`}
-                  imageUrl={`/api/media/${ep.id}/image?type=parent`}
-                  data={{
-                    title: ep.title,
-                    year: ep.year,
-                    contentRating: ep.contentRating,
-                    rating: ep.rating,
-                    audienceRating: ep.audienceRating,
-                    ratingImage: ep.ratingImage,
-                    audienceRatingImage: ep.audienceRatingImage,
-                    duration: ep.duration,
-                    resolution: ep.resolution,
-                    dynamicRange: ep.dynamicRange,
-                    audioProfile: ep.audioProfile,
-                    fileSize: ep.fileSize,
-                    genres: ep.genres,
-                    studio: ep.studio,
-                    playCount: ep.playCount,
-                    lastPlayedAt: ep.lastPlayedAt,
-                    addedAt: ep.addedAt,
-                    servers: ep.servers,
-                  }}
-                />
-              )}
+              renderHoverContent={episodeTableHover}
             />
           ) : (
             <div style={landscapeGridStyle}>
@@ -294,31 +221,8 @@ export default function SeasonDetailPage() {
                   aspectRatio="landscape"
                   fallbackIcon="series"
                   href={`/library/series/episode/${ep.id}`}
-                  hoverContent={
-                    <MediaHoverPopover
-                      summaryUrl={`/api/media/${ep.id}`}
-                      data={{
-                        title: ep.title,
-                        year: ep.year,
-                        contentRating: ep.contentRating,
-                        rating: ep.rating,
-                        audienceRating: ep.audienceRating,
-                        ratingImage: ep.ratingImage,
-                        audienceRatingImage: ep.audienceRatingImage,
-                        duration: ep.duration,
-                        resolution: ep.resolution,
-                        dynamicRange: ep.dynamicRange,
-                        audioProfile: ep.audioProfile,
-                        fileSize: ep.fileSize,
-                        genres: ep.genres,
-                        studio: ep.studio,
-                        playCount: ep.playCount,
-                        lastPlayedAt: ep.lastPlayedAt,
-                        addedAt: ep.addedAt,
-                        servers: ep.servers,
-                      }}
-                    />
-                  }
+                  prefetchMediaId={ep.id}
+                  hoverContent={<MediaHoverPopover summaryUrl={hoverSummaryUrl(ep.id)} data={hoverDataFromListItem(ep)} />}
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
@@ -328,21 +232,7 @@ export default function SeasonDetailPage() {
                       {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  qualityBar={
-                    show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                      ? [
-                          ...(show("badges", "resolution") && ep.resolution
-                            ? [{ color: getHex("resolution", formatResolution(ep.resolution)), weight: 1, label: formatResolution(ep.resolution) }]
-                            : []),
-                          ...(show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR"
-                            ? [{ color: getHex("dynamicRange", ep.dynamicRange), weight: 1, label: ep.dynamicRange }]
-                            : []),
-                          ...(show("badges", "audioProfile") && ep.audioProfile
-                            ? [{ color: getHex("audioProfile", ep.audioProfile), weight: 1, label: ep.audioProfile }]
-                            : []),
-                        ]
-                      : undefined
-                  }
+                  qualityBar={qualitySegments(qualityChips(ep, "video"), getHex, (toggle) => show("badges", toggle))}
                 />
               ))}
             </div>

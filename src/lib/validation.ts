@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
+import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -155,6 +156,14 @@ export const deleteCeilingSchema = z.object({
     .nullable(),
 });
 
+/** Closing the "What's new" dialog: the version whose notes it showed. */
+export const whatsNewSeenSchema = z.object({
+  version: z
+    .string()
+    .max(64)
+    .regex(/^v?\d+\.\d+(\.\d+)?([-+][0-9A-Za-z.-]+)?$/, "Not a version number"),
+});
+
 export const actionRetentionSchema = z.object({
   actionHistoryRetentionDays: z.number().int().min(0).max(365),
 });
@@ -174,9 +183,15 @@ export const chipColorsSchema = z.object({
   ),
 });
 
+// The revision a save was based on (`AppSettings.*Revision`): a save carrying
+// an older one is refused with 409, since another tab or device saved since.
+// Optional so a caller that never read one still saves unconditionally.
+const settingsRevisionSchema = z.number().int().min(0).max(2_147_483_647).optional();
+
 export const columnPreferencesSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   columns: z.array(z.unknown()).max(50),
+  revision: settingsRevisionSchema,
 });
 
 export const cardDisplayPreferencesSchema = z.object({
@@ -195,6 +210,7 @@ export const dashboardLayoutSchema = z.object({
     (val) => JSON.stringify(val).length <= 10_000,
     "Layout data exceeds maximum size"
   ),
+  revision: settingsRevisionSchema,
 });
 
 const discordWebhookUrlSchema = z
@@ -219,10 +235,15 @@ const discordWebhookUrlSchema = z
   )
   .optional();
 
+// "" is kept, not turned into "absent": the settings page sends "" to clear a
+// saved avatar, and the PUT leaves an absent field as it is — so dropping ""
+// made clearing it impossible.
+const discordAvatarUrlSchema = z.union([z.string().url(), z.literal("")]).optional();
+
 export const discordSettingsSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: discordAvatarUrlSchema,
   notifyMaintenance: z.boolean().optional(),
   notifyApiKeys: z.boolean().optional(),
 });
@@ -230,7 +251,7 @@ export const discordSettingsSchema = z.object({
 export const discordTestSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: discordAvatarUrlSchema,
 });
 
 export const dedupSettingsSchema = z.object({
@@ -283,7 +304,7 @@ export const runJobSchema = z.object({
 export const maintenanceSchema = z.object({
   enabled: z.boolean(),
   message: z.string().optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   discordNotifyMaintenance: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -291,7 +312,7 @@ export const maintenanceSchema = z.object({
 export const transcodeManagerSchema = z.object({
   enabled: z.boolean().optional(),
   message: z.string().optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   criteria: z.record(z.string(), z.boolean()).optional(),
   excludedUsers: z.array(z.string()).optional(),
   exemptHardware: z.boolean().optional(),
@@ -319,7 +340,8 @@ export const terminateSessionSchema = z.object({
 // specific user-facing messages. Keep this schema permissive so those messages
 // surface instead of a generic "Validation failed".
 export const blackoutCreateSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  // Trimmed first: "   " passed `min(1)` and was stored as "".
+  name: z.string().trim().min(1, "Name is required"),
   scheduleType: z.enum(["one_time", "recurring"]),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
@@ -331,7 +353,7 @@ export const blackoutCreateSchema = z.object({
   // Bounded + integer to match the maintenance/transcode delays: an unbounded
   // value makes warn_then_terminate effectively never fire, and a non-integer
   // would 500 on write to the Int column.
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   enabled: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -347,8 +369,9 @@ export const prerollValidatePathSchema = z.object({
 });
 
 export const prerollPresetCreateSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  path: z.string().min(1, "Path is required"),
+  // Trimmed first: "   " passed `min(1)` and was stored as "".
+  name: z.string().trim().min(1, "Name is required"),
+  path: z.string().trim().min(1, "Path is required"),
 });
 
 export const prerollPresetUpdateSchema = prerollPresetCreateSchema.partial();
@@ -378,7 +401,7 @@ const VALID_STREAM_QUERY_TYPES = new Set(["audio", "video", "subtitle"]);
 function validateRuleStructure(rules: Record<string, unknown>[]): boolean {
   for (const item of rules) {
     if ("rules" in item) {
-      // RuleGroup format: must have condition and rules array
+      // ConditionGroup format: must have condition and rules array
       if (!Array.isArray(item.rules)) return false;
       if (item.condition !== "AND" && item.condition !== "OR") return false;
       // Validate streamQuery property if present
@@ -497,6 +520,8 @@ export const rulePreviewSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const ruleTestItemSchema = z.object({
@@ -510,6 +535,8 @@ export const ruleTestItemSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const actionExecuteSchema = z.object({
@@ -568,10 +595,6 @@ export const exceptionCreateSchema = z.object({
   scope: z
     .enum(["individual", "series", "artist", "album"])
     .default("individual"),
-});
-
-export const exceptionUpdateSchema = z.object({
-  reason: exceptionReasonSchema.optional(),
 });
 
 export const exceptionBulkDeleteSchema = z.object({
@@ -664,7 +687,7 @@ export const apiKeyCreateSchema = z.object({
 export const apiMaintenanceSchema = z.strictObject({
   enabled: z.boolean(),
   message: z.string().max(500, "Message must be 500 characters or fewer").optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
 });
 
 /**
@@ -817,6 +840,15 @@ export const arrTestConnectionSchema = z.object({
 
 // ─── Server schemas ───
 
+// The media servers `createMediaServerClient` can build. A free string let an
+// unknown type through validation and the factory threw, answering 500.
+const mediaServerTypeSchema = z.enum(["PLEX", "JELLYFIN", "EMBY"], {
+  error: (issue) =>
+    issue.input === undefined || issue.input === ""
+      ? "Server type is required"
+      : "Server type must be PLEX, JELLYFIN or EMBY",
+});
+
 /**
  * `POST /api/servers`. A Plex server picked from discovery sends its
  * `machineId` and no `accessToken`: the route looks the token up on plex.tv
@@ -832,7 +864,7 @@ export const serverAddSchema = z.object({
   accessToken: z.string().min(1, "Access token is required").optional(),
   machineId: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
-  type: z.string().optional(),
+  type: mediaServerTypeSchema.optional(),
 }).refine(
   (data) => data.accessToken !== undefined || (!!data.machineId && (data.type ?? "PLEX") === "PLEX"),
   { message: "Access token is required", path: ["accessToken"] }
@@ -876,17 +908,8 @@ export const serverTestSchema = z.object({
     "URL must start with http:// or https://"
   ),
   accessToken: z.string().min(1, "Access token is required"),
-  type: z.string().min(1, "Server type is required"),
+  type: mediaServerTypeSchema,
   tlsSkipVerify: z.boolean().optional(),
-});
-
-// ─── Media / Requests schemas ───
-
-export const arrActionSchema = z.object({
-  action: z.string().min(1, "Action is required"),
-  instanceId: z.string().min(1, "Instance ID is required"),
-  arrItemId: z.coerce.number(),
-  type: z.enum(["radarr", "sonarr", "lidarr"]),
 });
 
 /**
@@ -933,9 +956,9 @@ const queryGroupSchema: z.ZodType = z.lazy(() =>
   })
 );
 
-export const queryDefinitionSchema = z.object({
+const queryDefinitionSchema = z.object({
   mediaTypes: z.array(z.enum(["MOVIE", "SERIES", "MUSIC"])).max(3),
-  serverIds: z.array(z.string()).max(20),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS),
   groups: z.array(queryGroupSchema).max(20),
   sortBy: z.string().min(1).default("title"),
   sortOrder: z.enum(["asc", "desc"]).default("asc"),
@@ -960,7 +983,7 @@ export const queryColumnValuesSchema = z.object({
     .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
     .max(MAX_COLUMN_VALUE_ITEMS),
   fields: z.array(z.string().min(1).max(100)).min(1).max(200),
-  serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS).optional().default([]),
   arrServerIds: z
     .object({
       radarr: z.string().max(200).optional(),
@@ -1165,4 +1188,57 @@ export const aiChatSchema = z.object({
     .array(aiChatMessageSchema)
     .min(1, "At least one message is required")
     .max(40, "Conversation is too long"),
+});
+
+// ─── API routes (perf sweep, area C) ───
+
+/**
+ * HH:mm, 00:00–23:59, as the blackout and preroll schedule routes accept it.
+ * The looser \d{2}:\d{2} accepted e.g. "27:99", which stored a schedule whose
+ * window never activates and gave the enforcer wrong minute math. One copy
+ * here: each of the four routes carried its own.
+ */
+export const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Most cards one `POST /api/media/stats/custom-batch` answers. */
+export const MAX_CUSTOM_STATS_BATCH = 50;
+
+const statsServerIdSchema = z.string().min(1).max(200).optional();
+const statsDimensionSchema = z.string().min(1).max(64);
+
+/**
+ * One custom dashboard card's data request, as the card sends it to the route
+ * named by `kind` (`timeline`, `crossTab`, `custom`). Only the shape is
+ * checked here; what each value may be is that route's own check, so a card
+ * the route refuses comes back as that route's 400.
+ */
+const customStatsCardRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("timeline"),
+    dateField: statsDimensionSchema,
+    bin: z.string().max(16).optional(),
+    measure: z.string().max(16).optional(),
+    breakdown: statsDimensionSchema.optional(),
+    topN: z.number().int().min(0).max(10_000).nullable().optional(),
+    type: z.string().max(16).optional(),
+    serverId: statsServerIdSchema,
+  }),
+  z.object({
+    kind: z.literal("crossTab"),
+    dimension1: statsDimensionSchema,
+    dimension2: statsDimensionSchema,
+    serverId: statsServerIdSchema,
+  }),
+  z.object({
+    kind: z.literal("custom"),
+    dimension: statsDimensionSchema,
+    serverId: statsServerIdSchema,
+  }),
+]);
+
+export type CustomStatsCardRequest = z.infer<typeof customStatsCardRequestSchema>;
+
+/** The custom dashboard cards' data requests, answered together. */
+export const customStatsBatchSchema = z.object({
+  cards: z.array(customStatsCardRequestSchema).min(1).max(MAX_CUSTOM_STATS_BATCH),
 });

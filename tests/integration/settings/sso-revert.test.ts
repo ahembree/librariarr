@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 vi.mock("@/lib/db", async () => {
@@ -21,10 +21,19 @@ vi.mock("@/lib/sso/oidc-client", () => ({
 
 import { POST } from "@/app/api/settings/sso/revert/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 const prisma = getTestPrisma();
 
 describe("POST /api/settings/sso/revert", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
     mockInvalidateCache.mockClear();
@@ -39,6 +48,27 @@ describe("POST /api/settings/sso/revert", () => {
     await expectJson(res, 401);
   });
 
+  it("refuses a revert requested from another origin", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://broken.example.com",
+        previousSsoConfig: { ssoMode: "OIDC", oidcIssuer: "https://working.example.com" },
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(POST, { method: "POST", headers: { Origin: "https://evil.example.com" } });
+    const body = await expectJson<{ error: string }>(res, 403);
+    expect(body.error).toBe("Forbidden");
+    const row = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(row.oidcIssuer).toBe("https://broken.example.com");
+    expect(row.previousSsoConfig).not.toBeNull();
+    expect(mockInvalidateCache).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when there's no previous snapshot", async () => {
     const user = await createTestUser();
     await prisma.appSettings.create({
@@ -48,7 +78,8 @@ describe("POST /api/settings/sso/revert", () => {
 
     const res = await callRoute(POST, { method: "POST" });
     const body = await expectJson<{ error: string }>(res, 404);
-    expect(body.error).toMatch(/No previous SSO configuration/);
+    expect(body.error).toBe("No previous SSO configuration to revert to.");
+    expect(mockInvalidateCache).not.toHaveBeenCalled();
   });
 
   it("restores snapshot fields and clears the snapshot", async () => {
@@ -76,7 +107,7 @@ describe("POST /api/settings/sso/revert", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await callRoute(POST, { method: "POST" });
+    expect(await expectJson(await callRoute(POST, { method: "POST" }), 200)).toEqual({ ok: true });
 
     const row = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(row?.oidcIssuer).toBe("https://working.example.com");
@@ -112,6 +143,8 @@ describe("POST /api/settings/sso/revert", () => {
     const row = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
     expect(row.ssoEnabled).toBe(true);
     expect(row.oidcIssuer).toBe("https://broken.example.com");
+    expect(row.previousSsoConfig).not.toBeNull();
+    expect(mockInvalidateCache).not.toHaveBeenCalled();
 
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     await expectJson(await callRoute(POST, { method: "POST" }), 200);
@@ -167,9 +200,9 @@ describe("POST /api/settings/sso/revert", () => {
         },
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, sessionVersion: user.sessionVersion });
 
-    await callRoute(POST, { method: "POST" });
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
 
     const refreshedUser = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshedUser?.ssoSubject).toBeNull();
@@ -177,6 +210,10 @@ describe("POST /api/settings/sso/revert", () => {
     expect(refreshedUser?.ssoProvider).toBeNull();
     expect(refreshedUser?.ssoEnabled).toBe(false);
     expect(refreshedUser?.sessionVersion).toBe(user.sessionVersion + 1);
+    // The session that reverted stays valid.
+    expect(getMockSession().sessionVersion).toBe(user.sessionVersion + 1);
+    // The user chip names the sign-in method the revert just unlinked.
+    expect(announced(user.id)).toBe(1);
   });
 
   it("defaults to OIDC when snapshot's ssoMode is hand-edited to garbage", async () => {
@@ -193,7 +230,7 @@ describe("POST /api/settings/sso/revert", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await callRoute(POST, { method: "POST" });
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
 
     const row = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(row?.ssoMode).toBe("OIDC");
@@ -215,11 +252,16 @@ describe("POST /api/settings/sso/revert", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await callRoute(POST, { method: "POST" });
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
 
     const row = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(row?.ssoMode).toBe("FORWARD_AUTH");
     expect(row?.forwardAuthUserHeader).toBe("X-Forwarded-User");
+    expect(row?.forwardAuthEmailHeader).toBe("X-Forwarded-Email");
+    expect(row?.forwardAuthNameHeader).toBe("X-Forwarded-Name");
+    // Fields the snapshot does not hold fall back to their defaults.
+    expect(row?.oidcIssuer).toBeNull();
+    expect(row?.oidcScopes).toBe("openid profile email");
   });
 
   it("invalidates the discovery cache after revert", async () => {
@@ -233,7 +275,7 @@ describe("POST /api/settings/sso/revert", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await callRoute(POST, { method: "POST" });
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
     expect(mockInvalidateCache).toHaveBeenCalledTimes(1);
   });
 });

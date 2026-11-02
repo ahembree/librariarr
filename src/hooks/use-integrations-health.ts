@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-export interface InstanceHealth {
+interface InstanceHealth {
   id: string;
   name: string;
   reachable: boolean;
@@ -62,7 +62,7 @@ export function useIntegrationsHealth() {
 }
 
 export type ArrType = "sonarr" | "radarr" | "lidarr";
-export type LibraryMediaType = "MOVIE" | "SERIES" | "MUSIC";
+type LibraryMediaType = "MOVIE" | "SERIES" | "MUSIC";
 
 /**
  * Map a media type to the *arr type that handles it. SERIES → Sonarr,
@@ -72,7 +72,7 @@ export function arrTypeForMediaType(mediaType: LibraryMediaType): ArrType {
   return mediaType === "MOVIE" ? "radarr" : mediaType === "MUSIC" ? "lidarr" : "sonarr";
 }
 
-export interface DeriveStatusOptions {
+interface DeriveStatusOptions {
   /**
    * If provided, only Arr instances with these IDs are considered. Otherwise
    * all instances of the given `relevantArrTypes` (or all types if omitted)

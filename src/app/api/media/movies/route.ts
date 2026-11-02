@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { filterIdsByStreamCounts, parseStreamCountFilters } from "@/lib/filters/stream-count";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
@@ -25,6 +28,21 @@ const SORT_COLUMNS = new Set([
   "rating",
   "audienceRating",
   "contentRating",
+  // Every column the library table (src/components/media-table.tsx) offers a
+  // sort header for. A field missing here silently sorted by title while the
+  // header showed the clicked column's arrow — Dynamic Range is visible by
+  // default. All are plain MediaItem columns; `{ id: "asc" }` keeps the order
+  // total as with the rest.
+  "dynamicRange",
+  "audioProfile",
+  "audioChannels",
+  "container",
+  "studio",
+  "videoBitDepth",
+  "videoFrameRate",
+  "videoBitrate",
+  "aspectRatio",
+  "originallyAvailableAt",
 ]);
 
 /** How many ids one `findInOrder` query names, well under the bind-parameter limit. */
@@ -42,12 +60,7 @@ async function findInOrder<T extends { id: string }>(
   return ids.map((id) => byId.get(id)).filter((row): row is T => row !== undefined);
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
   const search = searchParams.get("search");
@@ -57,7 +70,7 @@ export async function GET(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MOVIE");
+  const sf = await resolveServerFilter(session.userId, serverId, "MOVIE");
   if (!sf) {
     return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
   }
@@ -72,7 +85,11 @@ export async function GET(request: NextRequest) {
   // About You" and `?search=%` matched everything (see escape-like.ts).
   if (search) where.title = { contains: escapeLike(search), mode: "insensitive" };
   if (startsWith) applyStartsWithFilter(where, "title", startsWith);
-  applyCommonFilters(where, searchParams);
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(where, searchParams, genreSpellings, resolutionSpellings);
 
   // Stream count filters (audio track count, subtitle count), applied below.
   const streamCounts = parseStreamCountFilters(searchParams);
@@ -190,4 +207,10 @@ export async function GET(request: NextRequest) {
     items: serializedItems,
     pagination: { page, limit, hasMore },
   });
-}
+});
+
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-movies", listGet);

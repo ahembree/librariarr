@@ -17,7 +17,8 @@ function session(sessionId: string, username = "alice"): MediaSession {
     title: "Arrival",
     type: "movie",
     player: { product: "Plex Web", platform: "Chrome", state: "playing", address: "10.0.0.1", local: true },
-  } as MediaSession;
+    session: { bandwidth: 8000, location: "lan" },
+  };
 }
 
 describe("session first-seen tracking", () => {
@@ -76,8 +77,8 @@ describe("session first-seen tracking", () => {
     // s1 polled and "a" still active; s2 not polled; "gone" no longer a server.
     pruneFirstSeen(new Set(["s1:a"]), new Set(["s1", "s2"]), new Set(["s1"]));
 
-    expect(getRememberedSession("s1", "a")).toBeDefined();
-    expect(getRememberedSession("s2", "b")).toBeDefined(); // server unreachable, kept
+    expect(getRememberedSession("s1", "a")?.sessionId).toBe("a");
+    expect(getRememberedSession("s2", "b")?.sessionId).toBe("b"); // server unreachable, kept
     expect(getRememberedSession("gone", "c")).toBeUndefined();
 
     // Now "a" ends on a polled server.
@@ -96,7 +97,7 @@ describe("session first-seen tracking", () => {
     // The oldest were evicted; the newest 500 survive.
     expect(getRememberedSession("s1", "sess0")).toBeUndefined();
     expect(getRememberedSession("s1", "sess19")).toBeUndefined();
-    expect(getRememberedSession("s1", "sess20")).toBeDefined();
-    expect(getRememberedSession("s1", "sess519")).toBeDefined();
+    expect(getRememberedSession("s1", "sess20")?.sessionId).toBe("sess20");
+    expect(getRememberedSession("s1", "sess519")?.sessionId).toBe("sess519");
   });
 });

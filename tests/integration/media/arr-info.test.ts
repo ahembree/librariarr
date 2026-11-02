@@ -28,9 +28,12 @@ const mockRadarrGetQualityProfiles = vi.fn();
 const mockRadarrGetTags = vi.fn();
 
 vi.mock("@/lib/arr/radarr-client", () => ({
-  RadarrClient: vi.fn().mockImplementation(function () {
+  // The instance URL rides along as the lookup's second argument, so a test
+  // can answer per instance instead of relying on the order the parallel
+  // lookups happen to start in.
+  RadarrClient: vi.fn().mockImplementation(function (url: string) {
     return {
-      getMovieByTmdbId: mockRadarrGetMovieByTmdbId,
+      getMovieByTmdbId: (tmdbId: number) => mockRadarrGetMovieByTmdbId(tmdbId, url),
       getQualityProfiles: mockRadarrGetQualityProfiles,
       getTags: mockRadarrGetTags,
     };
@@ -66,6 +69,7 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
 }));
 
 import { GET } from "@/app/api/media/[id]/arr-info/route";
+import { apiLogger } from "@/lib/logger";
 
 describe("GET /api/media/[id]/arr-info", () => {
   let userId: string;
@@ -75,6 +79,21 @@ describe("GET /api/media/[id]/arr-info", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations; drop each test's answers so none
+    // leaks into the next.
+    for (const mock of [
+      mockRadarrGetMovieByTmdbId,
+      mockRadarrGetQualityProfiles,
+      mockRadarrGetTags,
+      mockSonarrGetSeriesByTvdbId,
+      mockSonarrGetQualityProfiles,
+      mockSonarrGetTags,
+      mockLidarrGetArtistByMusicBrainzId,
+      mockLidarrGetQualityProfiles,
+      mockLidarrGetTags,
+    ]) {
+      mock.mockReset();
+    }
     const user = await createTestUser();
     userId = user.id;
     setMockSession({ userId, isLoggedIn: true});
@@ -91,28 +110,36 @@ describe("GET /api/media/[id]/arr-info", () => {
     clearMockSession();
     const response = await callRouteWithParams(GET, { id: "any" });
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent item", async () => {
     const response = await callRouteWithParams(GET, { id: "nonexistent" });
     expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
   });
 
   it("returns empty matches when item has no external ids", async () => {
     const item = await createTestMediaItem(libraryId, { type: "MOVIE" });
+    // An enabled instance exists, so an empty answer can only come from the
+    // missing TMDB id.
+    await createTestRadarrInstance(userId);
     const response = await callRouteWithParams(GET, { id: item.id });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.matches).toEqual([]);
+    expect(mockRadarrGetMovieByTmdbId).not.toHaveBeenCalled();
   });
 
   it("matches movie via TMDB ID to Radarr", async () => {
     const item = await createTestMediaItem(libraryId, { type: "MOVIE" });
     await createTestExternalId(item.id, "TMDB", "12345");
-    await createTestRadarrInstance(userId);
+    const instance = await createTestRadarrInstance(userId);
 
     mockRadarrGetMovieByTmdbId.mockResolvedValue({
       id: 99,
+      title: "Test Movie",
+      tmdbId: 12345,
       qualityProfileId: 4,
       tags: [1, 2],
     });
@@ -128,22 +155,40 @@ describe("GET /api/media/[id]/arr-info", () => {
     const response = await callRouteWithParams(GET, { id: item.id });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.matches).toHaveLength(1);
-    const match = body.matches[0];
-    expect(match.type).toBe("radarr");
-    expect(match.qualityProfileName).toBe("HD-1080p");
-    expect(match.qualityProfiles).toBeUndefined();
-    expect(match.matchedVia).toBe("TMDB");
-    expect(match.externalId).toBe("12345");
+    // Exactly these fields: the profile list itself is not passed through.
+    expect(body.matches).toEqual([
+      {
+        type: "radarr",
+        instanceId: instance.id,
+        instanceName: "Test Radarr",
+        qualityProfileName: "HD-1080p",
+        matchedVia: "TMDB",
+        externalId: "12345",
+        tags: ["action", "sci-fi"],
+        arrUrl: "http://radarr.test:7878/movie/12345",
+      },
+    ]);
+    expect(mockRadarrGetMovieByTmdbId).toHaveBeenCalledWith(12345, "http://radarr.test:7878");
   });
 
   it("matches series via TVDB ID to Sonarr", async () => {
-    const item = await createTestMediaItem(libraryId, { type: "SERIES" });
+    const server = await createTestServer(userId, { name: "TV Server" });
+    const seriesLibrary = await createTestLibrary(server.id, { type: "SERIES" });
+    const item = await createTestMediaItem(seriesLibrary.id, {
+      type: "SERIES",
+      title: "Pilot",
+      parentTitle: "The Office",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
     await createTestExternalId(item.id, "TVDB", "67890");
-    await createTestSonarrInstance(userId);
+    const instance = await createTestSonarrInstance(userId);
 
     mockSonarrGetSeriesByTvdbId.mockResolvedValue({
       id: 55,
+      title: "The Office",
+      titleSlug: "the-office-us",
+      tvdbId: 67890,
       qualityProfileId: 3,
       tags: [],
     });
@@ -154,9 +199,22 @@ describe("GET /api/media/[id]/arr-info", () => {
     const response = await callRouteWithParams(GET, { id: item.id });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.matches).toHaveLength(1);
-    expect(body.matches[0].type).toBe("sonarr");
-    expect(body.matches[0].matchedVia).toBe("TVDB");
+    expect(body.matches).toEqual([
+      {
+        type: "sonarr",
+        instanceId: instance.id,
+        instanceName: "Test Sonarr",
+        qualityProfileName: "HD-720p/1080p",
+        matchedVia: "TVDB",
+        externalId: "67890",
+        tags: [],
+        // Linked by the series' title slug.
+        arrUrl: "http://sonarr.test:8989/series/the-office-us",
+      },
+    ]);
+    expect(mockSonarrGetSeriesByTvdbId).toHaveBeenCalledWith(67890);
+    // An untagged series needs no tag lookup.
+    expect(mockSonarrGetTags).not.toHaveBeenCalled();
   });
 
   it("returns empty matches when arr client finds no match", async () => {
@@ -186,13 +244,14 @@ describe("GET /api/media/[id]/arr-info", () => {
   it("does not query disabled instances, and one failing instance does not hide another's match", async () => {
     const item = await createTestMediaItem(libraryId, { type: "MOVIE" });
     await createTestExternalId(item.id, "TMDB", "12345");
-    await createTestRadarrInstance(userId, { name: "Off", enabled: false });
-    await createTestRadarrInstance(userId, { name: "Down" });
-    await createTestRadarrInstance(userId, { name: "Up" });
+    await createTestRadarrInstance(userId, { name: "Off", url: "http://off.test:7878", enabled: false });
+    await createTestRadarrInstance(userId, { name: "Down", url: "http://down.test:7878" });
+    await createTestRadarrInstance(userId, { name: "Up", url: "http://up.test:7878" });
 
-    mockRadarrGetMovieByTmdbId
-      .mockRejectedValueOnce(new Error("Radarr unreachable"))
-      .mockResolvedValue({ id: 99, tmdbId: 12345, qualityProfileId: 4, tags: [] });
+    mockRadarrGetMovieByTmdbId.mockImplementation(async (_tmdbId: number, url: string) => {
+      if (url === "http://down.test:7878") throw new Error("Radarr unreachable");
+      return { id: 99, title: "Test Movie", tmdbId: 12345, qualityProfileId: 4, tags: [] };
+    });
     mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 4, name: "HD-1080p" }]);
 
     const response = await callRouteWithParams(GET, { id: item.id });
@@ -200,6 +259,10 @@ describe("GET /api/media/[id]/arr-info", () => {
 
     // Only the two enabled instances are asked.
     expect(mockRadarrGetMovieByTmdbId).toHaveBeenCalledTimes(2);
+    expect(mockRadarrGetMovieByTmdbId.mock.calls.map((c) => c[1]).sort()).toEqual([
+      "http://down.test:7878",
+      "http://up.test:7878",
+    ]);
     expect(body.matches.map((m: { instanceName: string }) => m.instanceName)).toEqual(["Up"]);
   });
 
@@ -214,5 +277,10 @@ describe("GET /api/media/[id]/arr-info", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.matches).toEqual([]);
+    expect(apiLogger.error).toHaveBeenCalledWith(
+      "Media",
+      "Failed to query Radarr instance Test Radarr",
+      { error: "Error: Connection refused" },
+    );
   });
 });

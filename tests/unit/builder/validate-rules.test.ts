@@ -50,6 +50,16 @@ describe("validateAllRules — between operator", () => {
     ).toBe(true);
   });
 
+  it("rejects a date between pair with the later date first", () => {
+    expect(
+      validateAllRules(
+        [group([{ field: "addedAt", value: "2021-01-01,2020-01-01" }])],
+        getFieldType,
+        isValueless,
+      ),
+    ).toBe(false);
+  });
+
   it("does not falsely reject — regression: numeric between previously disabled all actions", () => {
     // The old scalar Number("2000,2010") => NaN path returned false here.
     expect(validateAllRules([group([{ field: "playCount", value: "1,5" }])], getFieldType, isValueless)).toBe(true);

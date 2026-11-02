@@ -98,7 +98,7 @@ it("returns 401 when not authenticated", async () => {
 ```typescript
 it("returns empty array when user has no data", async () => {
   const user = await createTestUser();
-  setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user.id, isLoggedIn: true });
 
   const response = await callRoute(GET);
   const body = await expectJson<{ items: unknown[] }>(response, 200);
@@ -107,7 +107,7 @@ it("returns empty array when user has no data", async () => {
 
 it("returns data belonging to authenticated user", async () => {
   const user = await createTestUser();
-  setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user.id, isLoggedIn: true });
   // Create test data...
 
   const response = await callRoute(GET);
@@ -119,7 +119,7 @@ it("does not return data belonging to another user", async () => {
   const user1 = await createTestUser();
   const user2 = await createTestUser({ data: { plexId: "other", plexUsername: "other" } });
   // Create data for user2...
-  setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user1.id, isLoggedIn: true });
 
   const response = await callRoute(GET);
   const body = await expectJson<{ items: unknown[] }>(response, 200);
@@ -131,7 +131,7 @@ it("does not return data belonging to another user", async () => {
 ```typescript
 it("returns 400 with invalid body", async () => {
   const user = await createTestUser();
-  setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user.id, isLoggedIn: true });
 
   const response = await callRoute(POST, { body: {} });
   await expectJson(response, 400);
@@ -139,7 +139,7 @@ it("returns 400 with invalid body", async () => {
 
 it("creates resource with valid data", async () => {
   const user = await createTestUser();
-  setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user.id, isLoggedIn: true });
 
   const response = await callRoute(POST, {
     body: { name: "Test", /* fields */ },
@@ -155,7 +155,7 @@ it("returns 404 when resource belongs to another user", async () => {
   const user1 = await createTestUser();
   const user2 = await createTestUser({ data: { plexId: "other", plexUsername: "other" } });
   // Create resource owned by user2...
-  setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user1.id, isLoggedIn: true });
 
   const response = await callRouteWithParams(DELETE, { id: resource.id });
   await expectJson(response, 404);

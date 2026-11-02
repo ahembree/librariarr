@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { getDimensionMeta, canCrossTabulate } from "@/lib/dashboard/custom-dimensions";
 import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import { computeCrossTab } from "@/lib/media/cross-tab";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const dim1Id = searchParams.get("dimension1");
   const dim2Id = searchParams.get("dimension2");
@@ -33,7 +28,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Cannot cross two stream dimensions" }, { status: 400 });
   }
 
-  const scope = await resolveStatsScope(session.userId!, serverId);
+  const scope = await resolveStatsScope(session.userId, serverId);
   if (scope === "server-not-found") {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
@@ -53,4 +48,4 @@ export async function GET(request: NextRequest) {
     ttl,
   );
   return NextResponse.json({ rows });
-}
+});

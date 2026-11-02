@@ -25,13 +25,13 @@ ago, never watched.
 
 In **Lifecycle → Rules**, on the **Movies** tab, one AND group:
 
-- `seerrRequested` **equals** `true` — it was requested at all.
-- `seerrApprovalDate` **more than X days ago** `90` — the most recent
+- **Has Request** (`seerrRequested`) **equals** `true` — it was requested at all.
+- **Approval Date** (`seerrApprovalDate`) **more than X days ago** `90` — the most recent
   request was approved at least three months ago. **Approval Date** counts
   requests Seerr has since marked *Completed* (the media arrived), which is
   the normal state of anything now in your library.
-- `playCount` **equals** `0` — nobody has played it, whoever requested it.
-- `isWatchlisted` **equals** `false` — unless it is on the connected
+- **Play Count** (`playCount`) **equals** `0` — nobody has played it, whoever requested it.
+- **Is Watchlisted** (`isWatchlisted`) **equals** `false` — unless it is on the connected
   account's Plex watchlist (its Favorites on Jellyfin and Emby).
 
 Action: **Delete from Radarr** with a delay of two weeks. Import it from the
@@ -44,7 +44,7 @@ sits in the library for another 90 days before this rule set looks at it.
 
 ## Variations
 
-- **Per requester.** `seerrRequestedBy` **contains** a username (an exact
+- **Per requester.** **Requested By** (`seerrRequestedBy`) **contains** a username (an exact
   name, or several separated by `|`) restricts the rule set to one person's
   requests — useful for a household member who requests more than they
   watch. The dropdown lists every user the Seerr instance knows, requester

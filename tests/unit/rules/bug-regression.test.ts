@@ -49,7 +49,8 @@ function makeSeerrMeta(overrides?: Partial<SeerrMetadata>): SeerrMetadata {
 
 // ---------------------------------------------------------------------------
 // Bug 1: genre notEquals should work in-memory
-// (Prisma WHERE bug is not testable here since ruleToWhereClause is internal)
+// (genre is evaluated only in memory — its Phase-1 handler returns {} — so
+// this is the whole of its behaviour)
 // ---------------------------------------------------------------------------
 
 describe("Bug 1: genre notEquals in-memory evaluation", () => {
@@ -63,15 +64,15 @@ describe("Bug 1: genre notEquals in-memory evaluation", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notEquals", value: "Action" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("genre notEquals is case-insensitive", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notEquals", value: "action" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 });
 
@@ -89,7 +90,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
   it("lastPlayedAt notEquals matches item with different date", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-01-15" })])];
     const result = matched(items, rules);
-    expect(result.get("match")!.length).toBeGreaterThan(0);
+    expect(result.get("match")).toHaveLength(1);
   });
 
   it("lastPlayedAt notEquals does not match item with same date", () => {
@@ -105,7 +106,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     // Phase 2 hard-coded NULL→false for all date operators, diverging.)
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-01-15" })])];
     const result = matched(items, rules);
-    expect(result.get("nulldate")!.length).toBeGreaterThan(0);
+    expect(result.get("nulldate")).toHaveLength(1);
   });
 
   it("addedAt notEquals matches item with different date", () => {
@@ -116,7 +117,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "addedAt", operator: "notEquals", value: "2024-03-01" })])];
     const result = matched(addedItems, rules);
     expect(result.get("a1")).toHaveLength(0);
-    expect(result.get("a2")!.length).toBeGreaterThan(0);
+    expect(result.get("a2")).toHaveLength(1);
   });
 
   it("originallyAvailableAt notEquals works", () => {
@@ -127,7 +128,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "originallyAvailableAt", operator: "notEquals", value: "2020-05-20" })])];
     const result = matched(releaseItems, rules);
     expect(result.get("r1")).toHaveLength(0);
-    expect(result.get("r2")!.length).toBeGreaterThan(0);
+    expect(result.get("r2")).toHaveLength(1);
   });
 
   it("latestEpisodeViewDate notEquals works (series aggregate)", () => {
@@ -137,7 +138,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "latestEpisodeViewDate", operator: "notEquals", value: "2024-01-01" })])];
     const result = matched(seriesItems, rules, "SERIES");
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
@@ -148,7 +149,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAddedAt", operator: "notEquals", value: "2024-03-15" })])];
     const result = matched(seriesItems, rules, "SERIES");
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 
@@ -159,7 +160,7 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastEpisodeAiredAt", operator: "notEquals", value: "2024-06-01" })])];
     const result = matched(seriesItems, rules, "SERIES");
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
   });
 });
@@ -169,14 +170,14 @@ describe("Bug 2: date notEquals in-memory evaluation", () => {
 // ---------------------------------------------------------------------------
 
 describe("Bug 3: Arr date notEquals evaluation", () => {
-  const extId = "tmdb-123";
+  const extId = "123";
   const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: extId }] }];
 
   it("arrDateAdded notEquals matches when dates differ", () => {
     const arrData: ArrDataMap = { [extId]: makeArrMeta({ dateAdded: "2024-01-15T00:00:00Z" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "notEquals", value: "2024-06-01" })])];
     const result = matched(items, rules, "MOVIE", arrData);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("arrDateAdded notEquals does NOT match same date", () => {
@@ -197,7 +198,7 @@ describe("Bug 3: Arr date notEquals evaluation", () => {
     const arrData: ArrDataMap = { [extId]: makeArrMeta({ inCinemasDate: "2023-03-01T00:00:00Z" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "notEquals", value: "2023-06-15" })])];
     const result = matched(items, rules, "MOVIE", arrData);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("arrDownloadDate notEquals does NOT match same date", () => {
@@ -208,12 +209,12 @@ describe("Bug 3: Arr date notEquals evaluation", () => {
   });
 
   it("arrFirstAired notEquals matches when dates differ (SERIES)", () => {
-    const tvdbId = "tvdb-456";
+    const tvdbId = "456";
     const seriesItems = [{ id: "1", externalIds: [{ source: "TVDB", externalId: tvdbId }] }];
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ firstAired: "2020-01-01T00:00:00Z" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrFirstAired", operator: "notEquals", value: "2021-05-05" })])];
     const result = matched(seriesItems, rules, "SERIES", arrData);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 });
 
@@ -222,14 +223,14 @@ describe("Bug 3: Arr date notEquals evaluation", () => {
 // ---------------------------------------------------------------------------
 
 describe("Bug 4: Seerr date notEquals evaluation", () => {
-  const extId = "tmdb-789";
+  const extId = "789";
   const items = [{ id: "1", externalIds: [{ source: "TMDB", externalId: extId }] }];
 
   it("seerrRequestDate notEquals matches when dates differ", () => {
     const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ requestDate: "2024-03-01T00:00:00Z" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrRequestDate", operator: "notEquals", value: "2024-06-01" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("seerrRequestDate notEquals does NOT match same date", () => {
@@ -250,7 +251,7 @@ describe("Bug 4: Seerr date notEquals evaluation", () => {
     const seerrData: SeerrDataMap = { [`TMDB:${extId}`]: makeSeerrMeta({ declineDate: "2024-05-20T00:00:00Z" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "seerrDeclineDate", operator: "notEquals", value: "2024-12-25" })])];
     const result = matched(items, rules, "MOVIE", undefined, seerrData);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 });
 
@@ -264,13 +265,13 @@ describe("Bug 5: genre case sensitivity in-memory", () => {
   it("genre equals is case-insensitive", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "equals", value: "action" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("genre contains is case-insensitive", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "sci-fi" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("genre notContains is case-insensitive", () => {

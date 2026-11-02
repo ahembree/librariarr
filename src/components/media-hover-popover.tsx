@@ -4,42 +4,29 @@ import {
   formatFileSize,
   formatRelativeDate,
 } from "@/lib/format";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { qualityChips } from "@/lib/media/quality-chips";
 import { getRatingLabel } from "@/lib/rating-labels";
-import { useChipColors } from "@/components/chip-color-provider";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
+import { QualityChips } from "@/components/quality-chips";
 import { ColorChip } from "@/components/color-chip";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
+import { detailPrefetch } from "@/lib/media/detail-prefetch";
+import type { MediaHoverData } from "@/lib/media/hover-data";
 
-export interface MediaHoverData {
-  title: string;
-  year?: number | null;
-  summary?: string | null;
-  contentRating?: string | null;
-  rating?: number | null;
-  ratingImage?: string | null;
-  audienceRating?: number | null;
-  audienceRatingImage?: string | null;
-  duration?: number | null;
-  resolution?: string | null;
-  dynamicRange?: string | null;
-  audioProfile?: string | null;
-  fileSize?: string | null;
-  genres?: string[] | null;
-  studio?: string | null;
-  playCount?: number;
-  lastPlayedAt?: string | null;
-  addedAt?: string | null;
-  seasonCount?: number;
-  episodeCount?: number;
-  albumCount?: number;
-  trackCount?: number;
-  audioCodecCounts?: Record<string, number> | null;
-  qualityCounts?: Record<string, number> | null;
-  servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
-}
+// The data shape and its builders live in `src/lib/media/hover-data.ts`, one
+// builder per kind of row; re-exported for the callers that import them here.
+export type { MediaHoverData } from "@/lib/media/hover-data";
+export {
+  hoverDataFromAlbum,
+  hoverDataFromArtistGroup,
+  hoverDataFromListItem,
+  hoverDataFromRecord,
+  hoverDataFromSeason,
+  hoverDataFromSeriesGroup,
+  hoverSummaryUrl,
+} from "@/lib/media/hover-data";
 
 function Dot() {
   return <span className="text-muted-foreground/40">·</span>;
@@ -94,7 +81,6 @@ export function MediaHoverPopover({
   summaryUrl,
 }: MediaHoverPopoverProps) {
   const [imgError, setImgError] = useState(false);
-  const { getBadgeStyle } = useChipColors();
 
   // The popover only mounts when it opens, so this effect is the "on hover"
   // trigger — no fetch happens for cards the user never hovers.
@@ -106,15 +92,17 @@ export function MediaHoverPopover({
   useEffect(() => {
     if (!needsSummary || !summaryUrl || summaryCache.has(summaryUrl)) return;
     let cancelled = false;
-    fetch(summaryUrl)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json: { item?: { summary?: string | null } } | null) => {
-        const summary = json?.item?.summary ?? null;
+    // `peek` keeps the answer: for a list row the summary URL is the item's
+    // own record, which a click a moment later would otherwise fetch again.
+    // Best-effort enrichment — on a failure the rest of the popover is
+    // already rendered, and nothing is cached so the next hover asks again.
+    void detailPrefetch
+      .peek<{ item?: { summary?: string | null } }>(summaryUrl)
+      .then((res) => {
+        if (!res.ok) return;
+        const summary = res.body?.item?.summary ?? null;
         summaryCache.set(summaryUrl, summary);
         if (!cancelled) setFetchedSummary(summary);
-      })
-      .catch(() => {
-        // Best-effort enrichment — the rest of the popover is already rendered.
       });
     return () => {
       cancelled = true;
@@ -123,18 +111,8 @@ export function MediaHoverPopover({
 
   const summary = data.summary ?? fetchedSummary;
 
-  const resLabel =
-    data.resolution ? normalizeResolutionLabel(data.resolution) : null;
-  const displayRes = resLabel === "Other" ? data.resolution : resLabel;
-
-  const audioCodecs = data.audioCodecCounts ? Object.keys(data.audioCodecCounts) : [];
-  const qualityKeys = data.qualityCounts ? Object.keys(data.qualityCounts).filter((k) => data.qualityCounts![k] > 0) : [];
-  const hasChips =
-    displayRes ||
-    (data.dynamicRange && data.dynamicRange !== "SDR") ||
-    data.audioProfile ||
-    audioCodecs.length > 0 ||
-    qualityKeys.length > 0;
+  // The same chips, by the same rules, as the cards, tables and detail pages.
+  const chips = qualityChips(data, data.audioCodec ? "music" : "video");
   const hasDuration = data.duration != null && formatDuration(data.duration) !== "-";
   const hasFileSize = data.fileSize != null && formatFileSize(data.fileSize) !== "-";
   const hasPlays = data.playCount != null && data.playCount > 0;
@@ -172,9 +150,7 @@ export function MediaHoverPopover({
           {data.studio && <span className="truncate">{data.studio}</span>}
           {data.studio && data.contentRating && <Dot />}
           {data.contentRating && (
-            <span className="shrink-0 rounded border border-white/10 px-1 py-px text-[9.5px] leading-none">
-              {data.contentRating}
-            </span>
+            <ColorChip className="text-[10px]">{data.contentRating}</ColorChip>
           )}
         </div>
       )}
@@ -210,35 +186,7 @@ export function MediaHoverPopover({
 
       <div className="space-y-2 px-3.5 pt-2 pb-3">
         {/* Quality chips */}
-        {hasChips && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {displayRes && (
-              <ColorChip style={getBadgeStyle("resolution", displayRes)}>
-                {displayRes}
-              </ColorChip>
-            )}
-            {!displayRes && qualityKeys.map((quality) => (
-              <ColorChip key={quality} style={getBadgeStyle("resolution", quality)}>
-                {quality}<span className="text-muted-foreground/60">: {data.qualityCounts![quality]}</span>
-              </ColorChip>
-            ))}
-            {data.dynamicRange && data.dynamicRange !== "SDR" && (
-              <ColorChip style={getBadgeStyle("dynamicRange", data.dynamicRange)}>
-                {data.dynamicRange}
-              </ColorChip>
-            )}
-            {data.audioProfile && (
-              <ColorChip style={getBadgeStyle("audioProfile", data.audioProfile)}>
-                {data.audioProfile}
-              </ColorChip>
-            )}
-            {audioCodecs.map((codec) => (
-              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
-                {codec}
-              </ColorChip>
-            ))}
-          </div>
-        )}
+        <QualityChips chips={chips} className="gap-1.5" />
 
         {/* Summary */}
         {summary && (

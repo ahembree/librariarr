@@ -2,8 +2,7 @@ import type { NextResponse } from "next/server";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
-
-const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * Whether a request would send an integration's STORED API key to a URL other
@@ -15,7 +14,7 @@ export function sendsStoredKeyToNewUrl(
   url: string | undefined,
   apiKey: string | undefined,
 ): boolean {
-  if (url === undefined || withoutTrailingSlash(url) === withoutTrailingSlash(storedUrl)) return false;
+  if (url === undefined || stripTrailingSlashes(url) === stripTrailingSlashes(storedUrl)) return false;
   return apiKey === undefined || apiKey === "" || apiKey === MASKED_VALUE;
 }
 
@@ -28,9 +27,10 @@ export function sendsStoredKeyToNewUrl(
  * with the request to whatever URL the body names. A cookie alone could
  * therefore post `{ url: "https://attacker" }` and have the server hand over a
  * Radarr/Sonarr/Lidarr key — one that deletes the whole library — or a Seerr
- * or Tracearr key. The same rule `PUT /api/servers/[id]` applies to a Plex
- * server's token (see recent-login.ts). A request that brings its own key
- * proves nothing is being handed over and is never asked.
+ * or Tracearr key. The same rule `PUT /api/servers/[id]` applies to a media
+ * server's token and the AI settings routes to the AI key (see
+ * recent-login.ts). A request that brings its own key proves nothing is being
+ * handed over and is never asked.
  */
 export async function refuseStoredKeyToNewUrl(
   session: { userId?: string; authenticatedAt?: number },

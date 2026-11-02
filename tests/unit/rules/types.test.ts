@@ -81,9 +81,10 @@ describe("ARR_FIELDS", () => {
 
 describe("SEERR_FIELDS", () => {
   it("contains exactly 6 seerr fields", () => {
-    expect(SEERR_FIELDS).toHaveLength(6);
-    expect(SEERR_FIELDS).toContain("seerrRequested");
-    expect(SEERR_FIELDS).toContain("seerrDeclineDate");
+    expect([...SEERR_FIELDS].sort()).toEqual([
+      "seerrApprovalDate", "seerrDeclineDate", "seerrRequestCount",
+      "seerrRequestDate", "seerrRequested", "seerrRequestedBy",
+    ]);
   });
 });
 
@@ -189,13 +190,21 @@ describe("RULE_FIELDS", () => {
 });
 
 describe("RULE_OPERATORS", () => {
-  it("has operators for all types", () => {
-    const numberOps = RULE_OPERATORS.filter((o) => o.types.includes("number"));
-    const textOps = RULE_OPERATORS.filter((o) => o.types.includes("text"));
-    const dateOps = RULE_OPERATORS.filter((o) => o.types.includes("date"));
+  it("offers each field type its own operators", () => {
+    const opsFor = (type: string) =>
+      RULE_OPERATORS.filter((o) => (o.types as string[]).includes(type)).map((o) => o.value);
 
-    expect(numberOps.length).toBeGreaterThan(0);
-    expect(textOps.length).toBeGreaterThan(0);
-    expect(dateOps.length).toBeGreaterThan(0);
+    expect(opsFor("number")).toEqual(expect.arrayContaining([
+      "equals", "notEquals", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "between", "isNull", "isNotNull",
+    ]));
+    expect(opsFor("number")).not.toContain("contains");
+    expect(opsFor("text")).toEqual(expect.arrayContaining([
+      "equals", "notEquals", "contains", "notContains", "matchesWildcard", "notMatchesWildcard", "isNull", "isNotNull",
+    ]));
+    expect(opsFor("text")).not.toContain("greaterThan");
+    expect(opsFor("date")).toEqual(expect.arrayContaining([
+      "equals", "notEquals", "before", "after", "inLastDays", "notInLastDays", "between", "isNull", "isNotNull",
+    ]));
+    expect(opsFor("date")).not.toContain("contains");
   });
 });

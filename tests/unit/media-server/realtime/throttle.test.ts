@@ -41,9 +41,9 @@ describe("Throttle", () => {
       t.trigger();
       vi.advanceTimersByTime(500);
     }
-    // 10s / 2s interval ≈ 5-6 runs, not 20.
-    expect(fn.mock.calls.length).toBeLessThanOrEqual(6);
-    expect(fn.mock.calls.length).toBeGreaterThanOrEqual(4);
+    // One run at every 2s boundary — the leading run at 0s plus a trailing
+    // run at 2, 4, 6, 8 and 10s — not one per trigger (20).
+    expect(fn).toHaveBeenCalledTimes(6);
   });
 
   it("cancel() clears a pending trailing run", () => {

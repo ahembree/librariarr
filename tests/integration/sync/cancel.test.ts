@@ -35,7 +35,8 @@ describe("POST /api/sync/cancel", () => {
 
   it("returns 401 without auth", async () => {
     const response = await cancel("whatever");
-    await expectJson(response, 401);
+    const body = await expectJson<{ error: string }>(response, 401);
+    expect(body.error).toBe("Unauthorized");
   });
 
   it("returns 404 when the server does not exist", async () => {
@@ -89,11 +90,49 @@ describe("POST /api/sync/cancel", () => {
     const job = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "RUNNING" } });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const response = await cancel(server.id);
-    await expectJson(response, 200);
+    const events: AppEvent[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    try {
+      const response = await cancel(server.id);
+      expect(await expectJson(response, 200)).toEqual({ success: true });
+    } finally {
+      unsubscribe();
+    }
 
     const row = await prisma.syncJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(row.status).toBe("RUNNING");
     expect(row.cancelRequested).toBe(true);
+    expect(row.completedAt).toBeNull();
+    // The run announces its own exit; nothing ended here, so nothing is announced.
+    expect(events.filter((e) => e.type === "sync:failed")).toEqual([]);
+  });
+
+  // The library pages' Sync queues behind a running sync, so a server can hold
+  // both at once; a single lookup stopped whichever came back first and left
+  // the other to run.
+  it("stops a running sync and the one queued behind it together", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const running = await prisma.syncJob.create({
+      data: { mediaServerId: server.id, status: "RUNNING", startedAt: new Date(Date.now() - 60_000) },
+    });
+    const queued = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const events: AppEvent[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    try {
+      await expectJson(await cancel(server.id), 200);
+    } finally {
+      unsubscribe();
+    }
+
+    const runningRow = await prisma.syncJob.findUniqueOrThrow({ where: { id: running.id } });
+    expect(runningRow.status).toBe("RUNNING");
+    expect(runningRow.cancelRequested).toBe(true);
+    const queuedRow = await prisma.syncJob.findUniqueOrThrow({ where: { id: queued.id } });
+    expect(queuedRow.status).toBe("CANCELLED");
+    expect(queuedRow.completedAt).not.toBeNull();
+    expect(events.filter((e) => e.type === "sync:failed")).toHaveLength(1);
   });
 });

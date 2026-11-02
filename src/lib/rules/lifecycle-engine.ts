@@ -1,14 +1,30 @@
 import { prisma } from "@/lib/db";
-import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
+import { compareIds } from "@/lib/conditions/compare-ids";
+import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition } from "./types";
 import {
-  isArrField, isSeerrField, isExternalField, isStreamField, isSeriesAggregateField, isArrayField,
+  isArrField, isSeerrField,
   isCrossSystemField,
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
-  streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
+  isStreamQueryField, isStreamQueryGroup,
   RULE_FIELDS, STREAM_QUERY_FIELDS, type RuleField,
 } from "./types";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWatchedByUserRules as hasWatchedByUserGroupRules, hasPlayActivityRules as hasPlayActivityGroupRules, PLAY_ACTIVITY_FIELDS } from "@/lib/conditions/helpers";
-import { detectStreamAudioProfile, detectStreamDynamicRange } from "./stream-detection";
+import {
+  isEnumerableField, isOperatorApplicable, isValueValidForRule,
+  hasActiveRules,
+  hasArrRules as hasArrGroupRules,
+  hasSeerrRules as hasSeerrGroupRules,
+  hasWildcardRules as hasWildcardGroupRules,
+  hasResolutionRules as hasResolutionGroupRules,
+  hasArrayFieldRules as hasArrayFieldGroupRules,
+  hasSeriesAggregateRules as hasSeriesAggregateGroupRules,
+  hasStreamRules as hasStreamGroupRules,
+  hasStreamCountRules as hasStreamCountGroupRules,
+  hasCrossSystemRules as hasCrossSystemGroupRules,
+  hasExternalIdFieldRules as hasExternalIdFieldGroupRules,
+  hasCustomFormatScoreRules as hasCustomFormatScoreGroupRules,
+  hasWatchedByUserRules as hasWatchedByUserGroupRules,
+  hasPlayActivityRules as hasPlayActivityGroupRules,
+} from "@/lib/conditions/helpers";
+import { legacyRulesToGroups } from "./legacy";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   pushDownGroupNegation,
@@ -25,13 +41,21 @@ import {
   ruleToWhere,
   STREAM_COUNT_FIELDS,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import {
+  fetchCrossSystemData,
+  foldCrossSystemData,
+  type CrossSystemDataOptions,
+} from "@/lib/conditions/cross-system-data";
 import type { Condition } from "@/lib/conditions/types";
-import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { hasStreamQueryInMemoryRules as hasStreamQueryInMemoryGroupRules } from "@/lib/conditions/stream-query-where";
+import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { Prisma } from "@/generated/prisma/client";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
+import { DATE_ONLY_FIELDS } from "@/lib/conditions/fields";
+import { formatDateOnly } from "@/lib/format";
+import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -116,118 +140,51 @@ function isRuleGroups(input: LifecycleRule[] | LifecycleRuleGroup[]): input is L
 }
 
 /**
+ * Either rule shape as the group tree it is evaluated as. Every gate below
+ * reads this, so a legacy flat rule set is gated exactly as the engine
+ * evaluates it (`legacyRulesToGroups` keeps enabled rules only) and the
+ * walks themselves live once, in `conditions/helpers.ts`.
+ */
+function asGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
+  return isRuleGroups(rules) ? rules : legacyRulesToGroups(rules as LifecycleRule[]);
+}
+
+/**
  * Check whether a rule set contains at least 1 enabled rule.
  * Returns false if all rules/groups are disabled or empty — lifecycle
  * processing requires at least 1 active rule to avoid matching everything.
  */
 export function hasAnyActiveRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    return (rules as LifecycleRuleGroup[]).some(
-      (g) =>
-        g.enabled !== false &&
-        (g.rules.some((r) => r.enabled !== false) ||
-          (g.groups ?? []).some((sub) =>
-            hasAnyActiveRules([sub] as LifecycleRuleGroup[])
-          ))
-    );
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false);
+  return hasActiveRules(asGroups(rules));
 }
 
-
-
-// ---------------------------------------------------------------------------
 // Pre-filter variants for Phase 1 queries when Phase 2 in-memory re-eval
-// will follow. Non-DB-expressible rules (Arr/Seerr fields, wildcards, stream
-// counts) produce EXTERNAL_RULE instead of being silently dropped.
-//
-/**
- * Convert legacy flat rules (pre-groups format) into the equivalent group
- * tree so they route through the same machinery as grouped rule sets:
- * buckets split after each rule whose `condition` is AND; rules within a
- * bucket join with OR; buckets join with AND — i.e. (A ∨ B) ∧ (C ∨ D).
- *
- * Built from ENABLED rules only (the old in-memory evaluator filtered
- * disabled rules but the old Phase 1 did not — and even let a disabled
- * rule's connective move bucket boundaries, so the phases could disagree).
- * Going through the group path also gives legacy sets the EXTERNAL-aware
- * pre-filter: an Arr/wildcard rule in an OR bucket no longer narrows the
- * Phase 1 fetch below what Phase 2 would match.
- */
-function legacyRulesToGroups(rules: LifecycleRule[]): LifecycleRuleGroup[] {
-  const flat = rules.filter((r) => r.enabled !== false);
-  if (flat.length === 0) return [];
-  const buckets: LifecycleRule[][] = [[]];
-  for (let i = 0; i < flat.length; i++) {
-    buckets[buckets.length - 1].push(flat[i]);
-    if (i < flat.length - 1 && flat[i].condition === "AND") {
-      buckets.push([]);
-    }
-  }
-  return buckets.map((bucket, bi) => ({
-    id: `legacy-bucket-${bi}`,
-    condition: "AND" as const,
-    rules: bucket.map((r, ri) => ({ ...r, condition: (ri === 0 ? "AND" : "OR") as LifecycleRuleCondition })),
-    groups: [],
-  }));
-}
+// will follow: non-DB-expressible rules (Arr/Seerr fields, wildcards, stream
+// counts) produce EXTERNAL_RULE instead of being silently dropped. Legacy
+// sets route through the group path (`legacyRulesToGroups`, `./legacy.ts`),
+// which also gives them that EXTERNAL-aware pre-filter: an Arr/wildcard rule
+// in an OR bucket no longer narrows the Phase 1 fetch below what Phase 2
+// would match.
 
 /** Check if any rule in the tree uses arr fields */
 function hasArrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && isArrField(r.field))) return true;
-      if (hasArrRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrField(r.field));
+  return hasArrGroupRules(asGroups(rules));
 }
 
 /** Check if any rule in the tree uses seerr fields */
 function hasSeerrRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && isSeerrField(r.field))) return true;
-      if (hasSeerrRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeerrField(r.field));
+  return hasSeerrGroupRules(asGroups(rules));
 }
 
 /** Check if any rule uses wildcard operators on non-external fields */
 function hasWildcardRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"))) return true;
-      if (hasWildcardRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"));
+  return hasWildcardGroupRules(asGroups(rules));
 }
 
 /** Resolution rules always evaluate in-memory (Phase 1 raw-value lists
  *  cannot express normalizeResolutionLabel semantics — see resolutionHandler) */
 function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && r.field === "resolution")) return true;
-      if (hasResolutionRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "resolution");
+  return hasResolutionGroupRules(asGroups(rules));
 }
 
 /** JSON-array rules (`genre`, `labels`, `country`) always evaluate in-memory:
@@ -236,16 +193,7 @@ function hasResolutionRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
  *  filters can express — see genreLabelsHandler. Membership comes from the
  *  shared `isArrayField` so this can't drift from the query engine's gate. */
 function hasArrayFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && isArrayField(r.field))) return true;
-      if (hasArrayFieldRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isArrayField(r.field));
+  return hasArrayFieldGroupRules(asGroups(rules));
 }
 
 /** Check if any rule references a series-aggregate field (episodeCount,
@@ -254,98 +202,69 @@ function hasArrayFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): bool
  *  (aggregate) evaluation regardless of seriesScope — mirroring the query
  *  engine's aggregateSeriesAndFilter path. */
 function hasSeriesAggregateRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && isSeriesAggregateField(r.field))) return true;
-      if (hasSeriesAggregateRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isSeriesAggregateField(r.field));
+  return hasSeriesAggregateGroupRules(asGroups(rules));
 }
+
+/**
+ * Columns of a candidate row no rule reads, nothing in the series or artist
+ * aggregation uses and detection's bookkeeping never consults: the cast and
+ * crew lists (often the largest part of a row once a sync has enriched it),
+ * the tagline and original title, the file path, and the server's playback
+ * and analysis bookkeeping. The engines load every candidate of a library, so
+ * each is read for every row; a match's stored snapshot is still the rest of
+ * the row, and the detail panel a match opens reads the full record from
+ * `/api/media/[id]`.
+ */
+export const UNREAD_ITEM_COLUMNS = {
+  roles: true,
+  directors: true,
+  writers: true,
+  tagline: true,
+  originalTitle: true,
+  filePath: true,
+  viewOffset: true,
+  chapterSource: true,
+  absoluteIndex: true,
+  optimizedForStreaming: true,
+  serverUpdatedAt: true,
+} as const;
 
 /** Check if any rule uses stream fields or stream query groups */
 function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (isStreamQueryGroup(group)) return true;
-      if (group.rules.some((r) => r.enabled !== false && isStreamField(r.field))) return true;
-      if (hasStreamRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isStreamField(r.field));
+  return hasStreamGroupRules(asGroups(rules));
 }
 
 /** Check if any stream query group requires in-memory evaluation (computed/wildcard fields) */
 function hasStreamQueryInMemoryRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (isStreamQueryGroup(group) && streamQueryNeedsInMemory(group)) return true;
-      if (hasStreamQueryInMemoryRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return false;
+  return hasStreamQueryInMemoryGroupRules(asGroups(rules));
 }
 
 /** Check if any rule uses stream count fields (always require in-memory evaluation) */
 function hasStreamCountRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field))) return true;
-      if (hasStreamCountRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && STREAM_COUNT_FIELDS.has(r.field));
+  return hasStreamCountGroupRules(asGroups(rules));
 }
 
 /** Check if any rule uses cross-system fields (always require in-memory evaluation) */
-function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && isCrossSystemField(r.field))) return true;
-      if (hasCrossSystemFieldRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && isCrossSystemField(r.field));
+export function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  return hasCrossSystemGroupRules(asGroups(rules));
 }
 
 /** Check if any rule uses hasExternalId field */
 function hasExternalIdFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) {
-    for (const group of rules) {
-      if (group.enabled === false) continue;
-      if (group.rules.some((r) => r.enabled !== false && r.field === "hasExternalId")) return true;
-      if (hasExternalIdFieldRules(group.groups ?? [])) return true;
-    }
-    return false;
-  }
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "hasExternalId");
+  return hasExternalIdFieldGroupRules(asGroups(rules));
+}
+
+/** Whether any rule reads Custom Format Score, the one Arr field fetched on demand. */
+export function hasCustomFormatScoreRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  return hasCustomFormatScoreGroupRules(asGroups(rules));
 }
 
 /**
  * Check if any rule uses the watchedByUser field (requires WatchHistory eager-load).
- * Accepts both grouped and flat rule shapes; the shared helper only handles groups,
- * so we handle the legacy flat-rules path here.
+ * Accepts both grouped and flat rule shapes.
  */
 export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) return hasWatchedByUserGroupRules(rules as LifecycleRuleGroup[]);
-  return (rules as LifecycleRule[]).some((r) => r.enabled !== false && r.field === "watchedByUser");
+  return hasWatchedByUserGroupRules(asGroups(rules));
 }
 
 /**
@@ -357,11 +276,7 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
  * Accepts both grouped and flat rule shapes, mirroring its sibling above.
  */
 export function hasPlayActivityRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
-  if (rules.length === 0) return false;
-  if (isRuleGroups(rules)) return hasPlayActivityGroupRules(rules as LifecycleRuleGroup[]);
-  return (rules as LifecycleRule[]).some(
-    (r) => r.enabled !== false && PLAY_ACTIVITY_FIELDS.has(r.field),
-  );
+  return hasPlayActivityGroupRules(asGroups(rules));
 }
 
 /**
@@ -928,7 +843,7 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
   return negate ? !result : result;
 }
 
-export interface MatchedCriterion {
+interface MatchedCriterion {
   ruleId: string;
   field: string;
   operator: string;
@@ -1530,11 +1445,15 @@ function getActualValueForField(
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata,
 ): string | null {
-  // Helper to format dates nicely
+  // Helper to format dates nicely. A date-only field (release, premiere, air
+  // date) is a calendar day stored as UTC midnight, and the date operators
+  // compare UTC days, so it is shown in UTC: in the server's local time a
+  // matched "In Cinemas Date equals 2023-01-01" read "Dec 31, 2022" west of UTC.
   const fmtDate = (v: unknown): string | null => {
     if (!v) return null;
     const d = new Date(v as string);
     if (isNaN(d.getTime())) return null;
+    if (DATE_ONLY_FIELDS.has(field)) return formatDateOnly(d, "N/A", "short");
     return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   };
 
@@ -1794,176 +1713,6 @@ export function getActualValuesForAllRules(
   return result;
 }
 
-/**
- * Evaluate a single stream query rule against one stream record.
- * Returns true if the rule matches this specific stream.
- */
-function evaluateStreamQueryRuleAgainstStream(
-  rule: LifecycleRule,
-  stream: Record<string, unknown>,
-): boolean {
-  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
-  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
-  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
-  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
-  // Safety: malformed value → match nothing.
-  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
-  const field = rule.field as StreamQueryField;
-  const { operator, value, negate } = rule;
-
-  // Get the value from the stream
-  let streamValue: unknown;
-  if (field === "sqAudioProfile") {
-    streamValue = detectStreamAudioProfile(stream as Record<string, string | null>);
-  } else if (field === "sqDynamicRange") {
-    streamValue = detectStreamDynamicRange(stream as Record<string, string | null>);
-  } else {
-    const column = streamQueryFieldToColumn(field);
-    if (!column) return false;
-    streamValue = stream[column];
-  }
-
-  // Boolean fields
-  if (field === "sqIsDefault" || field === "sqForced") {
-    if (operator === "isNull" || operator === "isNotNull") {
-      const result = operator === "isNull" ? streamValue == null : streamValue != null;
-      return negate ? !result : result;
-    }
-    const boolVal = String(value).toLowerCase() === "true";
-    const actual = !!streamValue;
-    let result: boolean;
-    switch (operator) {
-      case "equals": result = actual === boolVal; break;
-      case "notEquals": result = actual !== boolVal; break;
-      default: return false;
-    }
-    return negate ? !result : result;
-  }
-
-  // Numeric fields
-  if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-    const numValue = Number(value);
-    const actual = streamValue != null ? Number(streamValue) : null;
-
-    let result: boolean;
-    switch (operator) {
-      case "isNull": result = actual == null; break;
-      case "isNotNull": result = actual != null; break;
-      default: {
-        if (actual == null) return negate ? true : false;
-        switch (operator) {
-          case "equals": result = actual === numValue; break;
-          case "notEquals": result = actual !== numValue; break;
-          case "greaterThan": result = actual > numValue; break;
-          case "greaterThanOrEqual": result = actual >= numValue; break;
-          case "lessThan": result = actual < numValue; break;
-          case "lessThanOrEqual": result = actual <= numValue; break;
-          case "between": {
-            const [minStr, maxStr] = String(value).split(",");
-            result = actual >= Number(minStr) && actual <= Number(maxStr);
-            break;
-          }
-          default: return false;
-        }
-      }
-    }
-    return negate ? !result : result;
-  }
-
-  // Text fields (including computed)
-  const strActual = streamValue != null ? String(streamValue).toLowerCase() : "";
-  const strValue = String(value).toLowerCase();
-  const streamEnumerable = isEnumerableField(field);
-
-  let result: boolean;
-  switch (operator) {
-    case "isNull": result = streamValue == null || strActual === ""; break;
-    case "isNotNull": result = streamValue != null && strActual !== ""; break;
-    case "equals": result = strActual === strValue; break;
-    case "notEquals": result = strActual !== strValue; break;
-    case "contains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? parts.some((p) => strActual === p)
-          : strActual === strValue;
-      } else {
-        result = strActual.includes(strValue);
-      }
-      break;
-    }
-    case "notContains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? !parts.some((p) => strActual === p)
-          : strActual !== strValue;
-      } else {
-        result = !strActual.includes(strValue);
-      }
-      break;
-    }
-    case "matchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = re.test(strActual);
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = !re.test(strActual);
-      break;
-    }
-    default: return false;
-  }
-  return negate ? !result : result;
-}
-
-/**
- * Evaluate a stream query group in-memory: check if ANY stream of the
- * matching type satisfies ALL active rules.
- */
-function evaluateStreamQueryGroupInMemory(
-  group: LifecycleRuleGroup,
-  item: Record<string, unknown>,
-): boolean {
-  if (!group.streamQuery) return false;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType];
-  const streams = (item.streams as Array<Record<string, unknown>>) ?? [];
-  const matchingStreams = streams.filter((s) => s.streamType === streamTypeInt);
-
-  const activeRules = group.rules.filter((r) => r.enabled !== false);
-  if (activeRules.length === 0) return false;
-
-  // Safety: an unconfigured contains/notContains rule, an operator that
-  // doesn't apply to the field type, or a malformed value makes the entire
-  // group unsatisfiable. Without this guard, quantifier="none" would be
-  // vacuously true ("no stream matches false") and sweep the library.
-  if (activeRules.some((rule) =>
-    isUnconfiguredContainsRule(rule.operator, rule.value) ||
-    !isOperatorApplicable(rule.operator, rule.field) ||
-    !isValueValidForRule(rule.operator, rule.value, rule.field) ||
-    // A field that maps to neither a stream column nor a computed stream
-    // value is misplaced — same vacuous-"none" hazard as the guards above
-    // (mirrors buildStreamQueryClause returning UNSATISFIABLE_WHERE).
-    (!isStreamQueryComputedField(rule.field) && !streamQueryFieldToColumn(rule.field as StreamQueryField))
-  )) {
-    return false;
-  }
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamMatches = (stream: Record<string, unknown>) =>
-    activeRules.every((rule) => evaluateStreamQueryRuleAgainstStream(rule, stream));
-
-  if (quantifier === "none") {
-    return !matchingStreams.some(streamMatches);
-  }
-  if (quantifier === "all") {
-    return matchingStreams.length > 0 && matchingStreams.every(streamMatches);
-  }
-  // Default: "any" (EXISTS)
-  return matchingStreams.some(streamMatches);
-}
-
 function evaluateRuleGroupInMemory(
   group: LifecycleRuleGroup,
   item: Record<string, unknown>,
@@ -2048,7 +1797,7 @@ export function evaluateAllRulesInMemory(
   return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
-export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules, hasSeriesAggregateRules };
+export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasSeriesAggregateRules };
 
 /**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
@@ -2073,6 +1822,8 @@ export async function evaluateSeriesScope(
    * only narrow a deletion (never wrong-target or over-delete).
    */
   restrictMembersToEpisodeMatches: boolean = false,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
@@ -2086,6 +1837,7 @@ export async function evaluateSeriesScope(
       type: "SERIES",
       library: { mediaServerId: { in: serverIds } },
     },
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
@@ -2143,7 +1895,7 @@ export async function evaluateSeriesScope(
 
   for (const [, episodes] of seriesMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
-    episodes.sort((a, b) => a.id.localeCompare(b.id));
+    episodes.sort((a, b) => compareIds(a.id, b.id));
     const representative = episodes[0];
     if (restrictMembersToEpisodeMatches) episodesByRepId.set(representative.id, episodes);
     const totalPlays = episodes.reduce((sum, ep) => sum + ep.playCount, 0);
@@ -2229,14 +1981,25 @@ export async function evaluateSeriesScope(
     });
   }
 
+  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allEpisodes.map((ep) => ep.id), crossSystemOptions)
+    : undefined;
+
   // Evaluate rules in-memory against aggregated series records
   const externalIdSource = "TVDB";
   const matching = [];
 
   for (const series of aggregated) {
+    // Folded over every episode, before a forced per-episode run narrows the
+    // members; also carried on the returned record, so the criteria and actual
+    // values reported for a match (getMatchedCriteriaForItems) see what the
+    // match was selected on — as the flat path's records do.
+    const cross = foldCrossSystemData(series.memberIds, crossSystem);
     // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
+      ...cross,
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
         ? series.lastPlayedAt instanceof Date
@@ -2315,13 +2078,19 @@ export async function evaluateSeriesScope(
               streams: "streams" in ep ? ep.streams : [],
               watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
               externalIds: epExternalIds,
+              ...crossSystem?.get(ep.id),
               ...aggInjection,
             };
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
           })
           .map((ep) => ep.id);
+        // Passing only as a whole (a summed file size, say) is not a match when
+        // the rule is per episode: with no member an episode-scoped action fell
+        // back to the representative, which never matched, and its settled
+        // empty member list then read as covering the whole show.
+        if (series.memberIds.length === 0) continue;
       }
-      matching.push(series);
+      matching.push({ ...series, ...cross });
     }
   }
 
@@ -2352,7 +2121,9 @@ export async function evaluateSeriesScope(
 export async function evaluateMusicScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
-  arrData?: ArrDataMap
+  arrData?: ArrDataMap,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
@@ -2366,6 +2137,7 @@ export async function evaluateMusicScope(
       type: "MUSIC",
       library: { mediaServerId: { in: serverIds } },
     },
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
@@ -2385,16 +2157,25 @@ export async function evaluateMusicScope(
     },
   });
 
-  // Group tracks by artist (parentTitle + libraryId)
-  const artistMap = new Map<string, typeof allTracks>();
+  // Group tracks by artist (parentTitle + libraryId), then split a title that
+  // provably names several artists — two or more MusicBrainz artist ids — so
+  // same-named artists are not aggregated (and deleted) as one. See
+  // `splitArtistGroupByMbid` for why a title with one id is never split.
+  const titleGroups = new Map<string, typeof allTracks>();
   for (const track of allTracks) {
     const key = `${track.libraryId}::${track.parentTitle ?? track.libraryId}`;
-    const group = artistMap.get(key);
+    const group = titleGroups.get(key);
     if (group) {
       group.push(track);
     } else {
-      artistMap.set(key, [track]);
+      titleGroups.set(key, [track]);
     }
+  }
+  const artistMap = new Map<string, typeof allTracks>();
+  for (const [key, tracks] of titleGroups) {
+    splitArtistGroupByMbid(tracks, (t) => artistMbidOf(t.externalIds)).forEach((group, i) => {
+      artistMap.set(`${key}::${i}`, group);
+    });
   }
 
   // Aggregate each artist into a single record for rule evaluation
@@ -2405,7 +2186,7 @@ export async function evaluateMusicScope(
 
   for (const [, tracks] of artistMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
-    tracks.sort((a, b) => a.id.localeCompare(b.id));
+    tracks.sort((a, b) => compareIds(a.id, b.id));
     const representative = tracks[0];
     const totalPlays = tracks.reduce((sum, t) => sum + t.playCount, 0);
     const totalSize = tracks.reduce(
@@ -2466,9 +2247,17 @@ export async function evaluateMusicScope(
   const externalIdSource = "MUSICBRAINZ";
   const matching = [];
 
+  // Cross-system fields, read across each artist's tracks (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allTracks.map((t) => t.id), crossSystemOptions)
+    : undefined;
+
   for (const artist of aggregated) {
+    // Also carried on the returned record (see evaluateSeriesScope).
+    const cross = foldCrossSystemData(artist.memberIds, crossSystem);
     const item: Record<string, unknown> = {
       ...artist,
+      ...cross,
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
         ? artist.lastPlayedAt instanceof Date
@@ -2490,7 +2279,7 @@ export async function evaluateMusicScope(
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta)) {
-      matching.push(artist);
+      matching.push({ ...artist, ...cross });
     }
   }
 
@@ -2510,7 +2299,9 @@ export async function evaluateLifecycleRules(
   type: "MOVIE" | "SERIES" | "MUSIC",
   serverIds: string[],
   arrData?: ArrDataMap,
-  seerrData?: SeerrDataMap
+  seerrData?: SeerrDataMap,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (!hasAnyActiveRules(rules)) return [];
@@ -2572,6 +2363,7 @@ export async function evaluateLifecycleRules(
 
   const items = await prisma.mediaItem.findMany({
     where,
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
@@ -2596,13 +2388,13 @@ export async function evaluateLifecycleRules(
   // Unified in-memory post-filter: applies when ANY rules can't be fully expressed in Prisma
   // (wildcard operators, stream counts, Arr/Seerr fields). Evaluates ALL rules together so that
   // AND/OR logic between groups with mixed field types is correctly enforced.
+  let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
   if (needsFullReeval) {
     const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
 
     // Batch-fetch cross-system data if needed
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
-      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id));
+      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id), crossSystemOptions);
     }
 
     filteredItems = filteredItems.filter((item) => {
@@ -2629,8 +2421,14 @@ export async function evaluateLifecycleRules(
     });
   }
 
+  // The cross-system values ride on the returned rows, as the series- and
+  // artist-scope engines carry theirs: detection, the preview and the diff
+  // explain a match from these records, and without them a match made on
+  // "Matched By Rule Set" or "Has Pending Action" recorded neither among the
+  // criteria it matched on.
   return filteredItems.map((item) => ({
     ...item,
+    ...(crossSystemData?.get(item.id) ?? {}),
     fileSize: item.fileSize?.toString() ?? null,
   }));
 }
@@ -2671,7 +2469,7 @@ export function groupSeriesResults<
         existing.latestPlayed = playedDate;
       }
       // Keep representative with lowest id for stability across syncs
-      if (item.id.localeCompare(existing.representative.id) < 0) {
+      if (compareIds(item.id, existing.representative.id) < 0) {
         existing.representative = item;
       }
     }

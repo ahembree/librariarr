@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +49,9 @@ interface LogEntry {
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 
+/** An auto-refresh counts the matching rows on every this-many ticks (30 s). */
+const COUNT_EVERY_TICKS = 6;
+
 // Console level colors from the handoff: debug=faint, info=sky, warn=amber,
 // error=red — rendered as colored mono text, not chips.
 const LEVEL_TEXT: Record<string, string> = {
@@ -85,8 +88,20 @@ export default function LogsPage() {
   // Auto-refresh
   const [autoRefresh, setAutoRefresh] = useState(false);
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
+  // Only the latest read may write: a filter change while a read is in
+  // flight, or an auto-refresh tick overtaking one, must not land older rows.
+  const requestToken = useRef(0);
+
+  /**
+   * `background`: an auto-refresh tick. It asks for the page without its
+   * total (`count=false`) — counting every matching row of a table that only
+   * grows, every five seconds, to repeat a figure the last read gave — and
+   * keeps the console on screen instead of showing the loading state. Every
+   * `COUNT_EVERY_TICKS`th tick counts again, so the total keeps up.
+   */
+  const fetchLogs = useCallback(async (background = false) => {
+    const token = ++requestToken.current;
+    if (!background) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (activeLevels.size > 0 && activeLevels.size < LOG_LEVELS.length) {
@@ -97,16 +112,23 @@ export default function LogsPage() {
       if (search) params.set("search", search);
       params.set("page", page.toString());
       params.set("limit", "100");
+      if (background) params.set("count", "false");
 
       const res = await fetch(`/api/system/logs?${params}`);
       const data = await res.json();
+      if (token !== requestToken.current) return;
       setLogs(data.logs ?? []);
-      setTotal(data.total ?? 0);
-      setPages(data.pages ?? 1);
+      if (typeof data.total === "number") {
+        setTotal(data.total);
+        setPages(data.pages ?? 1);
+      } else if (data.hasMore) {
+        // Uncounted: at least the page after this one exists.
+        setPages((prev) => Math.max(prev, page + 1));
+      }
     } catch {
       // Ignore fetch errors
     } finally {
-      setLoading(false);
+      if (token === requestToken.current) setLoading(false);
     }
   }, [activeLevels, category, source, search, page]);
 
@@ -126,7 +148,11 @@ export default function LogsPage() {
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchLogs, 5000);
+    let tick = 0;
+    const interval = setInterval(() => {
+      tick += 1;
+      void fetchLogs(tick % COUNT_EVERY_TICKS !== 0);
+    }, 5000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs]);
 
@@ -198,7 +224,7 @@ export default function LogsPage() {
             )}
             {autoRefresh ? "Live" : "Auto-refresh"}
           </Button>
-          <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
+          <Button variant="outline" size="sm" onClick={() => fetchLogs()} disabled={loading}>
             <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>

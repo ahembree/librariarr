@@ -1,22 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import { SeerrClient } from "@/lib/seerr/seerr-client";
-import { validateRequest, arrTestSchema } from "@/lib/validation";
-import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { SEERR, instanceTestRoutes } from "@/lib/integrations/instance-routes";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { data, error } = await validateRequest(request, arrTestSchema);
-  if (error) return error;
-  const { url, apiKey } = data;
-
-  const client = new SeerrClient(url, apiKey);
-  const result = await client.testConnection();
-  return NextResponse.json(
-    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
-  );
-}
+// An unsaved URL and key's connection test, as every integration type answers it
+// (src/lib/integrations/instance-routes.ts).
+export const { POST } = instanceTestRoutes(SEERR);

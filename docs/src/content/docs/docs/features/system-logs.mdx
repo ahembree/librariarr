@@ -39,24 +39,28 @@ The logs page displays:
 
 Filter logs by:
 
-- **Level** — show only specific severity levels
+- **Level** — show only specific severity levels (INFO, WARN and ERROR are selected by default; tick DEBUG to see debug entries)
 - **Category** — filter by source category
 - **Source** — filter by specific component
-- **Search** — free text search across log messages
+- **Search** — case-insensitive text search across log messages
+
+### Auto-refresh
+
+Turn on **Auto-refresh** to re-read the current page every 5 seconds. The entry count and page total are updated every 30 seconds rather than on every refresh, since counting a large log table is the slow part; a newer page that appears in between still becomes reachable straight away.
 
 ## Retention & Archival
 
-Configure log retention in **Settings → General → Log Retention**:
+Configure log retention in **Settings → General → Data Retention → Keep logs for**:
 
 - **Range**: 1 to 365 days (default: 7)
-- Logs older than today are automatically **archived** to compressed `.tar.gz` files and removed from the database
+- Once an hour, logs from before today (days are counted in UTC) are **archived** to compressed `.tar.gz` files, one per day, and removed from the database
 - Archive files older than the retention period are automatically pruned
 
 ### Archives
 
-Archived logs are stored in `/config/logs` (configurable via the `LOG_ARCHIVE_DIR` environment variable). Each archive contains a single day's logs in JSON format.
+Archived logs are stored in `/config/logs` (configurable via the `LOG_ARCHIVE_DIR` environment variable). Each archive (`logs-YYYY-MM-DD.tar.gz`) contains a single day's logs as one JSON file.
 
-You can browse and download archived logs via the **System Logs** page or the `/api/system/logs/archives` API endpoint.
+The System Logs page shows only the logs still in the database. To read an archive, open it from that directory on the host (it is under the `/config` volume by default).
 
 <Aside>
   Debug logs can be very verbose. Enable `LOG_DEBUG=true` only when troubleshooting specific issues, and consider lowering retention during extended debug sessions.

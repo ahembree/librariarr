@@ -54,22 +54,11 @@ export interface MediaServer {
   }[];
 }
 
-export interface ArrInstance {
-  id: string;
-  name: string;
-  url: string;
-  apiKey: string;
-  externalUrl: string | null;
-  enabled: boolean;
-  createdAt: string;
-}
-
-export type SeerrInstance = ArrInstance;
-
 /**
- * A configured Tracearr connection. `apiKey` always arrives masked
- * (`MASKED_VALUE` from `sanitize()`); the edit form echoes it back untouched
- * and `tracearrInstanceUpdateSchema` maps the mask to "keep the stored key".
+ * A configured Tracearr connection, as the Media Servers tab reads it for the
+ * watch-history-source dropdown. `apiKey` always arrives masked (`MASKED_VALUE`
+ * from `sanitize()`). The Integrations tab's forms use the shape every
+ * integration type shares (`IntegrationInstance` in `integration-instances.ts`).
  */
 export interface TracearrInstance {
   id: string;
@@ -205,6 +194,18 @@ export interface SystemInfo {
   latestMigration: string;
   databaseSize: string;
   stats: { mediaItems: number; enabledLibraries: number; totalLibraries: number; servers: number };
+}
+
+/**
+ * One enabled server's realtime WebSocket, from `GET /api/tools/realtime/status`.
+ * `connecting` covers a retry in progress and a server the manager has not
+ * opened yet; `disconnected` is a server it could not reach on the last try.
+ */
+export interface RealtimeServerStatus {
+  serverId: string;
+  name: string;
+  type: string;
+  status: "connecting" | "connected" | "disconnected";
 }
 
 export interface ImageCacheStats {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
@@ -10,10 +10,45 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
+import { lazyComponent } from "@/components/lazy-component";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
-import { useRealtime } from "@/hooks/use-realtime";
+import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { fetchJsonShared } from "@/lib/shared-fetch";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
+import { dropMediaDerivedPrefetches } from "@/lib/media/detail-prefetch";
+import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
+
+/**
+ * The library pages keep the lists they loaded (`list-cache.ts`) and the
+ * detail views take hover-prefetched records (`detail-prefetch.ts`). Anything
+ * that changes the media drops both, before any page's own refetch for the same
+ * event reads them (`beforeRealtimeEvents`), and on a reconnect's resync, which
+ * stands for every event missed.
+ */
+function dropClientMediaCaches(): void {
+  clearLibraryListCache();
+  dropMediaDerivedPrefetches();
+}
+// `sync:failed` too: a sync that wrote some libraries before failing settles
+// the dataset (the server's caches are dropped) and announces only the failure.
+beforeRealtimeEvents(
+  ["sync:completed", "sync:failed", "watch-history:updated", "server:changed", "settings:changed"],
+  dropClientMediaCaches,
+);
+
+
+// Loaded only when the layout says release notes are owed (or could not say):
+// it renders nothing otherwise, and its code was part of every page's script.
+const WhatsNewDialog = lazyComponent(
+  () => import("@/components/whats-new-dialog").then((m) => m.WhatsNewDialog),
+  () => null,
+);
+
+// How long the event stream must stay down before the shell says so.
+const DISCONNECTED_BANNER_DELAY_MS = 15000;
 
 interface UnreachableServer {
   id: string;
@@ -30,15 +65,26 @@ export function AuthenticatedShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
-  const [maintenanceActive, setMaintenanceActive] = useState(false);
+  // The layout read whether maintenance is on, so the banner is in the first
+  // paint; only outside the layout's read is it asked for on mount.
+  const shell = useShellSettings();
+  const [maintenanceActive, setMaintenanceActive] = useState(
+    () => shell?.getSnapshot().maintenanceActive ?? false,
+  );
+  const maintenanceKnown = useRef(shell !== null);
+  // Read once: recording the notes as seen clears it, and the dialog must stay
+  // mounted to close.
+  const [whatsNewDue] = useState(() => shell === null || shell.getSnapshot().whatsNewDue);
   const [unreachableServers, setUnreachableServers] = useState<UnreachableServer[]>([]);
   useScrollToTop();
 
   const checkMaintenance = useCallback(() => {
-    fetch("/api/tools/maintenance")
-      .then((res) => res.json())
-      .then((data) => setMaintenanceActive(data.enabled === true))
-      .catch((e) => console.error("Failed to check maintenance status", e));
+    // Shared with the Stream Manager, which reads it on the same event.
+    fetchJsonShared<{ enabled?: boolean }>("/api/tools/maintenance").then((data) => {
+      // A failed check keeps the banner as it is.
+      if (data) setMaintenanceActive(data.enabled === true);
+      else console.error("Failed to check maintenance status");
+    });
   }, []);
 
   // Push-driven: `/api/tools/maintenance` emits `settings:changed` on an actual
@@ -46,27 +92,38 @@ export function AuthenticatedShell({
   // subscription is also what keeps the shared EventSource alive — it lives in
   // the shell, which never unmounts, so refCount never hits zero on a
   // navigation and the connection is no longer torn down and rebuilt on every
-  // route change.
+  // route change. Do not remove it.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
 
-  // A media server's socket dropping or recovering now arrives as a push
-  // (bridged from realtimeBus); previously this banner waited on the sidebar's
-  // 30s session poll failing.
-  useRealtime("server-status", () => {
-    fetch("/api/tools/sessions")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) setUnreachableServers(data.unreachableServers ?? []);
-      })
-      .catch(() => {});
-  });
-
+  // The banner waits out a short drop. The stream ends routinely — the route
+  // closes it after an hour, a proxy closes one it thinks idle — and the
+  // browser reconnects within a few seconds, so shown at once the banner
+  // flashed during normal use with nothing actually wrong. It also kept the
+  // banner out of the first paint, before the stream had opened at all.
+  const [realtimeDown, setRealtimeDown] = useState(false);
   useEffect(() => {
-    checkMaintenance();
-    // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
-    // stays as a safety net — but at 5 minutes rather than 30 seconds, because
-    // the push above is now the primary path.
-    const interval = setInterval(checkMaintenance, 300000);
+    if (realtimeConnected) return;
+    const timer = setTimeout(() => setRealtimeDown(true), DISCONNECTED_BANNER_DELAY_MS);
+    // Runs when the stream is back (or the shell unmounts).
+    return () => {
+      clearTimeout(timer);
+      setRealtimeDown(false);
+    };
+  }, [realtimeConnected]);
+
+  // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
+  // stays as a safety net — at 5 minutes, and only while pushes are not
+  // arriving, because the push above is the primary path.
+  useFallbackPoll(checkMaintenance, 300000);
+
+  // The unreachable-server banner follows the sidebar's session check, which
+  // re-reads `/api/tools/sessions` on `server-status` (a media server's socket
+  // dropping or recovering, bridged from realtimeBus) and announces the answer
+  // as `server-health-changed` below. The shell used to fetch the same route on
+  // the same event itself — a second request that asks every media server for
+  // its sessions.
+  useEffect(() => {
+    if (!maintenanceKnown.current) checkMaintenance();
 
     const onMaintenanceChanged = (e: Event) => {
       const detail = (e as CustomEvent<{ enabled: boolean }>).detail;
@@ -81,7 +138,6 @@ export function AuthenticatedShell({
     window.addEventListener("server-health-changed", onServerHealthChanged);
 
     return () => {
-      clearInterval(interval);
       window.removeEventListener("maintenance-changed", onMaintenanceChanged);
       window.removeEventListener("server-health-changed", onServerHealthChanged);
     };
@@ -146,7 +202,7 @@ export function AuthenticatedShell({
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>Your session expired &mdash; sign in again</span>
           </Link>
-        ) : !realtimeConnected ? (
+        ) : realtimeDown ? (
           <div className="flex shrink-0 items-center justify-center gap-2 border-b border-muted-foreground/20 bg-muted/40 px-4 py-1.5 text-sm text-muted-foreground">
             <WifiOff className="h-3.5 w-3.5" />
             <span>Live updates disconnected &mdash; reconnecting</span>
@@ -166,6 +222,8 @@ export function AuthenticatedShell({
       </div>
       {/* The "Confirm it's you" prompt behind fetchWithReauth. */}
       <ReauthDialogHost />
+      {/* Once per upgrade: the release notes since the last version seen. */}
+      {whatsNewDue && <WhatsNewDialog />}
     </div>
   );
 }

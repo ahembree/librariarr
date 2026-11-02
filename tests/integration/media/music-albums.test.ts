@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -147,20 +153,17 @@ describe("GET /api/media/music/albums", () => {
       }[];
     }>(response, 200);
 
-    expect(body.albums).toHaveLength(2);
-
     // Sorted alphabetically
-    const albumOne = body.albums.find((a) => a.albumTitle === "Album One");
-    expect(albumOne).toBeDefined();
-    expect(albumOne!.trackCount).toBe(2);
-    expect(albumOne!.totalSize).toBe("30000000");
-    expect(albumOne!.audioCodecCounts["FLAC"]).toBe(2);
+    expect(body.albums.map((a) => a.albumTitle)).toEqual(["Album One", "Album Two"]);
 
-    const albumTwo = body.albums.find((a) => a.albumTitle === "Album Two");
-    expect(albumTwo).toBeDefined();
-    expect(albumTwo!.trackCount).toBe(1);
-    expect(albumTwo!.totalSize).toBe("5000000");
-    expect(albumTwo!.audioCodecCounts["MP3"]).toBe(1);
+    const [albumOne, albumTwo] = body.albums;
+    expect(albumOne.trackCount).toBe(2);
+    expect(albumOne.totalSize).toBe("30000000");
+    expect(albumOne.audioCodecCounts).toEqual({ FLAC: 2 });
+
+    expect(albumTwo.trackCount).toBe(1);
+    expect(albumTwo.totalSize).toBe("5000000");
+    expect(albumTwo.audioCodecCounts).toEqual({ MP3: 1 });
   });
 
   it("uses 'Unknown Album' for tracks without albumTitle", async () => {

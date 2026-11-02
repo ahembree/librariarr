@@ -60,7 +60,11 @@ model AppSettings {
   lifecycleExecutionSchedule      String    @default("EVERY_6H")
   lastScheduledLifecycleExecution DateTime?
   dashboardLayout                 Json?
+  /// Bumped on every dashboard layout save; a save based on an older one is refused.
+  dashboardLayoutRevision         Int       @default(0)
   columnPreferences               Json?
+  /// Bumped on every column preferences save; a save based on an older one is refused.
+  columnPreferencesRevision       Int       @default(0)
   cardDisplayPreferences          Json?
   chipColors                      Json?
   maintenanceMode                 Boolean   @default(false)
@@ -81,6 +85,9 @@ model AppSettings {
   /// Tell Discord when an API key is created or deleted — a stolen browser
   /// session can mint one, so on by default wherever a webhook is set.
   discordNotifyApiKeys            Boolean   @default(true)
+  /// The app version whose "What's new" dialog the admin last closed. Null
+  /// on an install upgraded from before the dialog existed.
+  lastSeenVersion                 String?
   localAuthEnabled                Boolean   @default(false)
   // Allow signing in with Plex from the login page. When false, the Plex
   // button is hidden and /api/auth/plex/token rejects logins — but the
@@ -652,7 +659,6 @@ model LifecycleAction {
   matchedMediaItemIds    String[]              @default([])
   addArrTags             String[]              @default([])
   removeArrTags          String[]              @default([])
-  externalMediaId        Int?
   deletedBytes           BigInt?
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
@@ -679,6 +685,10 @@ model RuleMatch {
   // [ruleSetId] alone is covered by the composite unique's leading column.
   @@unique([ruleSetId, mediaItemId])
   @@index([copyIds], type: Gin)
+  // `mediaItemId IN (…)` lookups that name no rule set, and the cascade from a
+  // MediaItem delete: without it every deleted item scanned the whole table
+  // (a 3,000-item purge spent 1.8 s here against 11k matches).
+  @@index([mediaItemId])
 }
 
 model LifecycleException {
@@ -690,8 +700,11 @@ model LifecycleException {
   reason      String?
   createdAt   DateTime  @default(now())
 
+  // Also serves every lookup by userId alone (it leads with the column).
   @@unique([userId, mediaItemId])
-  @@index([userId])
+  // The cascade from a MediaItem delete and `mediaItemId IN (…)` counts that
+  // name no user — the unique above leads with userId, so neither could use it.
+  @@index([mediaItemId])
 }
 
 model SystemConfig {
@@ -724,9 +737,14 @@ model LogEntry {
   meta      Json?
   createdAt DateTime    @default(now())
 
-  @@index([level])
+  // The System Logs page filters on level, category and source and always
+  // orders newest first; each composite returns a filter's newest rows in
+  // order, where the single-column index could only find them all and sort.
+  // They also serve every lookup the single-column ones did.
+  @@index([level, createdAt])
   @@index([category])
-  @@index([source])
+  @@index([category, createdAt])
+  @@index([source, createdAt])
   @@index([createdAt])
 }
 
@@ -882,9 +900,15 @@ model WatchHistory {
   /// bundled — full fidelity without 20+ scalar columns.
   streamQuality Json?
 
+  // [mediaServerId] alone is covered by the leading column of this unique and
+  // of the two composites below.
   @@unique([mediaServerId, sourceEventId])
   @@index([mediaItemId])
-  @@index([mediaServerId])
+  // The Tracearr import's watermarks (MAX/MIN "watchedAt" of the server's
+  // TRACEARR rows) and the import status' per-server count/min/max: each
+  // watermark is one probe at an end of this index, and the status an
+  // index-only scan, where they used to read every one of the server's plays.
+  @@index([mediaServerId, source, watchedAt])
   @@index([serverUsername])
   @@index([watchedAt])
   // The incremental native refresh resolves its window from MAX("watchedAt")
@@ -893,7 +917,8 @@ model WatchHistory {
   @@index([mediaServerId, watchedAt])
   @@index([deviceName])
   @@index([platform])
-  @@index([source])
+  // No [source] index: every filter on it also names the server (the
+  // composite above) or the item, and two values are never selective alone.
   @@index([watched])
   @@index([isTranscode])
   @@index([player])

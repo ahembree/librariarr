@@ -20,8 +20,8 @@ import type { Prisma } from "@/generated/prisma/client";
  */
 
 /** Page size bounds — mirrors /api/media/history so every play list behaves alike. */
-export const DEFAULT_PLAY_LIMIT = 50;
-export const MAX_PLAY_LIMIT = 200;
+const DEFAULT_PLAY_LIMIT = 50;
+const MAX_PLAY_LIMIT = 200;
 
 /**
  * Every column a play row exposes.
@@ -33,7 +33,7 @@ export const MAX_PLAY_LIMIT = 200;
  * they are selected unconditionally and the UI renders each only when present
  * rather than as empty placeholders.
  */
-export const PLAY_HISTORY_SELECT = {
+const PLAY_HISTORY_SELECT = {
   id: true,
   serverUsername: true,
   watchedAt: true,
@@ -80,7 +80,7 @@ export const PLAY_HISTORY_SELECT = {
 type PlayRow = Prisma.WatchHistoryGetPayload<{ select: typeof PLAY_HISTORY_SELECT }>;
 
 /** Serialize one play row for the wire (Dates → ISO, relations flattened). */
-export function serializePlayRow(row: PlayRow) {
+function serializePlayRow(row: PlayRow) {
   return {
     id: row.id,
     serverUsername: row.serverUsername,

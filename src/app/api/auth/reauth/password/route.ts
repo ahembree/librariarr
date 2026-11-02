@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, reauthPasswordSchema } from "@/lib/validation";
 import { loadReauthContext } from "@/lib/auth/reauth";
@@ -23,12 +23,7 @@ import {
  * its own per-address and global budget, so a bucket of its own would have
  * added a second budget of guesses beside that one.
  */
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const limited = peekAuthRateLimit(request, PASSWORD_CONFIRM_BUCKET);
   if (limited) return limited;
 
@@ -70,4 +65,4 @@ export async function POST(request: NextRequest) {
 
   apiLogger.info("Auth", "Identity confirmed with the account password");
   return NextResponse.json({ verified: true });
-}
+});

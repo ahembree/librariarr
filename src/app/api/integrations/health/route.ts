@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
+import { withSession } from "@/lib/auth/with-session";
 import { appCache } from "@/lib/cache/memory-cache";
-import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { RadarrClient } from "@/lib/arr/radarr-client";
-import { LidarrClient } from "@/lib/arr/lidarr-client";
-import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
+import { LIDARR, RADARR, SEERR, SONARR, listInstances } from "@/lib/integrations/instance-routes";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 /**
@@ -13,8 +10,8 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
  *
  * Used by the rule editor, query page, pending actions, and rule matches
  * pages to surface a warning when a rule references an integration that is
- * configured but currently unreachable. Cached for 30s per user to avoid
- * pinging integrations on every page load.
+ * configured but currently unreachable. Cached for 30s to avoid pinging
+ * integrations on every page load.
  */
 
 const HEALTH_TTL_MS = 30_000;
@@ -78,31 +75,23 @@ async function checkInstance(
   }
 }
 
+/** The types whose reachability the rule editor and the Query page warn about. */
+const CHECKED = [SONARR, RADARR, LIDARR, SEERR] as const;
+
 async function computeHealth(userId: string): Promise<IntegrationsHealth> {
-  const [sonarrInstances, radarrInstances, lidarrInstances, seerrInstances] = await Promise.all([
-    prisma.sonarrInstance.findMany({ where: { userId, enabled: true }, select: { id: true, name: true, url: true, apiKey: true } }),
-    prisma.radarrInstance.findMany({ where: { userId, enabled: true }, select: { id: true, name: true, url: true, apiKey: true } }),
-    prisma.lidarrInstance.findMany({ where: { userId, enabled: true }, select: { id: true, name: true, url: true, apiKey: true } }),
-    prisma.seerrInstance.findMany({ where: { userId, enabled: true }, select: { id: true, name: true, url: true, apiKey: true } }),
-  ]);
-
-  const [sonarrResults, radarrResults, lidarrResults, seerrResults] = await Promise.all([
-    Promise.all(sonarrInstances.map((i) => checkInstance(() => new SonarrClient(i.url, i.apiKey).testConnection(), i.id, i.name))),
-    Promise.all(radarrInstances.map((i) => checkInstance(() => new RadarrClient(i.url, i.apiKey).testConnection(), i.id, i.name))),
-    Promise.all(lidarrInstances.map((i) => checkInstance(() => new LidarrClient(i.url, i.apiKey).testConnection(), i.id, i.name))),
-    Promise.all(seerrInstances.map((i) => checkInstance(() => new SeerrClient(i.url, i.apiKey).testConnection(), i.id, i.name))),
-  ]);
-
-  const buildType = (results: InstanceHealth[]): IntegrationTypeHealth => ({
-    configured: results.length,
-    reachable: results.filter((r) => r.reachable).length,
-    instances: results,
-  });
-
-  const sonarr = buildType(sonarrResults);
-  const radarr = buildType(radarrResults);
-  const lidarr = buildType(lidarrResults);
-  const seerr = buildType(seerrResults);
+  const [sonarr, radarr, lidarr, seerr] = await Promise.all(
+    CHECKED.map(async (config): Promise<IntegrationTypeHealth> => {
+      const instances = await listInstances(config, userId, { enabledOnly: true });
+      const results = await Promise.all(
+        instances.map((i) => checkInstance(() => config.client(i.url, i.apiKey).testConnection(), i.id, i.name)),
+      );
+      return {
+        configured: results.length,
+        reachable: results.filter((r) => r.reachable).length,
+        instances: results,
+      };
+    }),
+  );
 
   return {
     sonarr,
@@ -113,19 +102,13 @@ async function computeHealth(userId: string): Promise<IntegrationsHealth> {
   };
 }
 
-export async function GET(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: Request) => {
   // Allow the UI to bypass the cache on demand (e.g. after editing an
   // integration). With no flag, repeat calls within the TTL window are
   // served from cache.
   const url = new URL(request.url);
   const fresh = url.searchParams.get("fresh") === "1";
 
-  const cacheKey = `integrations:health:${session.userId}`;
   const empty: IntegrationsHealth = {
     sonarr: emptyType(),
     radarr: emptyType(),
@@ -134,11 +117,11 @@ export async function GET(request: Request) {
     arrAnyReachable: false,
   };
 
-  if (fresh) appCache.invalidate(cacheKey);
+  if (fresh) appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
 
   let health: IntegrationsHealth;
   try {
-    health = await appCache.getOrSet(cacheKey, () => computeHealth(session.userId!), HEALTH_TTL_MS);
+    health = await appCache.getOrSet(INTEGRATIONS_HEALTH_CACHE_KEY, () => computeHealth(session.userId), HEALTH_TTL_MS);
   } catch {
     // If everything blew up (DB error, etc.), don't 500 — return an empty
     // shape so the UI can fall back to the existing "not configured" path.
@@ -146,4 +129,4 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(health);
-}
+});

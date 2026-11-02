@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { sendDiscordNotification, buildMaintenanceEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, maintenanceSchema } from "@/lib/validation";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: { maintenanceMode: true, maintenanceMessage: true, maintenanceDelay: true, discordNotifyMaintenance: true, maintenanceExcludedUsers: true },
   });
 
@@ -23,14 +18,9 @@ export async function GET() {
     discordNotifyMaintenance: settings?.discordNotifyMaintenance ?? false,
     excludedUsers: settings?.maintenanceExcludedUsers ?? [],
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, maintenanceSchema);
   if (error) return error;
   const { enabled, message, delay, discordNotifyMaintenance, excludedUsers } = data;
@@ -41,12 +31,12 @@ export async function PUT(request: NextRequest) {
   // message while maintenance is on), and notifying on every PUT spammed the
   // webhook with identical "maintenance enabled" embeds.
   const prior = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: { maintenanceMode: true },
   });
 
   const settings = await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: {
       maintenanceMode: enabled,
       maintenanceMessage: message,
@@ -55,7 +45,7 @@ export async function PUT(request: NextRequest) {
       ...(excludedUsers !== undefined && { maintenanceExcludedUsers: excludedUsers }),
     },
     create: {
-      userId: session.userId!,
+      userId: session.userId,
       maintenanceMode: enabled,
       maintenanceMessage: message,
       ...(delay !== undefined && { maintenanceDelay: delay }),
@@ -86,7 +76,7 @@ export async function PUT(request: NextRequest) {
   if (stateChanged) {
     eventBus.emit({
       type: "settings:changed",
-      userId: session.userId!,
+      userId: session.userId,
       meta: { maintenanceMode: enabled },
     });
   }
@@ -109,4 +99,4 @@ export async function PUT(request: NextRequest) {
     discordNotifyMaintenance: settings.discordNotifyMaintenance,
     excludedUsers: settings.maintenanceExcludedUsers,
   });
-}
+});

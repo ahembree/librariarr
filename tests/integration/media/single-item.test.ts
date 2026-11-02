@@ -94,9 +94,12 @@ describe("GET /api/media/[id]", () => {
           title: string;
           mediaServer: { name: string; url: string };
         };
+        genres: string[];
         streams: unknown[];
         externalIds: unknown[];
+        servers: { serverId: string; serverName: string; serverType: string; mediaItemId: string }[];
       };
+      playServers: Record<string, unknown>[];
     }>(response, 200);
 
     expect(body.item.id).toBe(item.id);
@@ -106,8 +109,26 @@ describe("GET /api/media/[id]", () => {
     expect(body.item.resolution).toBe("1080p");
     expect(body.item.library.title).toBe("Movies");
     expect(body.item.library.mediaServer.name).toBe("My Plex");
+    expect(body.item.fileSize).toBe("4294967296");
+    expect(body.item.genres).toEqual(["Action", "Sci-Fi"]);
     expect(body.item.streams).toEqual([]);
     expect(body.item.externalIds).toEqual([]);
+    // No dedup key, so only its own server.
+    expect(body.item.servers).toEqual([
+      { serverId: server.id, serverName: "My Plex", serverType: "PLEX", mediaItemId: item.id },
+    ]);
+    expect(body.playServers).toEqual([
+      {
+        serverName: "My Plex",
+        serverType: "PLEX",
+        serverUrl: "http://plex.test:32400",
+        externalUrl: null,
+        machineId: server.machineId,
+        ratingKey: item.ratingKey,
+        parentRatingKey: null,
+        grandparentRatingKey: null,
+      },
+    ]);
   });
 
   it("serializes BigInt fileSize to string", async () => {
@@ -178,8 +199,9 @@ describe("GET /api/media/[id]", () => {
       type: "MOVIE",
     });
 
-    await createTestExternalId(item.id, "tmdb", "603");
-    await createTestExternalId(item.id, "imdb", "tt0133093");
+    // The sync stores sources upper-cased.
+    await createTestExternalId(item.id, "TMDB", "603");
+    await createTestExternalId(item.id, "IMDB", "tt0133093");
 
     setMockSession({ userId: user.id, isLoggedIn: true });
 
@@ -194,12 +216,11 @@ describe("GET /api/media/[id]", () => {
       };
     }>(response, 200);
 
-    expect(body.item.externalIds).toHaveLength(2);
-    expect(body.item.externalIds).toEqual(
-      expect.arrayContaining([
-        { source: "tmdb", externalId: "603" },
-        { source: "imdb", externalId: "tt0133093" },
-      ])
-    );
+    expect(
+      [...body.item.externalIds].sort((a, b) => a.source.localeCompare(b.source)),
+    ).toEqual([
+      { source: "IMDB", externalId: "tt0133093" },
+      { source: "TMDB", externalId: "603" },
+    ]);
   });
 });

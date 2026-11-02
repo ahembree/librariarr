@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession, type LoggedInSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
+import {
+  tryBeginExecute,
+  endExecute,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
-import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
@@ -19,6 +25,8 @@ import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { ACTION_SIGNATURE_SELECT, actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { coverageOf, episodesToExecute } from "@/lib/lifecycle/episode-coverage";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import {
   destructiveRefusalResponse,
@@ -47,12 +55,7 @@ function storedMemberIds(
   return byItem;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, actionExecuteSchema);
   if (error) return error;
 
@@ -104,12 +107,22 @@ export async function POST(request: NextRequest) {
       { status: 409 }
     );
   }
+  // Kept apart from an ad-hoc query action, which can act on another copy or
+  // track of the same Arr record (see `execute-in-flight.ts`).
+  if (!tryBeginRuleSetExecution(session.userId)) {
+    endExecute(ruleSet.id, lockedItems);
+    return NextResponse.json(
+      { error: "A query action is running — wait for it to finish" },
+      { status: 409 }
+    );
+  }
   try {
     return await executeRuleSet(session, ruleSet, mediaItemIds);
   } finally {
+    endRuleSetExecution(session.userId);
     endExecute(ruleSet.id, lockedItems);
   }
-}
+});
 
 type RuleSetRow = NonNullable<Awaited<ReturnType<typeof prisma.ruleSet.findFirst>>>;
 
@@ -119,7 +132,7 @@ type RuleSetRow = NonNullable<Awaited<ReturnType<typeof prisma.ruleSet.findFirst
  * few of them (the MUSIC+Seerr disarm) write before they refuse.
  */
 async function executeRuleSet(
-  session: Awaited<ReturnType<typeof getSession>>,
+  session: LoggedInSession,
   ruleSet: RuleSetRow,
   mediaItemIds: string[] | undefined,
 ): Promise<NextResponse> {
@@ -257,12 +270,54 @@ async function executeRuleSet(
     logger.info("Lifecycle", `Manual execute selected: ${itemIds.length} validated matches (${invalidIds.length} rejected) for rule set "${ruleSet.id}"`);
   }
 
+  // An episode-scoped Unmonitor/Search acts on the episodes its Pending row
+  // lists (`episodesToExecute`), not every episode the match holds now.
+  if (ruleSet.actionType && ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) {
+    const signature = actionConfigSignature(ruleSet);
+    const [pending, settled] = await Promise.all([
+      prisma.lifecycleAction.findMany({
+        where: { ruleSetId: ruleSet.id, mediaItemId: { in: itemIds }, status: "PENDING" },
+        select: { mediaItemId: true, matchedMediaItemIds: true },
+      }),
+      // Every settled action of the rule set, wherever it is stored: a show's
+      // representative moves, and what an action under the old one covered
+      // still counts (`episode-coverage.ts`).
+      prisma.lifecycleAction.findMany({
+        where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType },
+        select: ACTION_SIGNATURE_SELECT,
+      }),
+    ]);
+    const pendingByItem = new Map<string, string[]>();
+    for (const a of pending) if (a.mediaItemId) pendingByItem.set(a.mediaItemId, a.matchedMediaItemIds);
+    const coverage = coverageOf(settled.filter((a) => actionConfigSignature(a) === signature));
+    const covered: string[] = [];
+    for (const id of itemIds) {
+      const members = episodesToExecute(id, episodeIdMap.get(id) ?? [], pendingByItem.get(id) ?? null, coverage);
+      if (members.length > 0) episodeIdMap.set(id, members);
+      else {
+        episodeIdMap.delete(id);
+        covered.push(id);
+      }
+    }
+    if (covered.length > 0) {
+      const skip = new Set(covered);
+      itemIds = itemIds.filter((id) => !skip.has(id));
+      logger.info("Lifecycle", `Skipped ${covered.length} item(s) whose episodes this action has already acted on, for rule set "${ruleSet.id}"`);
+      if (itemIds.length === 0) {
+        return NextResponse.json(
+          { error: "This action has already acted on every matched episode of the selected items" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   // Filter out items that have a LifecycleException — both representative
   // items AND episode/track MEMBERS (member ids never appear in itemIds, so
   // they must be collected from episodeIdMap and checked too).
   // An exception on another server's copy of an item (same dedupKey) counts.
   const memberIds = [...episodeIdMap.values()].flat();
-  const excludedIds = await findExceptedItemIds(session.userId!, [...itemIds, ...memberIds]);
+  const excludedIds = await findExceptedItemIds(session.userId, [...itemIds, ...memberIds]);
   if (excludedIds.size > 0) {
 
     // Drop excepted members from each item's member list; if a whole-record
@@ -332,16 +387,14 @@ async function executeRuleSet(
   // destroys the entire series/artist — including siblings the rule never
   // matched — so an exception on ANY item of the same parent must refuse it.
   if (isWholeRecordDestructiveAction(ruleSet.actionType ?? "")) {
-    const protectedGroups = await findExceptionProtectedGroups(session.userId!, items);
+    const protectedGroups = await findExceptionProtectedGroups(session.userId, items);
     if (protectedGroups.size > 0) {
       const before = items.length;
-      // `protectionKey` on both sides — see the guard: SERIES identity is
+      // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
       // `seriesKey`, so an exception filed under another server's title for the
-      // same show still protects this copy.
-      items = items.filter((i) => {
-        const key = protectionKey(i);
-        return !key || !protectedGroups.has(key);
-      });
+      // same show still protects this copy, and a same-named artist with a
+      // different MusicBrainz id does not.
+      items = items.filter((i) => !isGroupProtected(protectedGroups, i));
       if (items.length < before) {
         logger.warn("Lifecycle", `Skipped ${before - items.length} whole-record ${ruleSet.actionType} target(s) for rule set "${ruleSet.id}" — an episode/track of the series/artist is excluded via lifecycle exception`);
       }
@@ -365,11 +418,13 @@ async function executeRuleSet(
   // dialog.
   {
     const verdict = await checkDeleteCeiling(
-      session.userId!,
+      session.userId,
       items.map(() => ruleSet.actionType ?? "DO_NOTHING"),
+      "manual",
     );
     if (!verdict.allowed) {
       logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);
+      void notifyDeleteCeilingHeld(session.userId, verdict, "manual", `Execute on rule set "${ruleSet.name}"`).catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
@@ -392,7 +447,7 @@ async function executeRuleSet(
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
   const { executed, failed, errors, failures, notAttempted } = await executeActionsForItems(
-    session.userId!,
+    session.userId,
     items,
     {
       actionType: ruleSet.actionType ?? "DO_NOTHING",
@@ -402,6 +457,7 @@ async function executeRuleSet(
       searchAfterAction: ruleSet.searchAfterAction,
       addArrTags: ruleSet.addArrTags,
       removeArrTags: ruleSet.removeArrTags,
+      episodeScope: ruleSetActsOnEpisodes(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
     },
     episodeIdMap,
     {
@@ -421,7 +477,7 @@ async function executeRuleSet(
   if (failed > 0 && ruleSet.discordNotifyOnAction) {
     try {
       const settings = await prisma.appSettings.findUnique({
-        where: { userId: session.userId! },
+        where: { userId: session.userId },
         select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
       });
       if (settings?.discordWebhookUrl) {
@@ -443,7 +499,7 @@ async function executeRuleSet(
   if (executed > 0 || failed > 0) {
     eventBus.emit({
       type: "lifecycle:action-executed",
-      userId: session.userId!,
+      userId: session.userId,
       meta: { executed, failed, manual: true },
     });
   }

@@ -52,7 +52,8 @@ describe("GET /api/settings/backup-encryption-password", () => {
 
     const res = await callRoute(GET);
     const body = await expectJson<{ hasPassword: boolean }>(res);
-    expect(body.hasPassword).toBe(true);
+    // Whether one is set, never the password itself.
+    expect(body).toEqual({ hasPassword: true });
   });
 
   it("returns hasPassword false when no AppSettings exists", async () => {
@@ -87,7 +88,7 @@ describe("PUT /api/settings/backup-encryption-password", () => {
       body: { backupEncryptionPassword: "newpassword1" },
     });
     const body = await expectJson<{ hasPassword: boolean }>(res);
-    expect(body.hasPassword).toBe(true);
+    expect(body).toEqual({ hasPassword: true });
 
     // Verify persisted
     const settings = await prisma.appSettings.findUnique({
@@ -115,5 +116,22 @@ describe("PUT /api/settings/backup-encryption-password", () => {
       where: { userId: user.id },
     });
     expect(settings?.backupEncryptionPassword).toBeNull();
+  });
+
+  it("returns 400 for a password shorter than 8 characters, keeping the saved one", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, backupEncryptionPassword: "existingpass" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { backupEncryptionPassword: "short" },
+    });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["backupEncryptionPassword: Password must be at least 8 characters"]);
+    const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+    expect(settings?.backupEncryptionPassword).toBe("existingpass");
   });
 });

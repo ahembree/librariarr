@@ -39,15 +39,15 @@
  */
 
 /** Either the sync's parsed-Guid shape or the persisted `MediaItemExternalId` shape. */
-export type SeriesExternalIdLike =
+type SeriesExternalIdLike =
   | { source: string; externalId: string }
   | { source: string; id: string };
 
-export const SERIES_KEY_TVDB_PREFIX = "tvdb:";
-export const SERIES_KEY_TMDB_PREFIX = "tmdb:";
-export const SERIES_KEY_TITLE_PREFIX = "title:";
+const SERIES_KEY_TVDB_PREFIX = "tvdb:";
+const SERIES_KEY_TMDB_PREFIX = "tmdb:";
+const SERIES_KEY_TITLE_PREFIX = "title:";
 
-export interface SeriesKeyInput {
+interface SeriesKeyInput {
   /** The show name every episode row carries (`grandparentTitle` on the server). */
   parentTitle: string | null | undefined;
   /**

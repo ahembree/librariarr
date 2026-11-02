@@ -1,22 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverTestSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, serverTestSchema);
   if (error) return error;
 
   const { url, accessToken, type, tlsSkipVerify } = data;
 
   const client = createMediaServerClient(
-    type as MediaServerType,
+    type,
     url,
     accessToken,
     { skipTlsVerify: !!tlsSkipVerify }
@@ -24,5 +19,5 @@ export async function POST(request: NextRequest) {
 
   const result = await client.testConnection();
 
-  return NextResponse.json({ ok: result.ok, error: result.error ?? null, serverName: result.serverName ?? null });
-}
+  return NextResponse.json({ ok: result.ok, error: sanitizeErrorDetail(result.error) ?? null, serverName: result.serverName ?? null });
+});

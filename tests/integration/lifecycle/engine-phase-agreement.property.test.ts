@@ -20,8 +20,8 @@
  * Failures print the seed, tree JSON, and differing item ids — a complete
  * reproduction.
  */
-import { describe, it, expect, beforeAll, vi } from "vitest";
-import { cleanDatabase, getTestPrisma } from "../../setup/test-db";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 vi.mock("@/lib/db", async () => {
@@ -238,62 +238,69 @@ const SEED = 0x5eed;
 let serverId: string;
 let allItems: Array<Record<string, unknown> & { id: string }>;
 
-describe("rule engine phase agreement (property audit)", () => {
-  beforeAll(async () => {
-    await cleanDatabase();
-    const prisma = getTestPrisma();
-    const user = await prisma.user.create({
-      data: { username: "property-audit", passwordHash: "x" },
-    });
-    const server = await prisma.mediaServer.create({
+// File-level: both describes below evaluate against this library, so it is
+// seeded once for the file rather than inside the first describe (whose hooks
+// would not run when only the second is selected).
+beforeAll(async () => {
+  await cleanDatabase();
+  const prisma = getTestPrisma();
+  const user = await prisma.user.create({
+    data: { username: "property-audit", passwordHash: "x" },
+  });
+  const server = await prisma.mediaServer.create({
+    data: {
+      userId: user.id,
+      name: "Audit",
+      type: "PLEX",
+      url: "http://audit:32400",
+      accessToken: "x",
+      machineId: "property-audit",
+    },
+  });
+  serverId = server.id;
+  const library = await prisma.library.create({
+    data: {
+      mediaServerId: server.id,
+      key: "lib-audit",
+      title: "Movies",
+      type: "MOVIE",
+    },
+  });
+  const specs = buildSeedSpecs();
+  for (let i = 0; i < specs.length; i++) {
+    const s = specs[i];
+    await prisma.mediaItem.create({
       data: {
-        userId: user.id,
-        name: "Audit",
-        type: "PLEX",
-        url: "http://audit:32400",
-        accessToken: "x",
-        machineId: "property-audit",
-      },
-    });
-    serverId = server.id;
-    const library = await prisma.library.create({
-      data: {
-        mediaServerId: server.id,
-        key: "lib-audit",
-        title: "Movies",
+        libraryId: library.id,
+        ratingKey: `audit-${i}`,
         type: "MOVIE",
+        title: s.title,
+        year: s.year,
+        playCount: s.playCount,
+        resolution: s.resolution,
+        videoCodec: s.videoCodec,
+        dynamicRange: s.dynamicRange,
+        audioChannels: s.audioChannels,
+        container: s.container,
+        contentRating: s.contentRating,
+        fileSize: s.fileSize,
+        duration: s.duration,
+        addedAt: s.addedAt,
+        lastPlayedAt: s.lastPlayedAt,
       },
     });
-    const specs = buildSeedSpecs();
-    for (let i = 0; i < specs.length; i++) {
-      const s = specs[i];
-      await prisma.mediaItem.create({
-        data: {
-          libraryId: library.id,
-          ratingKey: `audit-${i}`,
-          type: "MOVIE",
-          title: s.title,
-          year: s.year,
-          playCount: s.playCount,
-          resolution: s.resolution,
-          videoCodec: s.videoCodec,
-          dynamicRange: s.dynamicRange,
-          audioChannels: s.audioChannels,
-          container: s.container,
-          contentRating: s.contentRating,
-          fileSize: s.fileSize,
-          duration: s.duration,
-          addedAt: s.addedAt,
-          lastPlayedAt: s.lastPlayedAt,
-        },
-      });
-    }
-    allItems = (await prisma.mediaItem.findMany({
-      where: { library: { mediaServerId: server.id } },
-    })) as never;
-    expect(allItems.length).toBe(specs.length);
-  }, 60_000);
+  }
+  allItems = (await prisma.mediaItem.findMany({
+    where: { library: { mediaServerId: server.id } },
+  })) as never;
+  expect(allItems.length).toBe(specs.length);
+}, 60_000);
 
+afterAll(async () => {
+  await disconnectTestDb();
+});
+
+describe("rule engine phase agreement (property audit)", () => {
   it(`phase 1 and phase 2 agree exactly across ${TREES} random trees`, async () => {
     const rng = mulberry32(SEED);
     const failures: string[] = [];
@@ -461,8 +468,12 @@ describe("legacy flat rules phase agreement", () => {
       allItems.filter((item) => evaluateAllRulesInMemory(flat, serialize(item))).map((i) => i.id),
     );
     expect([...engineIds].sort()).toEqual([...memIds].sort());
-    // sanity: A ∨ C semantics — every playCount=0 item matches regardless of container
-    const unwatched = allItems.filter((i) => (i as { playCount?: number }).playCount === 0);
-    for (const it of unwatched) expect(engineIds.has(it.id)).toBe(true);
+    // A ∨ C semantics: every playCount=0 item matches regardless of container,
+    // and every mkv item regardless of plays — and nothing else.
+    const expected = allItems
+      .filter((i) => (i as { playCount?: number }).playCount === 0 || (i as { container?: string | null }).container === "mkv")
+      .map((i) => i.id);
+    expect(expected.length).toBeLessThan(allItems.length);
+    expect([...engineIds].sort()).toEqual(expected.sort());
   });
 });

@@ -26,13 +26,13 @@ vi.mock("@/lib/image-cache/image-cache", () => ({
 
 const mockGetItemMetadata = vi.fn();
 // Jellyfin/Emby: which library an item lives in, resolved from its ancestors.
-// Undefined by default, so a test that does not care behaves as a server with
-// no such lookup.
+// Only their client has the lookup — Plex items name their section — and it
+// answers nothing unless a test arms it.
 const mockResolveLibraryKey = vi.fn();
 vi.mock("@/lib/media-server/factory", () => ({
-  createMediaServerClient: vi.fn(() => ({
+  createMediaServerClient: vi.fn((type: string) => ({
     getItemMetadata: mockGetItemMetadata,
-    resolveLibraryKey: mockResolveLibraryKey,
+    ...(type === "PLEX" ? {} : { resolveLibraryKey: mockResolveLibraryKey }),
   })),
 }));
 
@@ -73,6 +73,9 @@ async function seed() {
 beforeEach(async () => {
   await cleanDatabase();
   vi.clearAllMocks();
+  // Implementations armed by one test must not answer for the next.
+  mockGetItemMetadata.mockReset();
+  mockResolveLibraryKey.mockReset();
 });
 
 afterAll(async () => {
@@ -82,7 +85,7 @@ afterAll(async () => {
 
 describe("syncMediaServerItems", () => {
   it("upserts a newly-added item", async () => {
-    const { server } = await seed();
+    const { server, library } = await seed();
     mockGetItemMetadata.mockResolvedValue(movieMeta("m1", { title: "Brand New" }));
 
     const result = await syncMediaServerItems(server.id, ["m1"], []);
@@ -91,6 +94,7 @@ describe("syncMediaServerItems", () => {
     expect(result.upserted).toBe(1);
     const item = await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m1" } });
     expect(item?.title).toBe("Brand New");
+    expect(item?.libraryId).toBe(library.id);
   });
 
   it("keeps play state from stored watch history instead of admin-only metadata", async () => {
@@ -158,8 +162,11 @@ describe("syncMediaServerItems", () => {
 
     // Jellyfin/Emby carry `IsFavorite` on the item itself — this path fetched
     // it, so it wins. Carrying the stored flag forward here would make
-    // un-favouriting wait for a full sync.
-    mockGetItemMetadata.mockResolvedValue(movieMeta("jf-wl", { isWatchlisted: false }));
+    // un-favouriting wait for a full sync. Like every Jellyfin item it names
+    // no library section; the stored row places it.
+    const unfavourited = movieMeta("jf-wl", { isWatchlisted: false });
+    delete (unfavourited as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(unfavourited);
 
     await syncMediaServerItems(jellyfin.id, ["jf-wl"], []);
 
@@ -287,11 +294,10 @@ describe("syncMediaServerItems", () => {
   });
 
   it("deletes items reported as removed", async () => {
-    const { library } = await seed();
+    const { server, library } = await seed();
     await createTestMediaItem(library.id, { ratingKey: "m2", title: "Old" });
 
-    const server = await getTestPrisma().mediaServer.findFirst({});
-    const result = await syncMediaServerItems(server!.id, [], ["m2"]);
+    const result = await syncMediaServerItems(server.id, [], ["m2"]);
 
     expect(result.status).toBe("done");
     expect(result.deleted).toBe(1);
@@ -330,7 +336,7 @@ describe("syncMediaServerItems", () => {
 
     const result = await syncMediaServerItems(server.id, ["m1"], []);
 
-    expect(result.status).toBe("skipped");
+    expect(result).toEqual({ status: "skipped", upserted: 0, deleted: 0, reason: "full sync in progress" });
     expect(mockGetItemMetadata).not.toHaveBeenCalled();
   });
 
@@ -340,7 +346,7 @@ describe("syncMediaServerItems", () => {
 
     const result = await syncMediaServerItems(server.id, many, []);
 
-    expect(result.status).toBe("fell-back");
+    expect(result).toEqual({ status: "fell-back", upserted: 0, deleted: 0, reason: "change set of 150 exceeds 100" });
     expect(mockGetItemMetadata).not.toHaveBeenCalled();
   });
 
@@ -417,8 +423,9 @@ describe("syncMediaServerItems", () => {
     const result = await syncMediaServerItems(server.id, ["show-1", "season-1", "ep-1"], []);
 
     expect(result.status).toBe("done");
-    // Only the episode is real library media.
+    // Only the episode is real library media; the show and season are skipped.
     expect(result.upserted).toBe(1);
+    expect(result.skippedNonMedia).toBe(2);
     const rows = await getTestPrisma().mediaItem.findMany({ select: { ratingKey: true } });
     expect(rows.map((r) => r.ratingKey)).toEqual(["ep-1"]);
   });
@@ -433,6 +440,7 @@ describe("syncMediaServerItems", () => {
     const result = await syncMediaServerItems(server.id, ["m9"], []);
 
     expect(result.status).toBe("fell-back");
+    expect(result.reason).toBe("item reported a library section with no matching Library row (new library?)");
     expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m9" } })).toBeNull();
   });
 
@@ -532,15 +540,7 @@ describe("syncMediaServerItems", () => {
 
     expect(result.status).toBe("done");
     expect(result.unresolved).toBe(1);
-  });
-
-  it("still escalates for a syncable item in an unknown section (a new library)", async () => {
-    const { server } = await seed();
-    mockGetItemMetadata.mockResolvedValue(movieMeta("m99", { librarySectionID: 999 }));
-
-    const result = await syncMediaServerItems(server.id, ["m99"], []);
-
-    expect(result.status).toBe("fell-back");
+    expect(await getTestPrisma().mediaItem.count()).toBe(0);
   });
 
   it("prefers the server-reported section over a stale stored row", async () => {
@@ -555,20 +555,11 @@ describe("syncMediaServerItems", () => {
     await syncMediaServerItems(server2.id, ["moved-1"], []);
 
     const rows = await getTestPrisma().mediaItem.findMany({ where: { ratingKey: "moved-1" } });
-    expect(rows.some((r) => r.libraryId === newLib.id)).toBe(true);
+    expect(rows.find((r) => r.libraryId === newLib.id)?.title).toBe("Moved");
+    // The old library's row was not rewritten with the moved item.
+    expect(rows.some((r) => r.libraryId === oldLib.id && r.title === "Moved")).toBe(false);
   });
 
-  it("deletes a row the server reports as gone (404)", async () => {
-    const { server, library } = await seed();
-    await createTestMediaItem(library.id, { ratingKey: "gone-1" });
-    mockGetItemMetadata.mockRejectedValue({ response: { status: 404 } });
-
-    const result = await syncMediaServerItems(server.id, ["gone-1"], []);
-
-    expect(result.status).toBe("done");
-    expect(result.deleted).toBe(1);
-    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "gone-1" } })).toBeNull();
-  });
   it("falls back on Jellyfin when an item carries no library section", async () => {
     // Jellyfin/Emby `normalizeItem` never populates `librarySectionID`, so a
     // brand-new item there has no section evidence at all. Plex drops such ids
@@ -699,11 +690,14 @@ describe("syncMediaServerItems", () => {
 
     expect(result.status).toBe("fell-back");
     expect(result.upserted).toBe(1);
-    expect(sideEffects.invalidate).toHaveBeenCalled();
-    expect(sideEffects.recompute).toHaveBeenCalledWith(server.userId);
-    expect(sideEffects.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "sync:completed" }),
-    );
+    expect(sideEffects.invalidate).toHaveBeenCalledTimes(1);
+    // Only the dedup group of the item it wrote is recomputed.
+    expect(sideEffects.recompute).toHaveBeenCalledWith(server.userId, { dedupKeys: ["movie:tmdb:999"] });
+    expect(sideEffects.emit).toHaveBeenCalledWith({
+      type: "sync:completed",
+      userId: server.userId,
+      meta: { serverId: server.id, incremental: true, libraryTypes: ["MOVIE"] },
+    });
   });
 
   it("skips the side effects when nothing was written", async () => {
@@ -715,6 +709,7 @@ describe("syncMediaServerItems", () => {
     await syncMediaServerItems(server.id, ["nothing-1"], []);
 
     expect(sideEffects.invalidate).not.toHaveBeenCalled();
+    expect(sideEffects.recompute).not.toHaveBeenCalled();
     expect(sideEffects.emit).not.toHaveBeenCalled();
   });
 
@@ -740,5 +735,130 @@ describe("syncMediaServerItems", () => {
       where: { ratingKey: "dup-1", libraryId: libA.id },
     });
     expect(rowA?.isWatchlisted).toBe(true);
+  });
+
+  describe("bounded concurrency", () => {
+    /** Tracks how many metadata calls are in flight at once. */
+    function trackInFlight(answer: (id: string) => unknown) {
+      const state = { inFlight: 0, peak: 0 };
+      mockGetItemMetadata.mockImplementation(async (id: string) => {
+        state.inFlight++;
+        state.peak = Math.max(state.peak, state.inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        state.inFlight--;
+        return answer(id);
+      });
+      return state;
+    }
+
+    it("fetches the changed items in parallel, never more than eight at once", async () => {
+      const { server } = await seed();
+      const ids = Array.from({ length: 30 }, (_, i) => `p${i}`);
+      const state = trackInFlight((id) => movieMeta(id, { Guid: [{ id: `tmdb://${id}` }] }));
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(result).toMatchObject({ status: "done", upserted: 30 });
+      expect(state.peak).toBeGreaterThan(1);
+      expect(state.peak).toBeLessThanOrEqual(8);
+      expect(await getTestPrisma().mediaItem.count()).toBe(30);
+    });
+
+    it("still falls back, writing nothing, when one of many fetches fails transiently", async () => {
+      const { server } = await seed();
+      const ids = Array.from({ length: 20 }, (_, i) => `t${i}`);
+      trackInFlight((id) => {
+        if (id === "t7") throw { response: { status: 503 } };
+        return movieMeta(id);
+      });
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(result.status).toBe("fell-back");
+      expect(result.reason).toMatch(/^fetch failed for t7: /);
+      expect(await getTestPrisma().mediaItem.count()).toBe(0);
+      expect(sideEffects.emit).not.toHaveBeenCalled();
+    });
+
+    it("fetches the shows of many episodes in parallel and falls back if one fails", async () => {
+      const { server } = await seed();
+      await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+      const episodes = Array.from({ length: 12 }, (_, i) => `ep${i}`);
+      const answer = (id: string) => {
+        if (id.startsWith("show")) {
+          if (id === "show5") throw new Error("socket hang up");
+          return { ratingKey: id, type: "show", title: id, Guid: [{ id: `tvdb://${id}` }] };
+        }
+        return {
+          ratingKey: id, key: `/library/metadata/${id}`, type: "episode", title: id,
+          grandparentRatingKey: `show${id.slice(2)}`, grandparentTitle: "Show", parentIndex: 1, index: 1,
+          librarySectionID: 2,
+        };
+      };
+      const state = trackInFlight(answer);
+
+      const result = await syncMediaServerItems(server.id, episodes, []);
+
+      expect(result.status).toBe("fell-back");
+      expect(result.reason).toMatch(/^show metadata fetch failed for show5: /);
+      expect(state.peak).toBeLessThanOrEqual(8);
+      // The show fetch runs before any write.
+      expect(await getTestPrisma().mediaItem.count()).toBe(0);
+    });
+
+    it("looks up the libraries of new Jellyfin items in parallel", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+      const library = await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+      const ids = Array.from({ length: 10 }, (_, i) => `jf${i}`);
+      mockGetItemMetadata.mockImplementation(async (id: string) => {
+        const item = movieMeta(id, { Guid: [{ id: `tmdb://${id}` }] });
+        delete (item as { librarySectionID?: number }).librarySectionID;
+        return item;
+      });
+      let inFlight = 0;
+      let peak = 0;
+      mockResolveLibraryKey.mockImplementation(async (id: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        // One lookup fails: that item is left unresolved, as before.
+        if (id === "jf3") throw new Error("timeout");
+        return "lib-1";
+      });
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(peak).toBeGreaterThan(1);
+      expect(result.upserted).toBe(9);
+      expect(result.unresolved).toBe(1);
+      // An unresolved item on Jellyfin still escalates, exactly as before.
+      expect(result.status).toBe("fell-back");
+      expect(await getTestPrisma().mediaItem.count({ where: { libraryId: library.id } })).toBe(9);
+    });
+  });
+
+  describe("scoped canonical recompute", () => {
+    it("recomputes the groups of upserted items before and after, and of deleted ones", async () => {
+      const { server, library } = await seed();
+      const prisma = getTestPrisma();
+      const moved = await createTestMediaItem(library.id, { ratingKey: "re-id" });
+      await prisma.mediaItem.update({ where: { id: moved.id }, data: { dedupKey: "movie:tmdb:old" } });
+      const gone = await createTestMediaItem(library.id, { ratingKey: "gone" });
+      await prisma.mediaItem.update({ where: { id: gone.id }, data: { dedupKey: "movie:tmdb:gone" } });
+      // A Fix Match re-identified the item: its key moves from "old" to "new".
+      mockGetItemMetadata.mockResolvedValue(movieMeta("re-id", { Guid: [{ id: "tmdb://new" }] }));
+
+      await syncMediaServerItems(server.id, ["re-id"], ["gone"]);
+
+      const [, scope] = sideEffects.recompute.mock.calls[0] as unknown as [string, { dedupKeys: string[] }];
+      expect([...scope.dedupKeys].sort()).toEqual(["movie:tmdb:gone", "movie:tmdb:new", "movie:tmdb:old"]);
+      expect(sideEffects.emit).toHaveBeenCalledWith({
+        type: "sync:completed",
+        userId: server.userId,
+        meta: { serverId: server.id, incremental: true, libraryTypes: ["MOVIE"] },
+      });
+    });
   });
 });

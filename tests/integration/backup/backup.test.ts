@@ -70,7 +70,8 @@ describe("Backup endpoints", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockListBackups.mockResolvedValue([]);
-    mockGetBackupPassphrase.mockResolvedValue(null);
+    // No saved encryption password (the service answers undefined, not null).
+    mockGetBackupPassphrase.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
@@ -98,22 +99,30 @@ describe("Backup endpoints", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      mockListBackups.mockResolvedValue([
+      // The shape `listBackups` returns: sidecar metadata plus the file's size.
+      const backups = [
         {
-          filename: "backup-2024-01-01.json.gz",
-          size: 12345,
-          createdAt: "2024-01-01T00:00:00.000Z",
-        },
-        {
-          filename: "backup-2024-01-02.json.gz",
+          filename: "librariarr-backup-2024-01-02T03-00-00.json.gz",
+          createdAt: "2024-01-02T03:00:00.000Z",
           size: 67890,
-          createdAt: "2024-01-02T00:00:00.000Z",
+          tables: { user: 1, appSettings: 1, mediaServer: 1, mediaItem: 1200 },
+          encrypted: false,
+          configOnly: false,
         },
-      ]);
+        {
+          filename: "librariarr-backup-2024-01-01T03-00-00.json.gz",
+          createdAt: "2024-01-01T03:00:00.000Z",
+          size: 12345,
+          tables: { user: 1, appSettings: 1, mediaServer: 1 },
+          encrypted: false,
+          configOnly: true,
+        },
+      ];
+      mockListBackups.mockResolvedValue(backups);
 
       const response = await callRoute(listBackups, { url: "/api/backup" });
       const body = await expectJson<{ backups: unknown[] }>(response, 200);
-      expect(body.backups).toHaveLength(2);
+      expect(body.backups).toEqual(backups);
     });
   });
 
@@ -155,15 +164,17 @@ describe("Backup endpoints", () => {
         method: "POST",
         body: { passphrase: "short" },
       });
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual(["passphrase: Passphrase must be at least 8 characters"]);
+      expect(mockCreateBackup).not.toHaveBeenCalled();
     });
 
     it("creates backup successfully", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
-      mockCreateBackup.mockResolvedValue("backup-2024-01-01.json.gz");
+      mockCreateBackup.mockResolvedValue("librariarr-backup-2024-01-01T03-00-00.json.gz");
 
       const response = await callRoute(createBackup, {
         url: "/api/backup",
@@ -171,8 +182,24 @@ describe("Backup endpoints", () => {
         body: {},
       });
       const body = await expectJson<{ success: boolean; filename: string }>(response, 200);
-      expect(body.success).toBe(true);
-      expect(body.filename).toBe("backup-2024-01-01.json.gz");
+      expect(body).toEqual({ success: true, filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" });
+      // No passphrase given or saved: an unencrypted, config-only backup.
+      expect(mockCreateBackup).toHaveBeenCalledWith(undefined, true);
+    });
+
+    it("includes media data only when asked to", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
+
+      mockCreateBackup.mockResolvedValue("librariarr-backup-2024-01-01T03-00-00.json.gz");
+
+      const response = await callRoute(createBackup, {
+        url: "/api/backup",
+        method: "POST",
+        body: { includeMediaData: true },
+      });
+      await expectJson(response, 200);
+      expect(mockCreateBackup).toHaveBeenCalledWith(undefined, false);
     });
 
     it("uses saved passphrase as fallback when none provided", async () => {
@@ -180,7 +207,7 @@ describe("Backup endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupPassphrase.mockResolvedValue("saved-secret-passphrase");
-      mockCreateBackup.mockResolvedValue("backup-encrypted.json.gz.enc");
+      mockCreateBackup.mockResolvedValue("librariarr-backup-2024-01-01T03-00-00.json.gz.enc");
 
       const response = await callRoute(createBackup, {
         url: "/api/backup",
@@ -188,7 +215,7 @@ describe("Backup endpoints", () => {
         body: {},
       });
       const body = await expectJson<{ success: boolean; filename: string }>(response, 200);
-      expect(body.success).toBe(true);
+      expect(body).toEqual({ success: true, filename: "librariarr-backup-2024-01-01T03-00-00.json.gz.enc" });
       expect(mockCreateBackup).toHaveBeenCalledWith("saved-secret-passphrase", true);
     });
 
@@ -197,7 +224,7 @@ describe("Backup endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       mockGetBackupPassphrase.mockResolvedValue("saved-passphrase-value");
-      mockCreateBackup.mockResolvedValue("backup-encrypted.json.gz.enc");
+      mockCreateBackup.mockResolvedValue("librariarr-backup-2024-01-01T03-00-00.json.gz.enc");
 
       const response = await callRoute(createBackup, {
         url: "/api/backup",
@@ -214,8 +241,8 @@ describe("Backup endpoints", () => {
     it("returns 401 without auth", async () => {
       const response = await callRouteWithParams(
         downloadBackup,
-        { filename: "backup.json.gz" },
-        { url: "/api/backup/backup.json.gz" }
+        { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2024-01-01T03-00-00.json.gz" }
       );
       const body = await expectJson<{ error: string }>(response, 401);
       expect(body.error).toBe("Unauthorized");
@@ -227,13 +254,13 @@ describe("Backup endpoints", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      mockGetBackupFilePath.mockReturnValue("/backups/backup.json.gz");
+      mockGetBackupFilePath.mockReturnValue("/config/backups/librariarr-backup-2024-01-01T03-00-00.json.gz");
       mockReadFile.mockResolvedValue(Buffer.from("backup bytes"));
 
       const response = await callRouteWithParams(
         downloadBackup,
-        { filename: "backup.json.gz" },
-        { url: "/api/backup/backup.json.gz" }
+        { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2024-01-01T03-00-00.json.gz" }
       );
       const body = await expectJson<{ code: string }>(response, 403);
       expect(body.code).toBe("reauth_required");
@@ -244,30 +271,35 @@ describe("Backup endpoints", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
-      mockGetBackupFilePath.mockReturnValue("/backups/backup.json.gz");
+      mockGetBackupFilePath.mockReturnValue("/config/backups/librariarr-backup-2024-01-01T03-00-00.json.gz");
       mockReadFile.mockResolvedValue(Buffer.from("backup bytes"));
 
       const response = await callRouteWithParams(
         downloadBackup,
-        { filename: "backup.json.gz" },
-        { url: "/api/backup/backup.json.gz" }
+        { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2024-01-01T03-00-00.json.gz" }
       );
       expect(response.status).toBe(200);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(response.headers.get("Content-Type")).toBe("application/gzip");
+      expect(response.headers.get("Content-Disposition")).toBe(
+        'attachment; filename="librariarr-backup-2024-01-01T03-00-00.json.gz"'
+      );
       expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("backup bytes");
+      expect(mockReadFile).toHaveBeenCalledWith("/config/backups/librariarr-backup-2024-01-01T03-00-00.json.gz");
     });
 
     it("returns 404 for non-existent file", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
-      mockGetBackupFilePath.mockReturnValue("/backups/missing.json.gz");
+      mockGetBackupFilePath.mockReturnValue("/config/backups/librariarr-backup-2023-12-31T03-00-00.json.gz");
       mockReadFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
 
       const response = await callRouteWithParams(
         downloadBackup,
-        { filename: "missing.json.gz" },
-        { url: "/api/backup/missing.json.gz" }
+        { filename: "librariarr-backup-2023-12-31T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2023-12-31T03-00-00.json.gz" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Backup not found");
@@ -286,6 +318,8 @@ describe("Backup endpoints", () => {
       );
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toBe("Invalid filename");
+      expect(mockGetBackupFilePath).toHaveBeenCalledWith("../../../etc/passwd");
+      expect(mockReadFile).not.toHaveBeenCalled();
     });
   });
 
@@ -294,8 +328,8 @@ describe("Backup endpoints", () => {
     it("returns 401 without auth", async () => {
       const response = await callRouteWithParams(
         deleteBackupRoute,
-        { filename: "backup.json.gz" },
-        { url: "/api/backup/backup.json.gz", method: "DELETE" }
+        { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2024-01-01T03-00-00.json.gz", method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 401);
       expect(body.error).toBe("Unauthorized");
@@ -309,8 +343,8 @@ describe("Backup endpoints", () => {
 
       const response = await callRouteWithParams(
         deleteBackupRoute,
-        { filename: "missing.json.gz" },
-        { url: "/api/backup/missing.json.gz", method: "DELETE" }
+        { filename: "librariarr-backup-2023-12-31T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2023-12-31T03-00-00.json.gz", method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Backup not found");
@@ -324,11 +358,12 @@ describe("Backup endpoints", () => {
 
       const response = await callRouteWithParams(
         deleteBackupRoute,
-        { filename: "backup-2024-01-01.json.gz" },
-        { url: "/api/backup/backup-2024-01-01.json.gz", method: "DELETE" }
+        { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+        { url: "/api/backup/librariarr-backup-2024-01-01T03-00-00.json.gz", method: "DELETE" }
       );
       const body = await expectJson<{ success: boolean }>(response, 200);
       expect(body.success).toBe(true);
+      expect(mockDeleteBackup).toHaveBeenCalledWith("librariarr-backup-2024-01-01T03-00-00.json.gz");
     });
   });
 
@@ -338,7 +373,7 @@ describe("Backup endpoints", () => {
       const response = await callRoute(restoreBackup, {
         url: "/api/backup/restore",
         method: "POST",
-        body: { filename: "backup.json.gz" },
+        body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
       });
       const body = await expectJson<{ error: string }>(response, 401);
       expect(body.error).toBe("Unauthorized");
@@ -353,7 +388,7 @@ describe("Backup endpoints", () => {
       const response = await callRoute(restoreBackup, {
         url: "/api/backup/restore",
         method: "POST",
-        body: { filename: "backup.json.gz" },
+        body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
       });
       const body = await expectJson<{ code: string }>(response, 403);
       expect(body.code).toBe("reauth_required");
@@ -371,6 +406,7 @@ describe("Backup endpoints", () => {
       });
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(mockRestoreBackup).not.toHaveBeenCalled();
     });
   });
 });

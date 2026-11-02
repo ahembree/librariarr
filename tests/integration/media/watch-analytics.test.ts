@@ -61,10 +61,11 @@ describe("watch-analytics", () => {
     await play(movieB.id, server.id, { user: "alice", watchedAt: old });
 
     const trends = await computeWatchTrends([server.id], { mediaType: "MOVIE", days: 30, limit: 10 });
-    expect(trends[0].title).toBe("Popular");
-    expect(trends[0].plays).toBe(3);
-    expect(trends[0].users).toBe(2);
-    expect(trends.find((t) => t.title === "Quiet")?.plays).toBe(1);
+    // Quiet's 400-day-old play is outside the 30-day window.
+    expect(trends.map((t) => [t.title, t.plays, t.users])).toEqual([
+      ["Popular", 3, 2],
+      ["Quiet", 1, 1],
+    ]);
   });
 
   it("rolls series episode plays up to the parent series", async () => {
@@ -77,9 +78,7 @@ describe("watch-analytics", () => {
     await play(ep2.id, server.id, { watchedAt: new Date() });
 
     const trends = await computeWatchTrends([server.id], { days: 30, limit: 10 });
-    const show = trends.find((t) => t.title === "My Show");
-    expect(show?.plays).toBe(2);
-    expect(show?.type).toBe("SERIES");
+    expect(trends.map((t) => [t.title, t.type, t.plays])).toEqual([["My Show", "SERIES", 2]]);
   });
 
   it("ranks two same-titled shows separately by seriesKey", async () => {
@@ -121,11 +120,16 @@ describe("watch-analytics", () => {
     await play(m.id, server.id, { user: "bob", device: "Web", platform: "Chrome" });
 
     const byUser = await computeWatchLeaderboard([server.id], { groupBy: "user", days: 30, limit: 10 });
-    expect(byUser[0].key).toBe("alice");
-    expect(byUser[0].plays).toBe(2);
+    expect(byUser.map((r) => [r.key, r.plays, r.items])).toEqual([
+      ["alice", 2, 1],
+      ["bob", 1, 1],
+    ]);
 
     const byDevice = await computeWatchLeaderboard([server.id], { groupBy: "device", days: 30, limit: 10 });
-    expect(byDevice.map((r) => r.key).sort()).toEqual(["AppleTV", "Web"]);
+    expect(byDevice.map((r) => [r.key, r.plays])).toEqual([
+      ["AppleTV", 2],
+      ["Web", 1],
+    ]);
   });
 
   it("returns empty for no servers", async () => {

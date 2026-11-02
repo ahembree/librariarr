@@ -1,7 +1,8 @@
-import axios, { AxiosInstance, isAxiosError } from "axios";
+import { type AxiosInstance, isAxiosError } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { NO_RETRY } from "@/lib/http-retry";
+import { createIntegrationHttp } from "@/lib/integrations/http";
 
 /**
  * Client for Tracearr's read-only public REST API.
@@ -62,23 +63,13 @@ const RATE_LIMIT_MAX_DELAY_MS = 60_000;
 const OLDEST_PLAY_SEARCH_FLOOR = new Date("2008-01-01T00:00:00.000Z");
 
 /**
- * Page cap for one `getHistoryForItem` walk.
- *
- * Named for the walk rather than for the rating key because the two questions
- * are not the same size. A rating-key query really is one item's own plays, and
- * 2,000 of those is already unreachable — a daily-rewatched episode over five
- * years is ~1,800. But the provider-id fallback asks by `tvdb_id`, and the ids
- * stored on an episode are SERIES-level, so that query deliberately returns
- * every play of every episode of the show: a 700-episode show in a household of
- * six that rewatches is comfortably five figures of plays. The old 20-page
- * bound was sized for the single-item case and silently truncated the
- * series-wide one, dropping the OLDEST plays (the walk is newest-first) —
- * exactly the ones the archive exists to recover.
- *
- * 200 pages is 20,000 plays at the API's 100-record maximum. It stays a
- * backstop against a cursor that never terminates, not a throttle; the cursor
- * loop below also guards a repeating keyset, and the caller bounds how many
- * items it asks about.
+ * Page cap for one `getHistoryForItem` walk: 20,000 plays at the API's
+ * 100-record maximum, far past any one film's or track's history (a daily
+ * rewatch for five years is ~1,800). A backstop against a cursor that never
+ * terminates, not a throttle — the cursor loop below also guards a repeating
+ * keyset, and the caller bounds how many items it asks about. A walk that hits
+ * it is logged, since the walk is newest-first and would drop the OLDEST
+ * plays.
  */
 const ITEM_HISTORY_MAX_PAGES = 200;
 
@@ -101,7 +92,7 @@ export type TracearrPlaybackState = "playing" | "paused" | "stopped";
 export type TracearrStreamDecision = "directplay" | "copy" | "transcode";
 
 /** `HealthResponse.servers[]` — the media servers this instance monitors. */
-export interface TracearrServerStatus {
+interface TracearrServerStatus {
   id: string;
   name: string;
   type: TracearrServerType;
@@ -109,7 +100,7 @@ export interface TracearrServerStatus {
   activeStreams: number;
 }
 
-export interface TracearrHealthResponse {
+interface TracearrHealthResponse {
   status: "ok";
   version: string;
   timestamp: string;
@@ -273,13 +264,13 @@ export interface TracearrHistoryRecord {
   user: TracearrHistoryUser;
 }
 
-export interface TracearrHistoryPage {
+interface TracearrHistoryPage {
   records: TracearrHistoryRecord[];
   /** Opaque keyset cursor; null when there are no further pages. */
   nextCursor: string | null;
 }
 
-export interface GetHistoryPageOptions {
+interface GetHistoryPageOptions {
   cursor?: string;
   /**
    * Use the bulk retry budget rather than the single interactive retry. Set by
@@ -330,45 +321,14 @@ export class TracearrClient {
   private client: AxiosInstance;
 
   constructor(baseURL: string, apiKey: string) {
-    this.client = axios.create({
-      // Strip only trailing slashes — an instance may sit under a base path
-      // (`https://host/tracearr`), and axios joins that with the relative
-      // request paths below, so the prefix must survive.
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
-      },
-      timeout: REQUEST_TIMEOUT_MS,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, "Tracearr", logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)
-            ?.__startTime as number | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug(
-            "Tracearr",
-            `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`,
-            { message: error.message },
-          );
-          return Promise.reject(new IntegrationError("Tracearr", error));
-        }
-        return Promise.reject(error);
-      },
+    // Only trailing slashes are stripped — an instance may sit under a base
+    // path (`https://host/tracearr`), and axios joins that with the relative
+    // request paths below, so the prefix must survive.
+    this.client = createIntegrationHttp(
+      "Tracearr",
+      baseURL,
+      { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      { timeout: REQUEST_TIMEOUT_MS },
     );
   }
 
@@ -494,35 +454,6 @@ export class TracearrClient {
   }
 
   /**
-   * Every play this server holds for ONE item, addressed by the media server's
-   * own `rating_key`.
-   *
-   * This exists for the re-added-item recovery pass
-   * (`sync/tracearr-backfill-additions.ts`): deleting a `MediaItem` cascade-
-   * deletes its `WatchHistory`, so an item that comes back looks never watched
-   * — which is precisely the state destructive "not played in N months" and
-   * "playCount = 0" lifecycle rules are written against. Tracearr still holds
-   * those plays; this is how they are asked for.
-   *
-   * **`rating_key` takes a single value, not a list** (checked against the
-   * published spec), so there is no batched form of this question: recovering N
-   * items costs N requests against an API that rate-limits per key on a rolling
-   * 1-minute window. Every caller must therefore bound how many items it asks
-   * about — see `RECENT_ADDITION_WINDOW_MS` and the candidate cap there.
-   *
-   * Uses the bulk 429 budget for the same reason the archive walk does: a
-   * sequence of requests will be throttled by design, and waiting the rolling
-   * window out is what the limit is for.
-   */
-  async getHistoryForRatingKey(
-    serverId: string,
-    ratingKey: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<TracearrHistoryRecord[]> {
-    return this.getHistoryForItem(serverId, { ratingKey }, options);
-  }
-
-  /**
    * Every play Tracearr holds for one item, found by whichever identity we have.
    *
    * The rating key is the precise handle, but it is the one that does not
@@ -533,20 +464,25 @@ export class TracearrClient {
    * recovers what the rating key cannot. Verified against a live instance: the
    * tmdb and tvdb queries returned the same records as the rating-key query.
    *
-   * Precedence mirrors `computeSeriesKey` — TVDB, then TMDB, then IMDB — so the
-   * identity used here is the same one the rest of the app trusts.
+   * Precedence: the rating key, then TMDB, then IMDB. Never TVDB, which the
+   * two catalogues assign differently to the same film, and the caller never
+   * asks by provider id for an episode: an episode row stores SERIES-level ids
+   * while Tracearr files plays under the episode's own (see
+   * `sync/tracearr-backfill-additions.ts`).
    *
-   * For an episode the stored ids are SERIES-level, so a TVDB lookup returns the
-   * whole show's plays rather than one episode's. That is a feature, not a
-   * problem: the caller resolves every returned record through the shared join
-   * index, which constrains episodes by season and number, so one request
-   * recovers a whole series instead of one per episode.
+   * **`rating_key` takes a single value, not a list** (checked against the
+   * published spec), so there is no batched form of this question: recovering N
+   * items costs N requests against an API that rate-limits per key on a rolling
+   * 1-minute window. Every caller must therefore bound how many items it asks
+   * about — see `RECENT_ADDITION_WINDOW_MS` and the candidate cap there. It uses
+   * the bulk 429 budget for the same reason the archive walk does: a sequence
+   * of requests is throttled by design, and waiting the window out is what the
+   * limit is for.
    */
   async getHistoryForItem(
     serverId: string,
     filter: {
       ratingKey?: string;
-      tvdbId?: string | number | null;
       tmdbId?: string | number | null;
       imdbId?: string | null;
     },
@@ -556,9 +492,7 @@ export class TracearrClient {
 
     const identity: Record<string, string | number> = {};
     if (filter.ratingKey) identity.rating_key = filter.ratingKey;
-    else if (filter.tvdbId != null && `${filter.tvdbId}`.trim() !== "") {
-      identity.tvdb_id = `${filter.tvdbId}`.trim();
-    } else if (filter.tmdbId != null && `${filter.tmdbId}`.trim() !== "") {
+    else if (filter.tmdbId != null && `${filter.tmdbId}`.trim() !== "") {
       identity.tmdb_id = `${filter.tmdbId}`.trim();
     } else if (filter.imdbId && filter.imdbId.trim() !== "") {
       identity.imdb_id = filter.imdbId.trim();
@@ -606,7 +540,7 @@ export class TracearrClient {
       cursor = next;
     }
 
-    // A truncated walk and "that show had no more plays" are the same silence
+    // A truncated walk and "that item had no more plays" are the same silence
     // otherwise, and nothing ever asks again: the recovery pass only looks at
     // recently-added items, and this query keeps no resume state the way the
     // archive walk does. So say it out loud, with the identity that was asked
@@ -776,8 +710,25 @@ export class TracearrClient {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
 
-    for (let page = 0; page < USER_PAGE_CAP; page++) {
-      if (signal?.aborted) break;
+    // A walk that does not reach the last page returns an EMPTY map, never the
+    // part it read. Callers refuse to import on an empty map, but a partial one
+    // passes that check and files every unread user's plays under Tracearr's
+    // identity label — rows nothing re-delivers, so the wrong name is permanent.
+    const cutShort = (reason: string) => {
+      logger.warn(
+        "Tracearr",
+        `User walk for server ${serverId} ${reason} — returning no account names ` +
+          `rather than a partial map`,
+        { serverId, accountsRead: names.size },
+      );
+      return new Map<string, string>();
+    };
+
+    for (let page = 0; ; page++) {
+      if (signal?.aborted) return new Map();
+      if (page >= USER_PAGE_CAP) {
+        return cutShort(`hit the ${USER_PAGE_CAP}-page cap with pages left`);
+      }
 
       // Sent as a string because the schema accepts `boolean | string` and our
       // param bag is string|number — axios serialises either identically.
@@ -793,7 +744,11 @@ export class TracearrClient {
         { maxRetries: BULK_RATE_LIMIT_MAX_RETRIES, signal },
       );
 
-      for (const identity of data?.data ?? []) {
+      if (!Array.isArray(data?.data)) {
+        return cutShort(`got a page with no \`data\` array (page ${page + 1})`);
+      }
+
+      for (const identity of data.data) {
         for (const account of identity?.accounts ?? []) {
           // One Tracearr instance aggregates many servers; an account on a
           // different one would map a stranger's id onto this server.
@@ -804,13 +759,12 @@ export class TracearrClient {
         }
       }
 
-      const next = data?.meta?.nextCursor ?? null;
-      if (!next || seenCursors.has(next)) break;
+      const next = data.meta?.nextCursor ?? null;
+      if (!next) return names;
+      if (seenCursors.has(next)) return cutShort(`repeated cursor "${next}"`);
       seenCursors.add(next);
       cursor = next;
     }
-
-    return names;
   }
 
   /** Sleep that resolves early when `signal` aborts, so a cancel is immediate. */

@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { newRequestScope, runInRequestScope } from "@/lib/shared-fetch";
+
+type RealtimeCallback = (data: Record<string, unknown>) => void;
 
 // Shared singleton EventSource — ref-counted across all hook instances in the same tab
 let sharedSource: EventSource | null = null;
@@ -20,12 +23,117 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 // to a freshly created source on reconnect.
 const eventHandlers = new Map<string, Set<(e: MessageEvent) => void>>();
 
-// Every subscriber's callback, keyed by nothing — fired once after a *re*-open
-// so a page recovers the events that were emitted while the stream was down.
-// The SSE protocol gives us no replay (the route sends no event ids, so
-// Last-Event-ID can't be honoured either), which means the only way a
-// reconnected page can be correct is to refetch.
-const resyncListeners = new Set<() => void>();
+// Every subscriber's current callback, keyed by nothing — fired once after a
+// *re*-open so a page recovers the events that were emitted while the stream
+// was down. The SSE protocol gives us no replay (the route sends no event ids,
+// so Last-Event-ID can't be honoured either), which means the only way a
+// reconnected page can be correct is to refetch. Each entry returns the
+// subscriber's callback rather than calling it, so a callback subscribed to
+// several event types (a sync card listens to four) runs once, not once per type.
+// Each maps to the event types it subscribes to, for a resync limited to some
+// (`resyncTypes`).
+const resyncListeners = new Map<() => RealtimeCallback, readonly string[]>();
+
+// Whether the current source has delivered an event — the route's own
+// `connected` event or any other. `connected` turns true on the response
+// headers alone, which a buffering proxy passes on while it holds every event
+// back; the fallback polls gate on this instead, so they keep running exactly
+// when pushes are not arriving.
+let liveState = false;
+const liveListeners = new Set<() => void>();
+
+function setLive(value: boolean) {
+  if (liveState === value) return;
+  liveState = value;
+  for (const listener of liveListeners) listener();
+}
+
+// Run before every subscriber's callback for their event types — once per
+// event, whichever subscriber's listener the event reaches first. EventSource
+// calls listeners in the order they were added, and that order is not stable
+// (a child's effect subscribes before its parent's on the first mount, after
+// it once the child is replaced on a navigation), so a cache the shell clears
+// in its own callback could be read by a page's refetch before the clear ran.
+const preHandlers = new Map<string, Set<() => void>>();
+
+// The request scope each event was given when a listener first saw it (see
+// `fetchJsonShared`): every subscriber's callback for one event runs in the
+// same scope, so the components that refetch one route on it share one
+// request. The browser runs microtasks between listeners, so without the scope
+// each listener was its own turn and asked separately.
+const eventScopes = new WeakMap<Event, number>();
+
+/**
+ * The event's request scope, assigned — and the pre-handlers run — the first
+ * time any listener sees it.
+ */
+function firstSight(eventType: string, e: Event): number {
+  let scope = eventScopes.get(e);
+  if (scope === undefined) {
+    scope = newRequestScope();
+    eventScopes.set(e, scope);
+    setLive(true);
+    runPreHandlers(preHandlers.get(eventType) ?? []);
+  }
+  return scope;
+}
+
+// One listener per pre-handled type, kept so the same function can be attached
+// to every source and removed again. Whichever listener an event reaches
+// first — this one or a subscriber's — runs the pre-handlers, once.
+const preDispatchers = new Map<string, (e: MessageEvent) => void>();
+
+function preDispatcherFor(eventType: string): (e: MessageEvent) => void {
+  let dispatch = preDispatchers.get(eventType);
+  if (!dispatch) {
+    dispatch = (e: MessageEvent) => {
+      firstSight(eventType, e);
+    };
+    preDispatchers.set(eventType, dispatch);
+  }
+  return dispatch;
+}
+
+/**
+ * Run `fn` before any subscriber's callback whenever one of `eventTypes`
+ * arrives, and once before a reconnect's resync. For dropping client-side
+ * caches the callbacks then refetch through. It has its own listener on the
+ * shared stream, so it runs whether or not anything subscribes to the event
+ * type — while the stream is open, which some subscriber keeps it. Returns the
+ * unregister function.
+ */
+export function beforeRealtimeEvents(eventTypes: readonly string[], fn: () => void): () => void {
+  for (const type of eventTypes) {
+    let set = preHandlers.get(type);
+    if (!set) {
+      set = new Set();
+      preHandlers.set(type, set);
+      sharedSource?.addEventListener(type, preDispatcherFor(type));
+    }
+    set.add(fn);
+  }
+  return () => {
+    for (const type of eventTypes) {
+      const set = preHandlers.get(type);
+      if (!set) continue;
+      set.delete(fn);
+      if (set.size === 0) {
+        preHandlers.delete(type);
+        sharedSource?.removeEventListener(type, preDispatcherFor(type));
+      }
+    }
+  };
+}
+
+function runPreHandlers(fns: Iterable<() => void>) {
+  for (const fn of fns) {
+    try {
+      fn();
+    } catch {
+      // A failing pre-handler must not stop the event reaching subscribers.
+    }
+  }
+}
 
 // A page-level subscriber unmounts before the next page's mounts on every
 // client-side navigation, so refCount transiently hits 0 on every route
@@ -100,16 +208,40 @@ function clearIdleCloseTimer() {
 /**
  * Fire every subscriber's callback once, as though the event it listens for
  * had just arrived. Called after a re-open, because events emitted while the
- * stream was down are gone for good.
+ * stream was down are gone for good. A callback subscribed to several event
+ * types runs once, and every callback runs in one request scope, so the
+ * subscribers that refetch the same route share the request.
  */
 function fireResync() {
+  // The cache drops run on every reopen, throttled or not: they cost no
+  // request, and skipped they left lists loaded before the drop reading as
+  // fresh once the stream was live again, past any event missed meanwhile.
+  runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
   const now = Date.now();
   if (now - lastResyncAt < MIN_RESYNC_INTERVAL_MS) return;
   lastResyncAt = now;
 
-  for (const listener of resyncListeners) {
+  runResync([...resyncListeners.keys()].map((current) => current()));
+}
+
+/**
+ * A resync of the subscribers to `types` only, with the pre-handlers for them:
+ * as if one event of each type had arrived, but each callback runs once.
+ */
+function resyncTypes(types: ReadonlySet<string>) {
+  runPreHandlers(new Set([...types].flatMap((type) => [...(preHandlers.get(type) ?? [])])));
+  const callbacks: RealtimeCallback[] = [];
+  for (const [current, subscribed] of resyncListeners) {
+    if (subscribed.some((type) => types.has(type))) callbacks.push(current());
+  }
+  runResync(callbacks);
+}
+
+function runResync(callbacks: Iterable<RealtimeCallback>) {
+  const scope = newRequestScope();
+  for (const callback of new Set(callbacks)) {
     try {
-      listener();
+      runInRequestScope(scope, () => callback({}));
     } catch {
       // A failing subscriber must not stop the others resyncing.
     }
@@ -139,10 +271,66 @@ async function checkAuthFailure(): Promise<boolean> {
   }
 }
 
+// The server time a page's server-rendered data was read at, until the
+// stream's first `connected` event says whether anything was emitted since
+// (see `resyncIfEventsSince`).
+let pendingSnapshotAt: number | null = null;
+
+/**
+ * For a page whose server render carried its data (the dashboard): that data
+ * was read at `serverTime`, before this tab's stream existed, so an event
+ * emitted between the two reached nobody. The stream's first `connected` event
+ * names when each event type last went out; the subscribers of every type
+ * emitted that late or later refetch once, as on a reconnect. Only those: a
+ * playback in progress emits `session-changed` every few seconds, and a
+ * resync of every subscriber then re-read everything the render had just read.
+ * A page that fetched its own data on mount never needs this — the stream
+ * opens before its answers arrive.
+ */
+export function resyncIfEventsSince(serverTime: number): void {
+  if (liveState) {
+    // Already delivering: the `connected` event that would have answered has
+    // gone by, so the gap cannot be checked.
+    fireResync();
+    return;
+  }
+  pendingSnapshotAt = pendingSnapshotAt === null ? serverTime : Math.min(pendingSnapshotAt, serverTime);
+}
+
+/**
+ * The event types a `connected` event reports emitted at or after `since`,
+ * or null when it cannot tell (refetch everything rather than trust data that
+ * may be stale).
+ */
+function typesEmittedSince(e: Event, since: number): Set<string> | null {
+  try {
+    const { lastEventAtByType } = JSON.parse((e as MessageEvent).data) as { lastEventAtByType?: unknown };
+    if (typeof lastEventAtByType !== "object" || lastEventAtByType === null) return null;
+    const types = new Set<string>();
+    for (const [type, at] of Object.entries(lastEventAtByType)) {
+      if (typeof at !== "number") return null;
+      if (at >= since) types.add(type);
+    }
+    return types;
+  } catch {
+    return null;
+  }
+}
+
 function createSource(): EventSource | null {
   try {
     const source = new EventSource("/api/events/stream");
-    source.addEventListener("connected", () => setConnected(true));
+    source.addEventListener("connected", (e) => {
+      setConnected(true);
+      setLive(true);
+      if (pendingSnapshotAt !== null) {
+        const since = pendingSnapshotAt;
+        pendingSnapshotAt = null;
+        const types = typesEmittedSince(e, since);
+        if (types === null) fireResync();
+        else if (types.size > 0) resyncTypes(types);
+      }
+    });
     source.onopen = () => {
       // Successful (re)open — reset backoff.
       reconnectDelay = RECONNECT_BASE_MS;
@@ -159,6 +347,7 @@ function createSource(): EventSource | null {
     };
     source.onerror = () => {
       setConnected(false);
+      setLive(false);
       // Only the browser's native auto-reconnect runs while the source is
       // still CONNECTING/OPEN. When the server hard-closes the stream the
       // source transitions to CLOSED and stays dead — rebuild it ourselves.
@@ -194,6 +383,10 @@ function createSource(): EventSource | null {
         scheduleReconnect();
       });
     };
+    // The pre-handlers' own listeners first, then every subscriber's.
+    for (const eventType of preHandlers.keys()) {
+      source.addEventListener(eventType, preDispatcherFor(eventType));
+    }
     // Re-attach any subscriber handlers to the new source.
     for (const [eventType, handlers] of eventHandlers) {
       for (const handler of handlers) {
@@ -286,6 +479,7 @@ function releaseSource() {
     everConnected = false;
     lastResyncAt = 0;
     setConnected(false);
+    setLive(false);
   }, IDLE_CLOSE_DELAY_MS);
 }
 
@@ -301,8 +495,32 @@ function releaseSource() {
 export const __testing = {
   acquireSource,
   releaseSource,
-  registerResync: (fn: () => void) => resyncListeners.add(fn),
+  registerResync: (fn: () => void, types: readonly string[] = []) => resyncListeners.set(() => fn, types),
 };
+
+/**
+ * Whether pushes are arriving right now: the current stream has delivered an
+ * event since it opened. False while it connects, after a drop, and behind a
+ * proxy that passes the headers but holds the events back.
+ */
+export function isRealtimeLive(): boolean {
+  return liveState;
+}
+
+function subscribeLive(listener: () => void): () => void {
+  liveListeners.add(listener);
+  return () => liveListeners.delete(listener);
+}
+
+const notLive = () => false;
+
+/**
+ * `isRealtimeLive()`, re-rendering when it changes. Reads only — it does not
+ * keep the stream open (the shell's subscription does).
+ */
+export function useRealtimeLive(): boolean {
+  return useSyncExternalStore(subscribeLive, isRealtimeLive, notLive);
+}
 
 /**
  * Subscribe to real-time server events via SSE.
@@ -314,7 +532,28 @@ export const __testing = {
  */
 export function useRealtime(
   eventType: string,
-  callback: (data: Record<string, unknown>) => void,
+  callback: RealtimeCallback,
+): { connected: boolean; authExpired: boolean } {
+  return useRealtimeSubscription(eventType, callback);
+}
+
+/**
+ * `useRealtime` for several event types at once — for a hook that takes its
+ * event list as an argument (hooks cannot be called in a loop). One
+ * subscription: the callback runs once per event, and once per reconnect's
+ * resync. An empty list subscribes to nothing.
+ */
+export function useRealtimeEvents(
+  eventTypes: readonly string[],
+  callback: RealtimeCallback,
+): { connected: boolean; authExpired: boolean } {
+  return useRealtimeSubscription(eventTypes.join("\n"), callback);
+}
+
+/** `typesKey`: the event types, newline-joined (no event type contains one). */
+function useRealtimeSubscription(
+  typesKey: string,
+  callback: RealtimeCallback,
 ): { connected: boolean; authExpired: boolean } {
   const [connected, setLocalConnected] = useState(connectedState);
   const [authExpired, setLocalAuthExpired] = useState(authFailed);
@@ -325,6 +564,9 @@ export function useRealtime(
   });
 
   useEffect(() => {
+    const eventTypes = typesKey.split("\n").filter(Boolean);
+    if (eventTypes.length === 0) return;
+
     // Track connected state
     const onConnectedChange = (value: boolean) => setLocalConnected(value);
     connectedListeners.add(onConnectedChange);
@@ -340,44 +582,50 @@ export function useRealtime(
       return;
     }
 
-    const handler = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        callbackRef.current(data);
-      } catch {
-        // Ignore malformed events
-      }
-    };
+    const attached = eventTypes.map((eventType) => {
+      const handler = (e: MessageEvent) => {
+        const scope = firstSight(eventType, e);
+        try {
+          const data = JSON.parse(e.data);
+          runInRequestScope(scope, () => callbackRef.current(data));
+        } catch {
+          // Ignore malformed events
+        }
+      };
 
-    // Track the handler in the shared registry so it can be re-attached to a
-    // fresh source on reconnect, then attach it to the current source.
-    let handlers = eventHandlers.get(eventType);
-    if (!handlers) {
-      handlers = new Set();
-      eventHandlers.set(eventType, handlers);
-    }
-    handlers.add(handler);
-    source.addEventListener(eventType, handler);
+      // Track the handler in the shared registry so it can be re-attached to a
+      // fresh source on reconnect, then attach it to the current source.
+      let handlers = eventHandlers.get(eventType);
+      if (!handlers) {
+        handlers = new Set();
+        eventHandlers.set(eventType, handlers);
+      }
+      handlers.add(handler);
+      source.addEventListener(eventType, handler);
+      return { eventType, handler, handlers };
+    });
 
     // Recover from a gap: after a reconnect the same callback runs as though
     // the event had arrived, because whatever was emitted while the stream was
     // down is unrecoverable. Callbacks here are refetches, so re-running one is
     // exactly the right recovery.
-    const resync = () => callbackRef.current({});
-    resyncListeners.add(resync);
+    const resync = () => callbackRef.current;
+    resyncListeners.set(resync, eventTypes);
 
     return () => {
-      // The shared source may have been replaced during reconnection;
-      // removeEventListener on a stale/closed source is safe (no-op).
-      handlers.delete(handler);
-      if (handlers.size === 0) eventHandlers.delete(eventType);
-      sharedSource?.removeEventListener(eventType, handler);
+      for (const { eventType, handler, handlers } of attached) {
+        // The shared source may have been replaced during reconnection;
+        // removeEventListener on a stale/closed source is safe (no-op).
+        handlers.delete(handler);
+        if (handlers.size === 0) eventHandlers.delete(eventType);
+        sharedSource?.removeEventListener(eventType, handler);
+      }
       resyncListeners.delete(resync);
       connectedListeners.delete(onConnectedChange);
       authFailedListeners.delete(onAuthChange);
       releaseSource();
     };
-  }, [eventType]);
+  }, [typesKey]);
 
   return { connected, authExpired };
 }

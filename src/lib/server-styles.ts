@@ -1,4 +1,4 @@
-export interface ServerStyle {
+interface ServerStyle {
   label: string;
   /** Badge/chip Tailwind classes: text + bg + border */
   classes: string;

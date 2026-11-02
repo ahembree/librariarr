@@ -1,39 +1,35 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useMemo } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
-import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
+import { QualityChips } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { ColorChip } from "@/components/color-chip";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromSeriesGroup } from "@/components/media-hover-popover";
 import { useServers } from "@/hooks/use-servers";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
-import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
-import { useTableAlphabet } from "@/hooks/use-table-alphabet";
-
-import { Button } from "@/components/ui/button";
 import { Tv, Layers, List, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import Link from "next/link";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import { formatFileSize } from "@/lib/format";
-import { EmptyState } from "@/components/empty-state";
+import { formatDate, formatFileSize } from "@/lib/format";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { useFilterPersistence } from "@/hooks/use-filter-persistence";
-import { sameFilters } from "@/lib/filters/same-filters";
-import { useRealtime } from "@/hooks/use-realtime";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -57,8 +53,6 @@ interface GroupedSeries {
   year?: number | null;
 }
 
-import { QUALITY_ORDER } from "@/lib/resolution";
-
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Name" },
   { value: "seasonCount", label: "Seasons" },
@@ -68,330 +62,219 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function seriesTableColumns(getHex: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => string): DataTableColumn<GroupedSeries>[] {
-  return [
-    {
-      id: "parentTitle",
-      header: "Title",
-      defaultWidth: 250,
-      accessor: (s) => <span className="font-medium">{s.parentTitle}</span>,
-      sortValue: (s) => s.parentTitle,
-      className: "max-w-[300px] truncate",
-    },
-    {
-      id: "seasonCount",
-      header: "Seasons",
-      defaultWidth: 90,
-      accessor: (s) => s.seasonCount,
-      sortValue: (s) => s.seasonCount,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "episodeCount",
-      header: "Episodes",
-      defaultWidth: 90,
-      accessor: (s) => s.episodeCount,
-      sortValue: (s) => s.episodeCount,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "totalSize",
-      header: "Size",
-      defaultWidth: 100,
-      accessor: (s) => formatFileSize(s.totalSize),
-      sortValue: (s) => Number(s.totalSize),
-      className: "text-muted-foreground",
-    },
-    {
-      id: "quality",
-      header: "Quality",
-      defaultWidth: 200,
-      accessor: (s) => (
-        <div className="flex flex-wrap gap-1">
-          {QUALITY_ORDER.filter((q) => s.qualityCounts[q]).map((quality) => (
-            <ColorChip
-              key={quality}
-              style={getChipBadgeStyle(getHex("resolution", quality))}
-            >
-              {quality}: {s.qualityCounts[quality]}
-            </ColorChip>
-          ))}
-        </div>
-      ),
-    },
-    {
-      id: "lastPlayed",
-      header: "Last Watched",
-      defaultWidth: 120,
-      accessor: (s) => s.lastPlayed ? new Date(s.lastPlayed).toLocaleDateString() : "Never",
-      sortValue: (s) => s.lastPlayed ? new Date(s.lastPlayed).getTime() : 0,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "addedAt",
-      header: "Added",
-      defaultWidth: 100,
-      accessor: (s) => s.addedAt ? new Date(s.addedAt).toLocaleDateString() : "-",
-      sortValue: (s) => s.addedAt ? new Date(s.addedAt).getTime() : 0,
-      className: "text-muted-foreground",
-    },
-  ];
+// Module-level: built inline, the columns were new on every render and the
+// table re-sorted the whole list on each alphabet scroll.
+const SERIES_TABLE_COLUMNS: DataTableColumn<GroupedSeries>[] = [
+  {
+    id: "parentTitle",
+    header: "Title",
+    defaultWidth: 250,
+    accessor: (s) => <span className="font-medium">{s.parentTitle}</span>,
+    sortValue: (s) => s.parentTitle,
+    className: "max-w-[300px] truncate",
+  },
+  {
+    id: "seasonCount",
+    header: "Seasons",
+    defaultWidth: 90,
+    accessor: (s) => s.seasonCount,
+    sortValue: (s) => s.seasonCount,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "episodeCount",
+    header: "Episodes",
+    defaultWidth: 90,
+    accessor: (s) => s.episodeCount,
+    sortValue: (s) => s.episodeCount,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "totalSize",
+    header: "Size",
+    defaultWidth: 100,
+    accessor: (s) => formatFileSize(s.totalSize),
+    sortValue: (s) => Number(s.totalSize),
+    className: "text-muted-foreground",
+  },
+  {
+    id: "quality",
+    header: "Quality",
+    defaultWidth: 200,
+    accessor: (s) => (
+      <QualityChips chips={qualityChips({ qualityCounts: s.qualityCounts }, "video")} />
+    ),
+  },
+  {
+    id: "lastPlayed",
+    header: "Last Watched",
+    defaultWidth: 120,
+    accessor: (s) => formatDate(s.lastPlayed, "Never"),
+    sortValue: (s) => s.lastPlayed ? new Date(s.lastPlayed).getTime() : 0,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "addedAt",
+    header: "Added",
+    defaultWidth: 100,
+    accessor: (s) => formatDate(s.addedAt),
+    sortValue: (s) => s.addedAt ? new Date(s.addedAt).getTime() : 0,
+    className: "text-muted-foreground",
+  },
+];
+
+const seriesKeyOf = (s: GroupedSeries) => s.seriesKey ?? s.parentTitle;
+
+// The table's popover carries the show's poster as its hero; the card's passes
+// the same fields (the card already shows the poster).
+function seriesTableHover(s: GroupedSeries) {
+  return (
+    <MediaHoverPopover imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`} data={hoverDataFromSeriesGroup(s)} />
+  );
 }
 
-function applyFiltersToGroupedSeries(
-  seriesList: GroupedSeries[],
-  filters: Record<string, string>
-): GroupedSeries[] {
-  if (Object.keys(filters).length === 0) return seriesList;
-
-  return seriesList.filter((series) => {
-    if (filters.resolution) {
-      const allowed = filters.resolution.split("|");
-      const hasMatch = allowed.some((r) => series.qualityCounts[r] > 0);
-      if (!hasMatch) return false;
-    }
-
-    if (filters.lastPlayedAtDays) {
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - parseInt(filters.lastPlayedAtDays));
-      if (!series.lastPlayed || new Date(series.lastPlayed) < daysAgo) return false;
-    }
-    if (filters.lastPlayedAtMin) {
-      if (!series.lastPlayed || new Date(series.lastPlayed) < new Date(filters.lastPlayedAtMin)) return false;
-    }
-    if (filters.lastPlayedAtMax) {
-      if (!series.lastPlayed || new Date(series.lastPlayed) > new Date(filters.lastPlayedAtMax)) return false;
-    }
-
-    if (filters.addedAtDays) {
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - parseInt(filters.addedAtDays));
-      if (!series.addedAt || new Date(series.addedAt) < daysAgo) return false;
-    }
-    if (filters.addedAtMin) {
-      if (!series.addedAt || new Date(series.addedAt) < new Date(filters.addedAtMin)) return false;
-    }
-    if (filters.addedAtMax) {
-      if (!series.addedAt || new Date(series.addedAt) > new Date(filters.addedAtMax)) return false;
-    }
-
-    if (filters.search) {
-      if (!series.parentTitle.toLowerCase().includes(filters.search.toLowerCase())) return false;
-    }
-
-    return true;
-  });
-}
-
-const GAP = 16;
-const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
+const selectSeries = (body: { series?: GroupedSeries[] }) => body.series;
 
 export default function SeriesPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
-  const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/series");
-  // Start from the restored filters, so the first fetch is already filtered.
-  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
-  const [, startTransition] = useTransition();
-
-  const [sortBy, setSortBy] = useState("parentTitle");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const { size, setSize, columns: actualColumns } = useCardSize();
+  const {
+    viewMode,
+    setViewMode,
+    sortBy,
+    sortOrder,
+    toggleSort,
+    toggleOrder,
+    filters,
+    externalFilters,
+    onFilterChange,
+    clearFilters,
+    hasFilters,
+  } = useLibraryListState("series", "parentTitle", { filtersKey: "filters-/library/series" });
+  const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
+  const { size, setSize, columns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
+  const listParams = new URLSearchParams();
+  listParams.set("sortBy", sortBy);
+  listParams.set("sortOrder", sortOrder);
+  listParams.set("limit", "0");
+  if (selectedServerId !== "all") {
+    listParams.set("serverId", selectedServerId);
+  }
+  // Every filter goes to the server. This page used to send none and
+  // filter on the client for resolution, dates and search only, so the
+  // rest of the panel — Episode Count, Watched %, Last Episode Aired,
+  // Watchlisted (which the route already implements), genre, year, codecs
+  // — showed an active chip over an unfiltered list.
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) listParams.set(key, value);
+  }
+  const { items: seriesList, loading, refetch: fetchSeries } = useLibraryList({
+    url: "/api/media/series/grouped",
+    params: listParams,
+    mode: "grouped",
+    select: selectSeries,
+    syncScope: { types: "SERIES", serverId: selectedServerId },
+  });
 
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const grid = useVirtualPosterGrid({
+    count: seriesList.length,
+    columns,
+    aspect: POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}`,
+  });
 
   const { markChildNavigation } = useScrollRestoration("/library/series", !loading && seriesList.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
+  });
+
+  const alphabetItems = useMemo(() => seriesList.map((s) => ({ title: s.parentTitle })), [seriesList]);
+  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
+
+  // Summed once per list, not on every render (each alphabet scroll re-renders).
+  const totals = useMemo(() => {
+    let seasons = 0;
+    let episodes = 0;
+    for (const s of seriesList) {
+      seasons += s.seasonCount;
+      episodes += s.episodeCount;
+    }
+    return { seasons, episodes };
+  }, [seriesList]);
+
+  const openShow = useCallback(
+    (s: GroupedSeries) => {
+      markChildNavigation();
+      router.push(`/library/series/show/${s.mediaItemId}`);
     },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / actualColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
-  });
-
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-  // Token guards against a stale slow response landing after a quick
-  // sort/server flip and overwriting state with the wrong items.
-  const reqToken = useRef(0);
-
-  useEffect(() => {
-    const main = document.querySelector<HTMLElement>("main");
-    scrollElementRef.current = main;
-    setScrollElement(main);
-  }, []);
-
-  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
-  // skeleton while loading, so the ref is null on the initial pass).
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, seriesList.length]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("series-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("series-view-mode", mode);
-  };
-
-  const fetchSeries = useCallback(async () => {
-    const token = ++reqToken.current;
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.set("sortBy", sortBy);
-      params.set("sortOrder", sortOrder);
-      params.set("limit", "0");
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      const response = await fetch(`/api/media/series/grouped?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setSeriesList(data.series || []);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Failed to fetch series:", error);
-      if (token === reqToken.current) setLoading(false);
-    }
-  }, [sortBy, sortOrder, selectedServerId]);
-
-  useRealtime("sync:completed", fetchSeries);
-
-  useListFetch(fetchSeries);
-
-  const filteredSeries = useMemo(
-    () => applyFiltersToGroupedSeries(seriesList, filters),
-    [seriesList, filters]
+    [markChildNavigation, router],
   );
 
-  const rowCount = useMemo(
-    () => (filteredSeries.length > 0 ? Math.ceil(filteredSeries.length / actualColumns) : 0),
-    [filteredSeries.length, actualColumns]
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (s: GroupedSeries, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
+        title={s.parentTitle}
+        fallbackIcon="series"
+        href={`/library/series/show/${s.mediaItemId}`}
+        prefetchMediaId={s.mediaItemId}
+        onClick={markChildNavigation}
+        metadata={
+          <MetadataLine stacked>
+            {show("metadata", "seasonCount") && s.seasonCount > 0 && (
+              <MetadataItem icon={<Layers />}>{s.seasonCount} {s.seasonCount === 1 ? "season" : "seasons"}</MetadataItem>
+            )}
+            {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{s.episodeCount} ep</MetadataItem>}
+            {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(s.totalSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(
+          qualityChips({ qualityCounts: s.qualityCounts }, "video"),
+          getHex,
+          (toggle) => show("badges", toggle),
+        )}
+        servers={serverChips ? s.servers : undefined}
+        hoverContent={<MediaHoverPopover data={hoverDataFromSeriesGroup(s)} />}
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
   );
-
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [actualColumns]);
-
-  const overscan = useDeferredOverscan(!loading && rowCount > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan,
-    scrollMargin,
-  });
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const alphabetItems = useMemo(
-    () => filteredSeries.map((s) => ({ title: s.parentTitle })),
-    [filteredSeries]
-  );
-  const gridAlphabet = useVirtualGridAlphabet({
-    items: alphabetItems,
-    columns: actualColumns,
-    virtualizer,
-    scrollElement,
-    enabled: viewMode === "cards",
-  });
-
-  const tableScrollToIndexRef = useRef<((index: number) => void) | null>(null);
-
-  const tableAlphabet = useTableAlphabet({
-    items: alphabetItems,
-    enabled: viewMode === "table",
-    scrollToIndexRef: tableScrollToIndexRef,
-    scrollElement,
-  });
-
-  const activeLetter = viewMode === "cards" ? gridAlphabet.activeLetter : tableAlphabet.activeLetter;
-  const availableLetters = viewMode === "cards" ? gridAlphabet.availableLetters : tableAlphabet.availableLetters;
-
-  const handleLetterClick = useCallback((letter: string) => {
-    if (viewMode === "cards") {
-      gridAlphabet.scrollToLetter(letter);
-    } else {
-      tableAlphabet.scrollToLetter(letter);
-    }
-  }, [viewMode, gridAlphabet, tableAlphabet]);
-
-  const toggleSort = (field: string) => {
-    if (sortBy === field) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("asc");
-    }
-  };
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Series</h1>
-            {!loading && filteredSeries.length > 0 && (
-              <span className="font-mono text-xs text-faint">
-                {filteredSeries.length.toLocaleString()} series · {filteredSeries.reduce((sum, s) => sum + s.seasonCount, 0).toLocaleString()} seasons · {filteredSeries.reduce((sum, s) => sum + s.episodeCount, 0).toLocaleString()} episodes
-              </span>
-            )}
-          </div>
-          <p className="text-muted-foreground mt-1">
-            Browse your TV library — grouped by show, with deep links into seasons and individual episodes.
-          </p>
-        </div>
-        <SyncLibraryButton libraryType="SERIES" onSyncComplete={fetchSeries} />
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Series"
+        meta={
+          !loading && seriesList.length > 0 && (
+            <span className="font-mono text-xs text-faint">
+              {seriesList.length.toLocaleString()} series · {totals.seasons.toLocaleString()} seasons · {totals.episodes.toLocaleString()} episodes
+            </span>
+          )
+        }
+        description="Browse your TV library — grouped by show, with deep links into seasons and individual episodes."
+        actions={<SyncLibraryButton libraryType="SERIES" onSyncComplete={fetchSeries} />}
+        actionsInline
+      />
 
       <LibraryTabs tabs={SERIES_TABS} active="/library/series" />
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
-        externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
+        resetKey={filterPanel.resetKey}
+        onFilterChange={onFilterChange}
+        externalFilters={filterPanel.externalFilters}
         mediaType="SERIES"
+        seriesAggregateFilters
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -403,156 +286,32 @@ export default function SeriesPage() {
             sortOptions={SORT_OPTIONS}
             sortBy={sortBy}
             sortOrder={sortOrder}
-            onSortChange={(v) => toggleSort(v)}
-            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+            onSortChange={toggleSort}
+            onSortOrderToggle={toggleOrder}
           />
         }
       />
 
       {loading ? (
         <MediaGridSkeleton />
-      ) : filteredSeries.length === 0 ? (
-        <EmptyState
-          icon={Tv}
-          title="No series found."
-          description={Object.keys(filters).length > 0 ? "Try adjusting your filters." : "Sync a media server to get started."}
-          action={Object.keys(filters).length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFilters({}); persistFilters({}); }}>Clear Filters</Button> : undefined}
+      ) : seriesList.length === 0 ? (
+        <LibraryEmptyState icon={Tv} noun="series" hasFilters={hasFilters} onClear={filterPanel.clear} />
+      ) : viewMode === "table" ? (
+        <DataTable<GroupedSeries>
+          columns={SERIES_TABLE_COLUMNS}
+          data={seriesList}
+          keyExtractor={seriesKeyOf}
+          defaultSortId="parentTitle"
+          resizeStorageKey="dt-widths-series"
+          onRowClick={openShow}
+          scrollToIndexRef={alphabet.tableScrollToIndexRef}
+          renderHoverContent={seriesTableHover}
         />
       ) : (
-        <>
-          {viewMode === "table" ? (
-            <DataTable<GroupedSeries>
-              columns={seriesTableColumns(getHex)}
-              data={filteredSeries}
-              keyExtractor={(s) => s.seriesKey ?? s.parentTitle}
-              defaultSortId="parentTitle"
-              resizeStorageKey="dt-widths-series"
-              onRowClick={(s) => { markChildNavigation(); router.push(`/library/series/show/${s.mediaItemId}`); }}
-              scrollToIndexRef={tableScrollToIndexRef}
-              renderHoverContent={(s) => (
-                <MediaHoverPopover
-                  imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
-                  data={{
-                    title: s.parentTitle,
-                    year: s.year,
-                    summary: s.summary,
-                    contentRating: s.contentRating,
-                    rating: s.rating,
-                    ratingImage: s.ratingImage,
-                    audienceRating: s.audienceRating,
-                    audienceRatingImage: s.audienceRatingImage,
-                    genres: s.genres,
-                    studio: s.studio,
-                    seasonCount: s.seasonCount,
-                    episodeCount: s.episodeCount,
-                    qualityCounts: s.qualityCounts,
-                    fileSize: s.totalSize,
-                    lastPlayedAt: s.lastPlayed,
-                    addedAt: s.addedAt,
-                    servers: s.servers,
-                  }}
-                />
-              )}
-            />
-          ) : (
-            <div ref={gridContainerRef}>
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  width: "100%",
-                  position: "relative",
-                }}
-              >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const rowStart = virtualRow.index * actualColumns;
-                  const rowItems = filteredSeries.slice(rowStart, rowStart + actualColumns);
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        paddingBottom: GAP,
-                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: `${GAP}px`,
-                          gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                        }}
-                      >
-                        {rowItems.map((s) => (
-                          <MediaCard
-                            key={s.seriesKey ?? s.parentTitle}
-                            priority={virtualRow.index < PRIORITY_ROWS}
-                            imageUrl={`/api/media/${s.mediaItemId}/image?type=parent`}
-                            title={s.parentTitle}
-                            fallbackIcon="series"
-                            href={`/library/series/show/${s.mediaItemId}`}
-                            onClick={() => { markChildNavigation(); }}
-                            metadata={
-                              <MetadataLine stacked>
-                                {show("metadata", "seasonCount") && s.seasonCount > 0 && (
-                                  <MetadataItem icon={<Layers />}>{s.seasonCount} {s.seasonCount === 1 ? "season" : "seasons"}</MetadataItem>
-                                )}
-                                {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{s.episodeCount} ep</MetadataItem>}
-                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(s.totalSize)}</MetadataItem>}
-                              </MetadataLine>
-                            }
-                            qualityBar={
-                              show("badges", "qualityCounts")
-                                ? QUALITY_ORDER
-                                    .filter((q) => s.qualityCounts[q])
-                                    .map((quality) => ({
-                                      color: getHex("resolution", quality),
-                                      weight: s.qualityCounts[quality],
-                                      label: `${quality}: ${s.qualityCounts[quality]}`,
-                                    }))
-                                : undefined
-                            }
-                            servers={showServers && servers.length > 1 ? s.servers : undefined}
-                            hoverContent={
-                              <MediaHoverPopover
-                                data={{
-                                  title: s.parentTitle,
-                                  year: s.year,
-                                  summary: s.summary,
-                                  contentRating: s.contentRating,
-                                  rating: s.rating,
-                                  ratingImage: s.ratingImage,
-                                  audienceRating: s.audienceRating,
-                                  audienceRatingImage: s.audienceRatingImage,
-                                  genres: s.genres,
-                                  studio: s.studio,
-                                  seasonCount: s.seasonCount,
-                                  episodeCount: s.episodeCount,
-                                  qualityCounts: s.qualityCounts,
-                                  fileSize: s.totalSize,
-                                  lastPlayedAt: s.lastPlayed,
-                                  addedAt: s.addedAt,
-                                  servers: s.servers,
-                                }}
-                              />
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </>
+        <VirtualCardGrid grid={grid} items={seriesList} getKey={seriesKeyOf} renderItem={renderCard} />
       )}
 
-      <AlphabetFilter activeLetter={activeLetter} onLetterClick={handleLetterClick} availableLetters={availableLetters} />
+      <AlphabetFilter activeLetter={alphabet.activeLetter} onLetterClick={alphabet.onLetterClick} availableLetters={alphabet.availableLetters} />
     </div>
   );
 }

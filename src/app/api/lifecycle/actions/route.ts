@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
-import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { coverageOf, uncoveredEpisodes, type EpisodeCoverage } from "@/lib/lifecycle/episode-coverage";
+import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
 import {
   actionTargetTitle,
   actionTitleSnapshot,
@@ -30,6 +32,7 @@ interface ActionItemMediaItem {
   resolution: string | null;
   dynamicRange: string | null;
   audioProfile: string | null;
+  audioCodec: string | null;
   fileSize: string | null;
   genres: string[] | null;
   studio: string | null;
@@ -82,12 +85,12 @@ interface RuleSetGroup {
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
-  duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
+  duration: true, resolution: true, dynamicRange: true, audioProfile: true, audioCodec: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true, libraryId: true,
 } as const;
 
 const RULE_SET_SELECT = {
-  id: true, name: true, type: true, actionType: true, actionDelayDays: true,
+  id: true, name: true, type: true, seriesScope: true, actionType: true, actionDelayDays: true,
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
   removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
 } as const;
@@ -121,7 +124,7 @@ type SelectedMediaItem = {
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
   duration: number | null; resolution: string | null; dynamicRange: string | null;
-  audioProfile: string | null; fileSize: bigint | null;
+  audioProfile: string | null; audioCodec: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
   playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
   libraryId: string;
@@ -135,7 +138,7 @@ function serializeMediaItem(mi: SelectedMediaItem, servers: LibraryServers): Act
     rating: mi.rating, ratingImage: mi.ratingImage,
     audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
     duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
-    audioProfile: mi.audioProfile, fileSize: mi.fileSize?.toString() ?? null,
+    audioProfile: mi.audioProfile, audioCodec: mi.audioCodec, fileSize: mi.fileSize?.toString() ?? null,
     genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
     studio: mi.studio, playCount: mi.playCount,
     lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
@@ -150,6 +153,7 @@ function buildActionMediaItem(
     actionType: string;
     status: string;
     matchedMediaItemIds: string[];
+    episodeScope?: boolean;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
     mediaItemSeasonNumber?: number | null;
@@ -180,7 +184,7 @@ function buildActionMediaItem(
   const nullFields = {
     thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
     audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
-    audioProfile: null, fileSize: null, genres: null, studio: null,
+    audioProfile: null, audioCodec: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };
   if (ruleSetType === "SERIES") {
@@ -215,12 +219,7 @@ async function backfillTitleSnapshots(
   );
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status") || "PENDING";
   if (!["PENDING", "COMPLETED", "FAILED", "ALL"].includes(status)) {
@@ -231,11 +230,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (status === "PENDING") {
-    return handlePendingGrouped(request, session.userId!);
+    return handlePendingGrouped(request, session.userId);
   }
 
-  return handleStatusGrouped(request, session.userId!, status);
-}
+  return handleStatusGrouped(request, session.userId, status);
+});
 
 /**
  * PENDING: merge actual LifecycleAction PENDING records with RuleMatch-based
@@ -276,6 +275,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
         searchAfterAction: true,
         addArrTags: true,
         removeArrTags: true,
+        matchedMediaItemIds: true,
       },
     }),
     // 2. The matches of action-enabled rule sets — their keys only. Once the
@@ -299,6 +299,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
   // a different signature no longer suppresses it.
   const pendingPairs = new Set(pendingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`));
   const completedSigsByPair = new Map<string, Set<string>>();
+  const settledByRuleSet = new Map<string, typeof settledActions>();
   for (const a of settledActions) {
     const pair = `${a.ruleSetId}:${a.mediaItemId}`;
     let sigs = completedSigsByPair.get(pair);
@@ -307,7 +308,32 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       completedSigsByPair.set(pair, sigs);
     }
     sigs.add(actionConfigSignature(a));
+    if (a.ruleSetId) settledByRuleSet.set(a.ruleSetId, [...(settledByRuleSet.get(a.ruleSetId) ?? []), a]);
   }
+
+  // A Series rule set's action is suppressed per episode, from every settled
+  // action of the rule set with the same configuration (`episode-coverage.ts`),
+  // exactly as the scheduler decides it — which needs the matches' member
+  // lists, read only for the rule sets with such an action.
+  const coverageByRuleSet = new Map<string, EpisodeCoverage>();
+  for (const [ruleSetId, settled] of settledByRuleSet) {
+    const ruleSet = ruleSetById.get(ruleSetId);
+    if (!ruleSet || ruleSet.type !== "SERIES" || !ruleSet.actionType || isDestructiveActionType(ruleSet.actionType)) continue;
+    const signature = actionConfigSignature(ruleSet);
+    const same = settled.filter((a) => actionConfigSignature(a) === signature);
+    if (same.length > 0) coverageByRuleSet.set(ruleSetId, coverageOf(same));
+  }
+  const currentMembersByPair = new Map<string, string[]>();
+  for (const m of await loadStoredMatchMembers([...coverageByRuleSet.keys()])) {
+    const ids = Array.isArray(m.memberIds) ? m.memberIds.filter((x): x is string => typeof x === "string") : [];
+    currentMembersByPair.set(`${m.ruleSetId}:${m.mediaItemId}`, ids);
+  }
+  /** The episodes an estimated row's action would act on, or null when nothing narrows it. */
+  const uncoveredFor = (ruleSetId: string, mediaItemId: string): string[] | null => {
+    const coverage = coverageByRuleSet.get(ruleSetId);
+    if (!coverage) return null;
+    return uncoveredEpisodes(mediaItemId, currentMembersByPair.get(`${ruleSetId}:${mediaItemId}`) ?? [], coverage);
+  };
 
   const upcomingIds = matchKeys
     .filter((m) => {
@@ -319,10 +345,12 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       // between is simply not there: nothing to estimate for it.
       const ruleSet = ruleSetById.get(m.ruleSetId);
       if (!ruleSet) return false;
-      if (ruleSet.actionType && !isDestructiveActionType(ruleSet.actionType)) {
-        if (completedSigsByPair.get(pair)?.has(actionConfigSignature(ruleSet))) return false;
+      if (!ruleSet.actionType || isDestructiveActionType(ruleSet.actionType)) return true;
+      if (ruleSet.type === "SERIES") {
+        const left = uncoveredFor(m.ruleSetId, m.mediaItemId);
+        return left === null || left.length > 0;
       }
-      return true;
+      return !completedSigsByPair.get(pair)?.has(actionConfigSignature(ruleSet));
     })
     .map((m) => m.id);
 
@@ -375,7 +403,12 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, ruleSet.type, memberDataMap, servers);
+    const mi = buildActionMediaItem(
+      { ...a, episodeScope: ruleSetActsOnEpisodes(a.actionType, ruleSet) },
+      ruleSet.type,
+      memberDataMap,
+      servers,
+    );
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -410,11 +443,19 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       title: snapshot?.title,
       parentTitle: snapshot?.parentTitle,
     });
-    const memberIds = memberIdsFromItemData(m.itemData);
+    // An episode-scoped action is scheduled for, and executes on, only the
+    // episodes no settled action of the same configuration has covered: list
+    // those, not every member.
+    const allMembers = memberIdsFromItemData(m.itemData);
+    const memberIds =
+      m.ruleSet.actionType && ruleSetActsOnEpisodes(m.ruleSet.actionType, m.ruleSet)
+        ? (uncoveredFor(m.ruleSetId, m.mediaItemId) ?? allMembers)
+        : allMembers;
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
       status: "PENDING",
       matchedMediaItemIds: memberIds,
+      episodeScope: ruleSetActsOnEpisodes(m.ruleSet.actionType!, m.ruleSet),
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
@@ -459,38 +500,50 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
 /**
  * COMPLETED / FAILED / CANCELLED / ALL: group LifecycleAction records by rule set.
  */
-async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
-  const where: Record<string, unknown> = { userId };
-  if (status !== "ALL") {
-    where.status = status;
-  }
+/**
+ * The most recent action (by `scheduledFor`, then id) of each (rule set, item)
+ * pair, newest first — picked in SQL, so the older actions of a pair, and
+ * their media rows, are never read. A deleted rule set's actions pair by the
+ * name they recorded; an action whose item is gone pairs with nothing but
+ * itself.
+ */
+async function latestActionIdPerPair(userId: string, status: string): Promise<string[]> {
+  const pairKey = `COALESCE("ruleSetId", 'deleted:' || COALESCE("ruleSetName", 'unknown')), COALESCE("mediaItemId", id)`;
+  const filterStatus = status !== "ALL";
+  const rows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM (
+       SELECT DISTINCT ON (${pairKey}) id, "scheduledFor"
+         FROM "LifecycleAction"
+        WHERE "userId" = $1${filterStatus ? ` AND status = $2::"LifecycleActionStatus"` : ""}
+        ORDER BY ${pairKey}, "scheduledFor" DESC, id
+     ) latest
+     ORDER BY "scheduledFor" DESC, id`,
+    ...(filterStatus ? [userId, status] : [userId]),
+  );
+  return rows.map((r) => r.id);
+}
 
-  const [actions, { ruleSetById, servers }] = await Promise.all([
-    prisma.lifecycleAction.findMany({
-      where,
-      include: {
-        mediaItem: {
-          select: MEDIA_ITEM_SELECT,
-        },
-      },
-      orderBy: { scheduledFor: "desc" },
-    }),
+async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
+  const [ids, { ruleSetById, servers }] = await Promise.all([
+    latestActionIdPerPair(userId, status),
     loadActionLookups(userId),
   ]);
 
-  await backfillTitleSnapshots(actions);
+  // Only the latest action per (rule set, item) is listed (see above).
+  const deduped =
+    ids.length === 0
+      ? []
+      : await prisma.lifecycleAction.findMany({
+          where: { id: { in: ids } },
+          include: {
+            mediaItem: {
+              select: MEDIA_ITEM_SELECT,
+            },
+          },
+          orderBy: [{ scheduledFor: "desc" }, { id: "asc" }],
+        });
 
-  // Dedup: keep only the most recent record per (ruleSetId, mediaItemId).
-  // Actions are ordered by scheduledFor desc, so the first seen per pair is the latest.
-  const seenPairs = new Set<string>();
-  const deduped = actions.filter((a) => {
-    const groupKey = a.ruleSetId ?? `deleted:${a.ruleSetName ?? "unknown"}`;
-    // Use action id for orphaned records (null mediaItemId) to prevent merging
-    const key = `${groupKey}:${a.mediaItemId ?? a.id}`;
-    if (seenPairs.has(key)) return false;
-    seenPairs.add(key);
-    return true;
-  });
+  await backfillTitleSnapshots(deduped);
 
   // Pre-aggregate series/music member data for actions with matchedMediaItemIds
   const memberStats = await loadGroupMemberStats(deduped.flatMap((a) => a.matchedMediaItemIds));

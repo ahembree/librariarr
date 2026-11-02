@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/plex/client", () => ({
   PlexClient: vi.fn().mockImplementation(function () {
@@ -22,6 +22,11 @@ import { JellyfinClient } from "@/lib/jellyfin/client";
 import { EmbyClient } from "@/lib/emby/client";
 
 describe("createMediaServerClient", () => {
+  // The constructor mocks are module-level, so their call records would
+  // otherwise accumulate across tests and let `toHaveBeenCalledWith` match a
+  // call an earlier test made.
+  beforeEach(() => vi.clearAllMocks());
+
   it("returns a PlexClient for PLEX type", () => {
     const client = createMediaServerClient(
       "PLEX",
@@ -29,11 +34,13 @@ describe("createMediaServerClient", () => {
       "plex-token",
     );
     expect(client).toEqual({ type: "plex" });
-    expect(PlexClient).toHaveBeenCalledWith(
+    expect(PlexClient).toHaveBeenCalledExactlyOnceWith(
       "http://plex:32400",
       "plex-token",
       undefined,
     );
+    expect(JellyfinClient).not.toHaveBeenCalled();
+    expect(EmbyClient).not.toHaveBeenCalled();
   });
 
   it("returns a JellyfinClient for JELLYFIN type", () => {
@@ -43,11 +50,13 @@ describe("createMediaServerClient", () => {
       "jf-token",
     );
     expect(client).toEqual({ type: "jellyfin" });
-    expect(JellyfinClient).toHaveBeenCalledWith(
+    expect(JellyfinClient).toHaveBeenCalledExactlyOnceWith(
       "http://jellyfin:8096",
       "jf-token",
       undefined,
     );
+    expect(PlexClient).not.toHaveBeenCalled();
+    expect(EmbyClient).not.toHaveBeenCalled();
   });
 
   it("returns an EmbyClient for EMBY type", () => {
@@ -57,40 +66,35 @@ describe("createMediaServerClient", () => {
       "emby-token",
     );
     expect(client).toEqual({ type: "emby" });
-    expect(EmbyClient).toHaveBeenCalledWith(
+    expect(EmbyClient).toHaveBeenCalledExactlyOnceWith(
       "http://emby:8096",
       "emby-token",
       undefined,
     );
+    expect(PlexClient).not.toHaveBeenCalled();
+    expect(JellyfinClient).not.toHaveBeenCalled();
   });
 
   it("passes options to the client constructor", () => {
     const options = { skipTlsVerify: true };
     createMediaServerClient("PLEX", "http://plex:32400", "token", options);
-    expect(PlexClient).toHaveBeenCalledWith(
+    expect(PlexClient).toHaveBeenCalledExactlyOnceWith(
       "http://plex:32400",
       "token",
       options,
     );
   });
 
-  it("throws an error for unsupported media server type", () => {
+  it.each(["UNKNOWN", "KODI"])("throws an error naming the unsupported type %s", (type) => {
     expect(() =>
       createMediaServerClient(
-        "UNKNOWN" as never,
+        type as never,
         "http://localhost",
         "token",
       ),
-    ).toThrow("Unsupported media server type: UNKNOWN");
-  });
-
-  it("includes the unsupported type name in the error message", () => {
-    expect(() =>
-      createMediaServerClient(
-        "KODI" as never,
-        "http://localhost",
-        "token",
-      ),
-    ).toThrow("KODI");
+    ).toThrow(`Unsupported media server type: ${type}`);
+    expect(PlexClient).not.toHaveBeenCalled();
+    expect(JellyfinClient).not.toHaveBeenCalled();
+    expect(EmbyClient).not.toHaveBeenCalled();
   });
 });

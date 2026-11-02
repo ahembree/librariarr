@@ -29,6 +29,7 @@ function getState(): RealtimeState {
   return globalForRealtime.__librariarrRealtime;
 }
 
+/** The process's realtime manager — the status route reads its live connection states. */
 export function getRealtimeManager(): RealtimeManager {
   return getState().manager;
 }
@@ -84,10 +85,3 @@ export function _resetRealtimeForTesting(): void {
 }
 
 export { realtimeBus } from "./bus";
-export { RealtimeManager } from "./manager";
-export type {
-  RealtimeEvent,
-  RealtimeEventKind,
-  RealtimeConnectionStatus,
-  RealtimeServerConfig,
-} from "./types";

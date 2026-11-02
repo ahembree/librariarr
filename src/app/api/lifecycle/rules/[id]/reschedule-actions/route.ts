@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { groupScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
-export async function POST(
+export const POST = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const ruleSet = await prisma.ruleSet.findFirst({
@@ -28,7 +24,7 @@ export async function POST(
 
   // A show's or an artist's action keeps the one-time upgrade hold, as when it
   // was scheduled (see grouped-action-hold.ts).
-  const hold = await loadGroupedActionHold(session.userId!);
+  const hold = await loadGroupedActionHold(session.userId);
   const groupedFor = groupScheduledFor(scheduledFor, hold, ruleSet.type);
 
   const [result] = await prisma.$transaction([
@@ -47,4 +43,4 @@ export async function POST(
   ]);
 
   return NextResponse.json({ updated: result.count });
-}
+});

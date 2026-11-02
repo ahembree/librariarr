@@ -33,7 +33,12 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -133,10 +138,8 @@ describe("GET /api/media/distinct-values", () => {
     });
     const body = await expectJson<{ resolution: string[] }>(response, 200);
 
-    // Normalized to standard labels like 4K, 1080P, 720P
-    expect(body.resolution).toContain("4K");
-    expect(body.resolution).toContain("1080P");
-    expect(body.resolution).toContain("720P");
+    // Normalized to the standard labels, in their fixed order.
+    expect(body.resolution).toEqual(["4K", "1080P", "720P"]);
   });
 
   it("returns distinct video codecs sorted alphabetically", async () => {
@@ -247,9 +250,7 @@ describe("GET /api/media/distinct-values", () => {
     const body = await expectJson<{ dynamicRange: string[] }>(response, 200);
 
     // Sorted by rank descending: Dolby Vision > HDR10 > SDR
-    expect(body.dynamicRange[0]).toBe("Dolby Vision");
-    expect(body.dynamicRange[1]).toBe("HDR10");
-    expect(body.dynamicRange[2]).toBe("SDR");
+    expect(body.dynamicRange).toEqual(["Dolby Vision", "HDR10", "SDR"]);
   });
 
   it("aggregates labels from the JSONB labels array deduplicated", async () => {
@@ -264,10 +265,8 @@ describe("GET /api/media/distinct-values", () => {
     const response = await callRoute(GET, { url: "/api/media/distinct-values" });
     const body = await expectJson<{ labels: string[] }>(response, 200);
 
-    expect(body.labels).toContain("Favorites");
-    expect(body.labels).toContain("Kids");
     // Deduped across both items.
-    expect(body.labels.filter((l: string) => l === "Favorites")).toHaveLength(1);
+    expect(body.labels).toEqual(["Favorites", "Kids"]);
   });
 
   it("aggregates stream-query color fields from streams", async () => {
@@ -290,9 +289,9 @@ describe("GET /api/media/distinct-values", () => {
       sqChromaSubsampling: string[];
     }>(response, 200);
 
-    expect(body.sqColorPrimaries).toContain("bt2020");
-    expect(body.sqColorRange).toContain("tv");
-    expect(body.sqChromaSubsampling).toContain("4:2:0");
+    expect(body.sqColorPrimaries).toEqual(["bt2020"]);
+    expect(body.sqColorRange).toEqual(["tv"]);
+    expect(body.sqChromaSubsampling).toEqual(["4:2:0"]);
   });
 
   it("returns distinct genres from JSONB arrays deduplicated", async () => {
@@ -317,12 +316,8 @@ describe("GET /api/media/distinct-values", () => {
     });
     const body = await expectJson<{ genre: string[] }>(response, 200);
 
-    expect(body.genre).toContain("Action");
-    expect(body.genre).toContain("Sci-Fi");
-    expect(body.genre).toContain("Comedy");
-    // No duplicates
-    const actionCount = body.genre.filter((g: string) => g === "Action").length;
-    expect(actionCount).toBe(1);
+    // Sorted, with "Action" listed once.
+    expect(body.genre).toEqual(["Action", "Comedy", "Sci-Fi"]);
   });
 
   it("returns distinct countries from JSONB arrays deduplicated", async () => {
@@ -347,11 +342,8 @@ describe("GET /api/media/distinct-values", () => {
     });
     const body = await expectJson<{ country: string[] }>(response, 200);
 
-    expect(body.country).toContain("France");
-    expect(body.country).toContain("Germany");
-    expect(body.country).toContain("Japan");
-    // No duplicates
-    expect(body.country.filter((c: string) => c === "France").length).toBe(1);
+    // Sorted, with "France" listed once.
+    expect(body.country).toEqual(["France", "Germany", "Japan"]);
   });
 
   it("returns file size min/max as strings (BigInt)", async () => {
@@ -440,16 +432,19 @@ describe("GET /api/media/distinct-values", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
-    await createTestMediaItem(lib.id, {
+    const { getTestPrisma } = await import("../../setup/test-db");
+    const movie1 = await createTestMediaItem(lib.id, {
       title: "Movie 1",
       type: "MOVIE",
       playCount: 0,
     });
-    await createTestMediaItem(lib.id, {
+    const movie2 = await createTestMediaItem(lib.id, {
       title: "Movie 2",
       type: "MOVIE",
       playCount: 25,
     });
+    await getTestPrisma().mediaItem.update({ where: { id: movie1.id }, data: { rating: 6.4 } });
+    await getTestPrisma().mediaItem.update({ where: { id: movie2.id }, data: { rating: 8.7 } });
 
     const response = await callRoute(GET, {
       url: "/api/media/distinct-values",
@@ -457,10 +452,14 @@ describe("GET /api/media/distinct-values", () => {
     const body = await expectJson<{
       playCountMin: number;
       playCountMax: number;
+      ratingMin: number;
+      ratingMax: number;
     }>(response, 200);
 
     expect(body.playCountMin).toBe(0);
     expect(body.playCountMax).toBe(25);
+    expect(body.ratingMin).toBe(6.4);
+    expect(body.ratingMax).toBe(8.7);
   });
 
   describe("watchedByUser distinct values", () => {
@@ -478,10 +477,11 @@ describe("GET /api/media/distinct-values", () => {
 
       await prisma.watchHistory.createMany({
         data: [
-          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice" },
-          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice" }, // duplicate
-          { mediaItemId: movieB.id, mediaServerId: server.id, serverUsername: "bob" },
-          { mediaItemId: movieB.id, mediaServerId: server.id, serverUsername: "carol" },
+          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "carol", watchedAt: new Date("2024-03-01T20:00:00Z") },
+          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-03-02T20:00:00Z") },
+          // alice again: a second play must not list her twice
+          { mediaItemId: movieA.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-03-09T20:00:00Z") },
+          { mediaItemId: movieB.id, mediaServerId: server.id, serverUsername: "bob", watchedAt: new Date("2024-03-03T20:00:00Z") },
         ],
       });
 
@@ -499,6 +499,38 @@ describe("GET /api/media/distinct-values", () => {
       const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
 
       expect(body.watchedByUser).toEqual([]);
+    });
+
+    // A `watchedByUser` rule matches only completed plays (COMPLETED_PLAY_FILTER
+    // in Phase 1, completedPlaySql in Phase 2), so a user whose only rows are
+    // partial Tracearr plays was offered as a value no rule could ever match.
+    it("offers only users with a completed play", async () => {
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      const item = await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      const tracearr = (id: string, serverUsername: string, watched: boolean) => ({
+        mediaItemId: item.id, mediaServerId: server.id, serverUsername, watchedAt: new Date("2024-03-01T20:00:00Z"),
+        source: "TRACEARR", sourceEventId: id, watched,
+      });
+      await prisma.watchHistory.createMany({
+        data: [
+          // A native row: `watched` is null and it counts.
+          { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-03-01T20:00:00Z") },
+          tracearr("e1", "bob", true),
+          tracearr("e2", "bob", false),
+          // Only ever abandoned partway.
+          tracearr("e3", "carol", false),
+          tracearr("e4", "carol", false),
+        ],
+      });
+
+      const response = await callRoute(GET, { url: "/api/media/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
+      expect(body.watchedByUser).toEqual(["alice", "bob"]);
     });
 
   });

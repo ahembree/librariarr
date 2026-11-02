@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { RadarrClient } from "@/lib/arr/radarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("RadarrClient", () => {
   let client: RadarrClient;
@@ -61,26 +60,31 @@ describe("RadarrClient", () => {
   describe("testConnection", () => {
     it("returns ok when Radarr responds with correct appName", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Radarr", version: "5.0.0" },
+        data: { appName: "Radarr", instanceName: "Radarr", version: "5.14.0.9383" },
       });
       const result = await client.testConnection();
-      expect(result).toEqual({ ok: true, appName: "Radarr", version: "5.0.0" });
+      expect(result).toEqual({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+      // The connection test opts out of transport retries (NO_RETRY).
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/system/status", { __noRetry: true });
     });
 
     it("returns error when appName is not Radarr", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Sonarr", version: "4.0.0" },
+        data: { appName: "Sonarr", instanceName: "Sonarr", version: "4.0.11.2680" },
       });
       const result = await client.testConnection();
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("Sonarr");
+      expect(result).toEqual({
+        ok: false,
+        error: "Expected Radarr but connected to Sonarr",
+        appName: "Sonarr",
+        version: "4.0.11.2680",
+      });
     });
 
     it("returns error on network failure", async () => {
       mockAxiosInstance.get.mockRejectedValueOnce(new Error("ECONNREFUSED"));
       const result = await client.testConnection();
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe("ECONNREFUSED");
+      expect(result).toEqual({ ok: false, error: "ECONNREFUSED" });
     });
 
     it("returns generic message for non-Error rejection", async () => {
@@ -92,7 +96,7 @@ describe("RadarrClient", () => {
 
   describe("getMovies", () => {
     it("returns array of movies", async () => {
-      const movies = [{ id: 1, title: "Movie 1", tmdbId: 100 }];
+      const movies = [{ id: 1, title: "Arrival", year: 2016, tmdbId: 329865 }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: movies });
       const result = await client.getMovies();
       expect(result).toEqual(movies);
@@ -102,7 +106,7 @@ describe("RadarrClient", () => {
 
   describe("getMovieById", () => {
     it("fetches a single movie", async () => {
-      const movie = { id: 42, title: "Test Movie" };
+      const movie = { id: 42, title: "Arrival", tmdbId: 329865 };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: movie });
       const result = await client.getMovieById(42);
       expect(result).toEqual(movie);
@@ -111,11 +115,12 @@ describe("RadarrClient", () => {
   });
 
   describe("getMovieByTmdbId", () => {
-    it("returns movie when found", async () => {
-      const movie = { id: 1, tmdbId: 555 };
+    it("returns movie when found, asking Radarr to filter by the id", async () => {
+      const movie = { id: 1, title: "Arrival", tmdbId: 329865 };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: [movie] });
-      const result = await client.getMovieByTmdbId(555);
+      const result = await client.getMovieByTmdbId(329865);
       expect(result).toEqual(movie);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/movie", { params: { tmdbId: 329865 } });
     });
 
     it("returns null when no movie found", async () => {
@@ -152,30 +157,56 @@ describe("RadarrClient", () => {
 
   describe("updateMovie", () => {
     it("fetches current movie then puts merged data", async () => {
-      const current = { id: 5, title: "Old Title", monitored: true };
-      const updated = { id: 5, title: "Old Title", monitored: false };
+      const current = { id: 5, title: "Arrival", tmdbId: 329865, monitored: true, tags: [1] };
+      const updated = { ...current, monitored: false };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: current });
       mockAxiosInstance.put.mockResolvedValueOnce({ data: updated });
 
       const result = await client.updateMovie(5, { monitored: false });
       expect(result).toEqual(updated);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/movie/5");
       expect(mockAxiosInstance.put).toHaveBeenCalledWith(
         "/api/v3/movie/5",
         { ...current, monitored: false }
       );
     });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, title: "Arrival", tmdbId: 329865, monitored: true, tags: [1] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: { ...current, tags: [1, 2] } });
+
+      await client.updateMovie(5, { tags: [1, 2] }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/movie/5", { ...current, tags: [1, 2] });
+    });
   });
 
-  describe("getMovieFiles", () => {
-    it("fetches movie files with array params", async () => {
-      const files = [{ id: 1, movieId: 5 }];
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: files });
-      const result = await client.getMovieFiles(5);
-      expect(result).toEqual(files);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/moviefile", {
-        params: { movieId: [5] },
-        paramsSerializer: { indexes: null },
+  describe("removeTagsFromMovies", () => {
+    it("removes the tags through one bulk-editor request", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromMovies([1, 2, 3], [7]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/movie/editor", {
+        movieIds: [1, 2, 3],
+        tags: [7],
+        applyTags: "remove",
       });
+    });
+
+    it("slices a large id list into requests of 500", async () => {
+      mockAxiosInstance.put.mockResolvedValue({});
+      const ids = Array.from({ length: 1001 }, (_, i) => i + 1);
+      await client.removeTagsFromMovies(ids, [7]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(3);
+      expect(mockAxiosInstance.put.mock.calls[0][1].movieIds).toHaveLength(500);
+      expect(mockAxiosInstance.put.mock.calls[2][1].movieIds).toEqual([1001]);
+      mockAxiosInstance.put.mockReset();
+    });
+
+    it("sends nothing when there is nothing to remove", async () => {
+      await client.removeTagsFromMovies([], [7]);
+      await client.removeTagsFromMovies([1], []);
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
   });
 
@@ -225,7 +256,9 @@ describe("RadarrClient", () => {
 
     it("reports 0..1 progress after each chunk", async () => {
       const ids = Array.from({ length: 250 }, (_, i) => i + 1);
-      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+      // One answer per chunk of 100 ids (a persistent mockResolvedValue would
+      // outlive this test: clearAllMocks keeps implementations).
+      for (let chunk = 0; chunk < 3; chunk++) mockAxiosInstance.get.mockResolvedValueOnce({ data: [] });
       const fractions: number[] = [];
       await client.getCustomFormatScores(ids, (f) => fractions.push(f));
       expect(fractions).toEqual([100 / 250, 200 / 250, 1]);
@@ -253,6 +286,7 @@ describe("RadarrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: profiles });
       const result = await client.getQualityProfiles();
       expect(result).toEqual(profiles);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/qualityprofile");
     });
   });
 
@@ -267,67 +301,13 @@ describe("RadarrClient", () => {
     });
   });
 
-  describe("getQueue", () => {
-    it("does not report a completed (inactive) record as downloading", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1, status: "completed" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: "completed" });
-    });
-
-    it("returns not downloading when no records", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("falls back to trackedDownloadStatus", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1, trackedDownloadStatus: "warning" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: true, status: "warning" });
-    });
-
-    it("defaults to 'downloading' when no status fields", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1 }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: true, status: "downloading" });
-    });
-
-    it("sends movieIds unbracketed so Radarr applies the filter", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      await client.getQueue(7);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/queue", expect.objectContaining({
-        params: expect.objectContaining({ movieIds: [7] }),
-        paramsSerializer: { indexes: null },
-      }));
-    });
-
-    it("ignores another movie's active download", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 2, status: "downloading" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("returns not downloading on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("timeout"));
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-  });
-
   describe("getTags", () => {
     it("returns tags", async () => {
       const tags = [{ id: 1, label: "test" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: tags });
       const result = await client.getTags();
       expect(result).toEqual(tags);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/tag");
     });
   });
 
@@ -349,42 +329,22 @@ describe("RadarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Radarr", {
-        config: { url: "/api/v3/exclusions", method: "post" },
-        response: { status: 400, data: [{ propertyName: "TmdbId", errorMessage: "This exclusion has already been added." }] },
-        code: "ERR_BAD_REQUEST",
-      } as never));
-      await expect(client.addExclusion(12345, "Test Movie", 2024)).resolves.toBeUndefined();
-    });
-
-    it("still throws any other validation failure", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Radarr", {
-        config: { url: "/api/v3/exclusions", method: "post" },
-        response: { status: 400, data: [{ propertyName: "MovieTitle", errorMessage: "'MovieTitle' must not be empty." }] },
-        code: "ERR_BAD_REQUEST",
-      } as never));
-      await expect(client.addExclusion(12345, "", 2024)).rejects.toThrow("must not be empty");
-    });
-
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion(12345, "Test Movie", 2024);
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/exclusions", {
-        tmdbId: 12345,
-        movieTitle: "Test Movie",
-        movieYear: 2024,
-      });
-    });
-  });
-
   describe("getLanguages", () => {
     it("returns languages", async () => {
-      const langs = [{ id: 1, name: "English" }];
+      const langs = [{ id: 0, name: "Unknown" }, { id: 1, name: "English" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: langs });
       const result = await client.getLanguages();
       expect(result).toEqual(langs);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/language");
+    });
+  });
+
+  describe("getMediaManagementConfig", () => {
+    it("reads the recycle bin settings without transport retries", async () => {
+      const config = { recycleBin: "/movies/.recycle", recycleBinCleanupDays: 7 };
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: config });
+      expect(await client.getMediaManagementConfig()).toEqual(config);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/config/mediamanagement", { __noRetry: true });
     });
   });
 });

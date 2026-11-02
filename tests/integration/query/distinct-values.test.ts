@@ -33,7 +33,7 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return { MemoryCache: vi.fn(function () { return noopCache; }), appCache: noopCache };
 });
 
 // Import route handler AFTER mocks
@@ -183,11 +183,13 @@ describe("GET /api/query/distinct-values", () => {
     const body = await expectJson<{
       audioLanguage: string[];
       subtitleLanguage: string[];
+      streamAudioCodec: string[];
     }>(response, 200);
 
-    expect(body.audioLanguage).toContain("English");
-    expect(body.audioLanguage).toContain("French");
-    expect(body.subtitleLanguage).toContain("Spanish");
+    // Each list holds only its own stream type, sorted.
+    expect(body.audioLanguage).toEqual(["English", "French"]);
+    expect(body.subtitleLanguage).toEqual(["Spanish"]);
+    expect(body.streamAudioCodec).toEqual(["aac"]);
   });
 
   it("returns distinct genres from JSONB arrays", async () => {
@@ -212,12 +214,8 @@ describe("GET /api/query/distinct-values", () => {
     });
     const body = await expectJson<{ genre: string[] }>(response, 200);
 
-    expect(body.genre).toContain("Action");
-    expect(body.genre).toContain("Sci-Fi");
-    expect(body.genre).toContain("Comedy");
-    // No duplicates
-    const actionCount = body.genre.filter((g: string) => g === "Action").length;
-    expect(actionCount).toBe(1);
+    // Sorted, and "Action" (on both items) listed once.
+    expect(body.genre).toEqual(["Action", "Comedy", "Sci-Fi"]);
   });
 
   it("returns distinct countries from JSONB arrays", async () => {
@@ -242,11 +240,8 @@ describe("GET /api/query/distinct-values", () => {
     });
     const body = await expectJson<{ country: string[] }>(response, 200);
 
-    expect(body.country).toContain("France");
-    expect(body.country).toContain("Germany");
-    expect(body.country).toContain("Japan");
-    // No duplicates (France appears in both items)
-    expect(body.country.filter((c: string) => c === "France").length).toBe(1);
+    // Sorted, and "France" (on both items) listed once.
+    expect(body.country).toEqual(["France", "Germany", "Japan"]);
   });
 
   it("includes labels and stream-query color fields", async () => {
@@ -270,10 +265,10 @@ describe("GET /api/query/distinct-values", () => {
       sqChromaSubsampling: string[];
     }>(response, 200);
 
-    expect(body.labels).toContain("Docs");
-    expect(body.sqColorPrimaries).toContain("bt709");
-    expect(body.sqColorRange).toContain("pc");
-    expect(body.sqChromaSubsampling).toContain("4:4:4");
+    expect(body.labels).toEqual(["Docs"]);
+    expect(body.sqColorPrimaries).toEqual(["bt709"]);
+    expect(body.sqColorRange).toEqual(["pc"]);
+    expect(body.sqChromaSubsampling).toEqual(["4:4:4"]);
   });
 
   describe("watchedByUser distinct values", () => {
@@ -300,6 +295,38 @@ describe("GET /api/query/distinct-values", () => {
       const response = await callRoute(GET, { url: "/api/query/distinct-values" });
       const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
 
+      expect(body.watchedByUser).toEqual(["alice", "bob"]);
+    });
+
+    // A `watchedByUser` rule matches only completed plays (COMPLETED_PLAY_FILTER
+    // in Phase 1, completedPlaySql in Phase 2), so a user whose only rows are
+    // partial Tracearr plays was offered as a value no rule could ever match.
+    it("offers only users with a completed play", async () => {
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      const item = await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      const tracearr = (id: string, serverUsername: string, watched: boolean) => ({
+        mediaItemId: item.id, mediaServerId: server.id, serverUsername, watchedAt: new Date("2024-03-01T20:00:00Z"),
+        source: "TRACEARR", sourceEventId: id, watched,
+      });
+      await prisma.watchHistory.createMany({
+        data: [
+          // A native row: `watched` is null and it counts.
+          { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-03-01T20:00:00Z") },
+          tracearr("e1", "bob", true),
+          tracearr("e2", "bob", false),
+          // Only ever abandoned partway.
+          tracearr("e3", "carol", false),
+          tracearr("e4", "carol", false),
+        ],
+      });
+
+      const response = await callRoute(GET, { url: "/api/query/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
       expect(body.watchedByUser).toEqual(["alice", "bob"]);
     });
 

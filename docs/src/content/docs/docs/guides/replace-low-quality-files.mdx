@@ -16,19 +16,19 @@ None of the actions here delete anything you do not ask them to.
 In **Lifecycle → Rules**, on the **Movies** tab, start with one condition
 and widen from there:
 
-- `resolution` **contains** `SD|480P` — the rule builder offers the values
+- **Resolution** (`resolution`) **contains** `SD|480P` — the rule builder offers the values
   your library actually holds (`4K`, `1080P`, `720P`, `480P`, `SD`, and
   `Other` for files it could not classify); pick several and they are ORed.
-- `arrMonitored` **equals** `true` — only files Radarr will act on.
+- **Monitored** (`arrMonitored`) **equals** `true` — only files Radarr will act on.
 
 Useful additions:
 
-- `videoCodec` **contains** `mpeg2video` for old encodes, or
-  `dynamicRange` **equals** `SDR` when you want HDR copies of titles that
+- **Video Codec** (`videoCodec`) **contains** `mpeg2video` for old encodes, or
+  **Dynamic Range** (`dynamicRange`) **equals** `SDR` when you want HDR copies of titles that
   have one.
-- `videoBitrate` **less than** `2000` (kbps) for files that are 1080p in
+- **Video Bitrate (kbps)** (`videoBitrate`) **less than** `2000` (kbps) for files that are 1080p in
   name only.
-- `arrQualityCutoffMet` **equals** `false` (movies only) — Radarr's own
+- **Quality Cutoff Met** (`arrQualityCutoffMet`) **equals** `false` (movies only) — Radarr's own
   verdict that the file is below the profile's cutoff. This is the most
   precise condition, since it reads the profile you configured there.
 

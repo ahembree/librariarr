@@ -213,6 +213,17 @@ export interface MediaCollection {
   titleSort?: string;
   subtype: string;
   childCount?: number;
+  /** Plex's item sort mode, as its section listing reports it: "0" release date, "1" alphabetical, "2" custom. */
+  collectionSort?: string | number;
+}
+
+/** Where a Plex collection's managed hub is promoted: the home screens and the library's recommended row. */
+export interface CollectionVisibility {
+  /** The managed hub's identifier, or null when the collection has none. */
+  identifier: string | null;
+  home: boolean;
+  shared: boolean;
+  recommended: boolean;
 }
 
 // --- Active Session ---
@@ -319,4 +330,10 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  /**
+   * The library section the played item sat in, where the server reports one
+   * (Plex history does). A rating key is unique only within a library, so this
+   * is what places a play when one server holds the same key in two.
+   */
+  librarySectionId?: string | null;
 }

@@ -45,12 +45,17 @@ describe("the schemas that set a password", () => {
     expect(authSetupSchema.safeParse({ username: "admin", password: "x".repeat(72) }).success).toBe(true);
     const result = authSetupSchema.safeParse({ username: "admin", password: "x".repeat(73) });
     expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => [i.path.join("."), i.message])).toEqual([
+      ["password", PASSWORD_TOO_LONG_MESSAGE],
+    ]);
   });
 
   it("change-password refuses a new password bcrypt would truncate, and keeps it optional", () => {
     expect(changePasswordSchema.safeParse({ newUsername: "admin" }).success).toBe(true);
     expect(changePasswordSchema.safeParse({ newPassword: "x".repeat(72) }).success).toBe(true);
-    expect(changePasswordSchema.safeParse({ newPassword: "x".repeat(73) }).success).toBe(false);
-    expect(changePasswordSchema.safeParse({ newPassword: "short" }).success).toBe(false);
+    const tooLong = changePasswordSchema.safeParse({ newPassword: "x".repeat(73) });
+    expect(tooLong.error?.issues.map((i) => i.message)).toEqual([PASSWORD_TOO_LONG_MESSAGE]);
+    const tooShort = changePasswordSchema.safeParse({ newPassword: "short" });
+    expect(tooShort.error?.issues.map((i) => i.message)).toEqual([PASSWORD_TOO_SHORT_MESSAGE]);
   });
 });

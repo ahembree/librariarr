@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
+import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
+import { hasArrRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { data, error } = await validateRequest(request, ruleSetUpdateSchema);
   if (error) return error;
@@ -103,14 +102,15 @@ export async function PUT(
   // Validate the MERGED action configuration (PUT only sends changed
   // fields): family of actionType must match the library type, and a
   // referenced instance must exist in that family for this user.
+  let arrScopeChanged = false;
   if (actionType !== undefined || arrInstanceId !== undefined) {
     const current = await prisma.ruleSet.findFirst({
       where: { id, userId: session.userId },
-      select: { type: true, actionType: true, arrInstanceId: true },
+      select: { type: true, actionType: true, arrInstanceId: true, rules: true },
     });
     if (current) {
       const actionConfigError = await validateActionConfig({
-        userId: session.userId!,
+        userId: session.userId,
         libraryType: current.type,
         actionType: actionType !== undefined ? actionType : current.actionType,
         arrInstanceId: arrInstanceId !== undefined ? arrInstanceId : current.arrInstanceId,
@@ -118,7 +118,29 @@ export async function PUT(
       if (actionConfigError) {
         return NextResponse.json({ error: actionConfigError }, { status: 400 });
       }
+      // A rule set's Arr criteria are read from its own instance
+      // (`resolveArrInstanceScope`), so with Arr criteria a new instance is a
+      // rule change, not configuration: the matches were judged on the old
+      // instance's tags, monitoring and quality, and kept they would arm the
+      // re-pointed actions against copies nothing ever checked.
+      arrScopeChanged =
+        arrInstanceId !== undefined &&
+        arrInstanceId !== current.arrInstanceId &&
+        hasArrRules((rules ?? current.rules) as unknown as LifecycleRule[] | LifecycleRuleGroup[]);
     }
+  }
+
+  // Series scope decides what a stored match and its pending action act on
+  // (the whole show, or only the matched episodes), and the executor reads it
+  // when the action runs: kept across a change, a pending episode Unmonitor or
+  // Search would run against the whole series nothing evaluated.
+  let seriesScopeChanged = false;
+  if (seriesScope !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { seriesScope: true },
+    });
+    seriesScopeChanged = current !== null && current.seriesScope !== seriesScope;
   }
 
   // A referenced collection must exist, belong to the user, and target the same
@@ -164,8 +186,11 @@ export async function PUT(
 
   // clearMatches=false preserves existing matches and pending actions (e.g. when user
   // wants to keep matches intact after a config-only change). Defaults to true for
-  // backwards compatibility and safety.
-  const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false";
+  // backwards compatibility and safety. A change of the instance the Arr
+  // criteria are read from, or of series scope, always clears (see
+  // `arrScopeChanged`, `seriesScopeChanged`).
+  const clearMatches =
+    request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged || seriesScopeChanged;
 
   // Wrap update + cleanup + read in a single transaction so the returned
   // record reflects exactly the values we just wrote and isn't clobbered
@@ -220,19 +245,17 @@ export async function PUT(
   if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  // A rename changes "Matched By Rule Set" in the cached dropdowns.
+  if (name !== undefined) invalidateRuleSetNameCaches();
 
   return NextResponse.json({ ruleSet: updated });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const cleanupTags = request.nextUrl.searchParams.get("cleanupTags") === "true";
 
@@ -264,6 +287,8 @@ export async function DELETE(
   const collectionId = ruleSet.collectionId;
 
   await prisma.ruleSet.delete({ where: { id } });
+  // Its name leaves "Matched By Rule Set" in the cached dropdowns.
+  invalidateRuleSetNameCaches();
 
   // Re-sync the collection this rule set fed (if any). The collection is NOT
   // removed wholesale — other rule sets may still feed it. After this rule set's
@@ -278,4 +303,4 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true });
-}
+});

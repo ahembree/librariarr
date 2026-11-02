@@ -9,6 +9,6 @@ describe("GET /api/health", () => {
       url: "/api/health",
     });
     const body = await expectJson<{ status: string }>(response, 200);
-    expect(body.status).toBe("ok");
+    expect(body).toEqual({ status: "ok" });
   });
 });

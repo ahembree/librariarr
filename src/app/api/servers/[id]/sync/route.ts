@@ -1,20 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 import { serverSyncSchema, validateOptionalRequest } from "@/lib/validation";
 
-export async function POST(
+export const POST = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const server = await prisma.mediaServer.findFirst({
@@ -98,9 +94,9 @@ export async function POST(
   // Mark the user's sync schedule as just-ran so the scheduler doesn't
   // fire a redundant sync at the next 15-minute mark (e.g. right after onboarding).
   await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: { lastScheduledSync: new Date() },
-    create: { userId: session.userId!, lastScheduledSync: new Date() },
+    create: { userId: session.userId, lastScheduledSync: new Date() },
   });
 
   // Enqueue a durable background sync job (serialized on the main queue,
@@ -128,7 +124,7 @@ export async function POST(
     return NextResponse.json({ error: "Could not queue the sync job" }, { status: 500 });
   }
 
-  eventBus.emit({ type: "sync:started", userId: session.userId!, meta: { serverId: server.id } });
+  eventBus.emit({ type: "sync:started", userId: session.userId, meta: { serverId: server.id } });
 
   return NextResponse.json({ message: "Sync started", requestedAt: requestedAt.toISOString() });
-}
+});

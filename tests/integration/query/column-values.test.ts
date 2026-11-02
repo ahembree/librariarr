@@ -50,7 +50,10 @@ describe("POST /api/query/column-values", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
     const res = await callRoute(POST, { url: "/api/query/column-values", method: "POST", body: { items: [], fields: [] } });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^fields: /);
   });
 
   it("returns values for a movie's criteria", async () => {
@@ -111,6 +114,44 @@ describe("POST /api/query/column-values", () => {
     expect(body.values[ids[0]]).toEqual({ availableEpisodeCount: 4, watchedEpisodePercentage: 25, videoBitrate: null });
     // An episode row is not a show: no aggregate, but its own detail.
     expect(body.values[ids[1]]).toEqual({ availableEpisodeCount: null, watchedEpisodePercentage: null, videoBitrate: 5000 });
+  });
+
+  it("reads a grouped show row's cross-system values across its episodes, as the query filter does", async () => {
+    // The query engine folds Matched By Rule Set / Has Pending Action / Server
+    // Count over a show's episodes (foldCrossSystemData), so a show listed for
+    // "Matched By Rule Set = Keep" because one episode is kept must not show
+    // an empty column read off its representative episode alone.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const ids: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(lib.id, {
+        type: "SERIES", title: `E${e}`, parentTitle: "Show", seriesKey: "title:show", seasonNumber: 1, episodeNumber: e,
+      });
+      ids.push(ep.id);
+    }
+    const prisma = getTestPrisma();
+    const keep = await prisma.ruleSet.create({
+      data: { userId: user.id, name: "Keep", type: "SERIES", rules: [], seriesScope: false },
+    });
+    await prisma.ruleMatch.create({
+      data: { ruleSetId: keep.id, mediaItemId: ids[2], itemData: { id: ids[2], title: "Show", memberIds: [ids[2]] } },
+    });
+    await prisma.lifecycleAction.create({
+      data: { userId: user.id, mediaItemId: ids[1], ruleSetId: keep.id, actionType: "DO_NOTHING", status: "PENDING", scheduledFor: new Date() },
+    });
+
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: { items: [{ id: ids[0], grouped: true }, { id: ids[1] }], fields: ["matchedByRuleSet", "hasPendingAction"] },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body.values[ids[0]]).toEqual({ matchedByRuleSet: ["Keep"], hasPendingAction: true });
+    // An episode row reads its own.
+    expect(body.values[ids[1]]).toEqual({ matchedByRuleSet: [], hasPendingAction: true });
   });
 
   it("shows no stream counts on a grouped show row, only on an episode row", async () => {
@@ -174,7 +215,10 @@ describe("POST /api/query/column-values", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
     const items = Array.from({ length: MAX_COLUMN_VALUE_ITEMS + 1 }, (_, i) => ({ id: `i${i}` }));
     const res = await callRoute(POST, { url: "/api/query/column-values", method: "POST", body: { items, fields: ["studio"] } });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^items: /);
   });
 
   it("returns nothing for another server than the query's selection, or for a disabled server", async () => {
@@ -193,7 +237,7 @@ describe("POST /api/query/column-values", () => {
       body: { items: [{ id: ma.id }, { id: mb.id }, { id: mo.id }], fields: ["studio"], serverIds: [a.id] },
     });
     const body = await expectJson<Body>(res, 200);
-    expect(Object.keys(body.values)).toEqual([ma.id]);
+    expect(body.values).toEqual({ [ma.id]: { studio: "X" } });
   });
 
   it("warns instead of guessing when an Arr column has no Arr server selected", async () => {
@@ -209,22 +253,6 @@ describe("POST /api/query/column-values", () => {
     });
     const body = await expectJson<Body>(res, 200);
     expect(body.values[movie.id]).toEqual({ foundInArr: null, arrTag: null });
-    expect(body.warnings).toHaveLength(1);
-  });
-
-  it("does not read another user's items", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const server = await createTestServer(owner.id);
-    const movie = await createTestMediaItem((await createTestLibrary(server.id)).id, { type: "MOVIE", studio: "A24" });
-    const other = await createTestUser({ plexId: "other" });
-    setMockSession({ isLoggedIn: true, userId: other.id });
-
-    const res = await callRoute(POST, {
-      url: "/api/query/column-values",
-      method: "POST",
-      body: { items: [{ id: movie.id }], fields: ["studio"] },
-    });
-    const body = await expectJson<Body>(res, 200);
-    expect(body.values).toEqual({});
+    expect(body.warnings).toEqual(["Select an Arr server in the query scope to show Arr columns."]);
   });
 });

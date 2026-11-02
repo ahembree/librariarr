@@ -46,6 +46,12 @@ function makeBadRequest(body: string): Request {
   });
 }
 
+/** The distinct fields a failed parse names, as dotted paths ("" for the root). */
+function failedPaths(result: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } }): string[] {
+  expect(result.success).toBe(false);
+  return [...new Set(result.error!.issues.map((i) => i.path.map(String).join(".")))].sort();
+}
+
 describe("validateOptionalRequest", () => {
   it("validates no body at all as an empty object", async () => {
     const result = await validateOptionalRequest(new Request("http://localhost/test", { method: "POST" }), serverSyncSchema);
@@ -102,8 +108,8 @@ describe("validateRequest", () => {
       const result = await validateRequest(req, authLoginSchema);
 
       expect(result.data).toBeUndefined();
-      expect(result.error).toBeDefined();
       expect(result.error!.status).toBe(400);
+      expect((await result.error!.json()).error).toBe("Invalid JSON in request body");
     });
   });
 
@@ -118,9 +124,8 @@ describe("validateRequest", () => {
 
       const body = await result.error!.json();
       expect(body.error).toBe("Validation failed");
-      expect(body.details).toBeDefined();
-      expect(Array.isArray(body.details)).toBe(true);
-      expect(body.details.length).toBeGreaterThan(0);
+      // One "<path>: <message>" entry per missing field.
+      expect(body.details.map((d: string) => d.split(":")[0]).sort()).toEqual(["password", "username"]);
     });
 
     it("returns error for wrong types", async () => {
@@ -128,8 +133,11 @@ describe("validateRequest", () => {
       const result = await validateRequest(req, authLoginSchema);
 
       expect(result.data).toBeUndefined();
-      expect(result.error).toBeDefined();
       expect(result.error!.status).toBe(400);
+      const body = await result.error!.json();
+      expect(body.error).toBe("Validation failed");
+      // Each detail is "<path>: <message>".
+      expect(body.details.map((d: string) => d.split(":")[0]).sort()).toEqual(["password", "username"]);
     });
   });
 });
@@ -149,7 +157,7 @@ describe("authLoginSchema", () => {
       username: "",
       password: "password123",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["username"]);
   });
 
   it("rejects empty password", () => {
@@ -157,21 +165,21 @@ describe("authLoginSchema", () => {
       username: "admin",
       password: "",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["password"]);
   });
 
   it("rejects missing username", () => {
     const result = authLoginSchema.safeParse({
       password: "password123",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["username"]);
   });
 
   it("rejects missing password", () => {
     const result = authLoginSchema.safeParse({
       username: "admin",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["password"]);
   });
 });
 
@@ -189,7 +197,7 @@ describe("authSetupSchema", () => {
       username: "ab",
       password: "securepassword",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["username"]);
   });
 
   it("rejects password shorter than 8 characters", () => {
@@ -197,7 +205,7 @@ describe("authSetupSchema", () => {
       username: "admin",
       password: "short",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["password"]);
   });
 
   it("accepts username with exactly 3 characters", () => {
@@ -234,7 +242,7 @@ describe("serverAddSchema", () => {
       accessToken: "abc123token",
       machineId: "machine-123",
       tlsSkipVerify: true,
-      type: "plex",
+      type: "PLEX",
     });
     expect(result.success).toBe(true);
   });
@@ -243,7 +251,7 @@ describe("serverAddSchema", () => {
     const result = serverAddSchema.safeParse({
       accessToken: "abc123token",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["url"]);
   });
 
   it("rejects empty url", () => {
@@ -251,14 +259,14 @@ describe("serverAddSchema", () => {
       url: "",
       accessToken: "abc123token",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["url"]);
   });
 
   it("rejects missing accessToken", () => {
     const result = serverAddSchema.safeParse({
       url: "http://plex.local:32400",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["accessToken"]);
   });
 
   it("rejects empty accessToken", () => {
@@ -266,7 +274,7 @@ describe("serverAddSchema", () => {
       url: "http://plex.local:32400",
       accessToken: "",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["accessToken"]);
   });
 
   // A Plex server picked from discovery: the route looks its token up by
@@ -307,7 +315,7 @@ describe("arrInstanceCreateSchema", () => {
       url: "http://radarr:7878",
       apiKey: "radarr-api-key",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["name"]);
   });
 
   it("rejects invalid URL", () => {
@@ -316,7 +324,7 @@ describe("arrInstanceCreateSchema", () => {
       url: "not-a-url",
       apiKey: "radarr-api-key",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["url"]);
   });
 
   it("rejects empty API key", () => {
@@ -325,7 +333,7 @@ describe("arrInstanceCreateSchema", () => {
       url: "http://radarr:7878",
       apiKey: "",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["apiKey"]);
   });
 
   // A bare URL check accepts "radarr.lan:7878" (scheme "radarr.lan:"), which
@@ -335,9 +343,9 @@ describe("arrInstanceCreateSchema", () => {
     (externalUrl) => {
       for (const schema of [arrInstanceCreateSchema, seerrInstanceCreateSchema]) {
         const result = schema.safeParse({ name: "X", url: "http://x:1", apiKey: "k", externalUrl });
-        expect(result.success).toBe(false);
+        expect(failedPaths(result)).toEqual(["externalUrl"]);
       }
-      expect(seerrInstanceUpdateSchema.safeParse({ externalUrl }).success).toBe(false);
+      expect(failedPaths(seerrInstanceUpdateSchema.safeParse({ externalUrl }))).toEqual(["externalUrl"]);
     },
   );
 
@@ -379,14 +387,14 @@ describe("maintenanceSchema", () => {
     const result = maintenanceSchema.safeParse({
       message: "Maintenance",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["enabled"]);
   });
 
   it("rejects non-boolean enabled", () => {
     const result = maintenanceSchema.safeParse({
       enabled: "yes",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["enabled"]);
   });
 
   it("rejects excludedUsers with non-string elements", () => {
@@ -394,7 +402,7 @@ describe("maintenanceSchema", () => {
       enabled: true,
       excludedUsers: [123, 456],
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["excludedUsers.0", "excludedUsers.1"]);
   });
 });
 
@@ -410,12 +418,12 @@ describe("syncScheduleSchema", () => {
     const result = syncScheduleSchema.safeParse({
       syncSchedule: "",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["syncSchedule"]);
   });
 
   it("rejects missing schedule", () => {
     const result = syncScheduleSchema.safeParse({});
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["syncSchedule"]);
   });
 });
 
@@ -437,22 +445,22 @@ describe("logRetentionSchema", () => {
 
   it("rejects zero", () => {
     const result = logRetentionSchema.safeParse({ logRetentionDays: 0 });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["logRetentionDays"]);
   });
 
   it("rejects negative numbers", () => {
     const result = logRetentionSchema.safeParse({ logRetentionDays: -5 });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["logRetentionDays"]);
   });
 
   it("rejects values over 365", () => {
     const result = logRetentionSchema.safeParse({ logRetentionDays: 366 });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["logRetentionDays"]);
   });
 
   it("rejects non-integer values", () => {
     const result = logRetentionSchema.safeParse({ logRetentionDays: 30.5 });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["logRetentionDays"]);
   });
 });
 
@@ -479,7 +487,7 @@ describe("terminateSessionSchema", () => {
       serverId: "",
       message: "Stopping",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["serverId"]);
   });
 
   it("rejects empty message", () => {
@@ -487,21 +495,21 @@ describe("terminateSessionSchema", () => {
       serverId: "server-123",
       message: "",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["message"]);
   });
 
   it("rejects missing serverId", () => {
     const result = terminateSessionSchema.safeParse({
       message: "Stopping",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["serverId"]);
   });
 
   it("rejects missing message", () => {
     const result = terminateSessionSchema.safeParse({
       serverId: "server-123",
     });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["message"]);
   });
 
   it("accepts the session ids each server type issues", () => {
@@ -528,7 +536,7 @@ describe("terminateSessionSchema", () => {
     ["an overlong id", "a".repeat(129)],
   ])("rejects a session id with %s", (_label, id) => {
     const result = terminateSessionSchema.safeParse({ serverId: "s1", sessionIds: [id], message: "Bye" });
-    expect(result.success).toBe(false);
+    expect(failedPaths(result)).toEqual(["sessionIds.0"]);
   });
 });
 
@@ -594,13 +602,13 @@ describe("apiKeyCreateSchema", () => {
     ["free text", "tomorrow"],
     ["a number", 1893456000000],
   ])("rejects an expiry that is %s", (_label, expiresAt) => {
-    expect(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }).success).toBe(false);
+    expect(failedPaths(apiKeyCreateSchema.safeParse({ ...valid, expiresAt }))).toEqual(["expiresAt"]);
   });
 
   it("requires expiresAt to be present (null means never)", () => {
     const { expiresAt: _omit, ...rest } = valid;
     void _omit;
-    expect(apiKeyCreateSchema.safeParse(rest).success).toBe(false);
+    expect(failedPaths(apiKeyCreateSchema.safeParse(rest))).toEqual(["expiresAt"]);
   });
 
   it("trims the name before checking its length", () => {
@@ -682,12 +690,13 @@ describe("bounds on write inputs the public API reaches", () => {
   // an arbitrarily long string.
   it("caps the id strings the public API's writes reach", () => {
     const long = "x".repeat(201);
-    expect(syncCancelSchema.safeParse({ serverId: long }).success).toBe(false);
+    expect(failedPaths(syncCancelSchema.safeParse({ serverId: long }))).toEqual(["serverId"]);
     expect(syncCancelSchema.safeParse({ serverId: "s1" }).success).toBe(true);
-    expect(terminateSessionSchema.safeParse({ serverId: long }).success).toBe(false);
-    expect(exceptionCreateSchema.safeParse({ mediaItemId: long }).success).toBe(false);
-    expect(actionExecuteSchema.safeParse({ ruleSetId: long }).success).toBe(false);
-    expect(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: [long] }).success).toBe(false);
+    expect(failedPaths(terminateSessionSchema.safeParse({ serverId: long, message: "Bye" }))).toEqual(["serverId"]);
+    expect(terminateSessionSchema.safeParse({ serverId: "s1", message: "Bye" }).success).toBe(true);
+    expect(failedPaths(exceptionCreateSchema.safeParse({ mediaItemId: long }))).toEqual(["mediaItemId"]);
+    expect(failedPaths(actionExecuteSchema.safeParse({ ruleSetId: long }))).toEqual(["ruleSetId"]);
+    expect(failedPaths(actionExecuteSchema.safeParse({ ruleSetId: "r1", mediaItemIds: [long] }))).toEqual(["mediaItemIds.0"]);
   });
 
   it("actionExecuteSchema caps the media item list, leaving omission as execute-all", () => {

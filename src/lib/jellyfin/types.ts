@@ -1,11 +1,5 @@
 /** Raw Jellyfin API response types */
 
-export interface JellyfinPublicInfo {
-  ServerName: string;
-  Version: string;
-  Id: string;
-}
-
 export interface JellyfinLibrary {
   Name: string;
   CollectionType?: string;

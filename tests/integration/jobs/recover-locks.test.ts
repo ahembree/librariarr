@@ -121,6 +121,20 @@ describe("recoverOrphanedWorkerLocks (real graphile_worker schema)", () => {
   });
 
   it("is idempotent when there is nothing to recover", async () => {
+    const jobsBefore = await pool.query<{ c: number }>(
+      `select count(*)::int as c from graphile_worker._private_jobs`,
+    );
+
     await expect(recoverOrphanedWorkerLocks(pool)).resolves.toBeUndefined();
+
+    // Still nothing locked, and no job created or removed.
+    const after = await pool.query<{ locked: number; jobs: number }>(
+      `select
+         ((select count(*) from graphile_worker._private_job_queues where locked_at is not null)
+          + (select count(*) from graphile_worker._private_jobs where locked_at is not null))::int as locked,
+         (select count(*) from graphile_worker._private_jobs)::int as jobs`,
+    );
+    expect(after.rows[0].locked).toBe(0);
+    expect(after.rows[0].jobs).toBe(jobsBefore.rows[0].c);
   });
 });

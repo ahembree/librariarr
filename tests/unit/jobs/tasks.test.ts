@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const m = vi.hoisted(() => ({
   syncMediaServer: vi.fn().mockResolvedValue(undefined),
@@ -13,9 +13,12 @@ const m = vi.hoisted(() => ({
   pruneBackups: vi.fn().mockResolvedValue(0),
   archiveLogs: vi.fn().mockResolvedValue(undefined),
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
-  syncJob: { findFirst: vi.fn() },
+  syncJob: { findFirst: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+  mediaServer: { findUnique: vi.fn().mockResolvedValue({ userId: "u1" }) },
+  emit: vi.fn(),
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+  executeRaw: vi.fn().mockResolvedValue(0),
 }));
 const {
   syncMediaServer, syncWatchHistory, syncMediaServerItems, enqueueJob, invalidateMediaCaches,
@@ -41,14 +44,28 @@ vi.mock("@/lib/backup/backup-service", () => ({
 }));
 vi.mock("@/lib/logs/archive", () => ({ archiveLogs: m.archiveLogs }));
 vi.mock("@/lib/jobs/dispatch", () => ({ dispatchScheduledJobs: m.dispatchScheduledJobs }));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: m.emit } }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({
-  prisma: { syncJob: m.syncJob, appSettings: m.appSettings, lifecycleAction: m.lifecycleAction },
+  prisma: {
+    syncJob: m.syncJob,
+    mediaServer: m.mediaServer,
+    appSettings: m.appSettings,
+    lifecycleAction: m.lifecycleAction,
+    $executeRawUnsafe: m.executeRaw,
+  },
 }));
 
-import { taskList, cleanupOldActions, runScheduledBackup } from "@/lib/jobs/tasks";
+import {
+  taskList,
+  cleanupOldActions,
+  runScheduledBackup,
+  pruneSyncJobs,
+  SYNC_JOB_KEEP_PER_SERVER,
+  SYNC_JOB_RETENTION_DAYS,
+} from "@/lib/jobs/tasks";
 import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
@@ -61,6 +78,7 @@ import {
   TASK_ARCHIVE_LOGS,
   TASK_CLEANUP_ACTIONS,
   TASK_PRUNE_IMAGE_CACHE,
+  MAIN_QUEUE,
 } from "@/lib/jobs/constants";
 
 // Minimal helpers object — tasks here don't use the helpers argument.
@@ -114,7 +132,8 @@ describe("taskList", () => {
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       { serverId: "server-1", trigger: "incremental sync fell back to a full sync: too many" },
-      expect.objectContaining({ jobKey: "sync:server-1" }),
+      // The scheduler's key, so it dedupes with any full sync already queued.
+      { jobKey: "sync:server-1", queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
   });
 
@@ -164,6 +183,11 @@ describe("taskList", () => {
       { serverId: "server-1" },
       helpers,
     );
+    // A queued (PENDING) sync covers the refresh too, since it will run first.
+    expect(syncJob.findFirst).toHaveBeenCalledWith({
+      where: { mediaServerId: "server-1", status: { in: ["RUNNING", "PENDING"] } },
+      select: { id: true },
+    });
     expect(syncWatchHistory).not.toHaveBeenCalled();
     expect(invalidateMediaCaches).not.toHaveBeenCalled();
   });
@@ -227,6 +251,36 @@ describe("taskList", () => {
     expect(syncMediaServer).not.toHaveBeenCalled();
   });
 
+  it("sync task closes the row its route created when it skips", async () => {
+    // Nothing else would claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued for the server.
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncMediaServer).not.toHaveBeenCalled();
+    expect(syncJob.updateMany).toHaveBeenCalledWith({
+      where: { id: "route-row", status: "PENDING" },
+      data: {
+        status: "FAILED",
+        completedAt: expect.any(Date),
+        error: "Another sync of this server was already running",
+      },
+    });
+    // Announced, so a page showing the queued row sees it end.
+    expect(m.emit).toHaveBeenCalledWith({ type: "sync:failed", userId: "u1", meta: { serverId: "server-1" } });
+  });
+
+  it("sync task leaves rows alone when it skips a job no route asked for", async () => {
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncJob.updateMany).not.toHaveBeenCalled();
+  });
+
   it("lifecycle tasks delegate to the processor with the userId", async () => {
     await (taskList[TASK_LIFECYCLE_DETECTION] as (p: unknown, h: unknown) => Promise<void>)({ userId: "u1" }, helpers);
     await (taskList[TASK_LIFECYCLE_EXECUTION] as (p: unknown, h: unknown) => Promise<void>)({ userId: "u1" }, helpers);
@@ -248,6 +302,39 @@ describe("taskList", () => {
     expect(archiveLogs).toHaveBeenCalledOnce();
     // Orphan sweep + retention deletion.
     expect(lifecycleAction.deleteMany).toHaveBeenCalledTimes(2);
+    // ...and the sync-job retention, in the same housekeeping run.
+    expect(m.executeRaw).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "SyncJob"'),
+      SYNC_JOB_KEEP_PER_SERVER,
+      expect.any(Date),
+    );
+  });
+
+  it("keeps the action cleanup when the sync-job retention fails", async () => {
+    const { logger } = await import("@/lib/logger");
+    m.executeRaw.mockRejectedValueOnce(new Error("db busy"));
+    await expect(
+      (taskList[TASK_CLEANUP_ACTIONS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers),
+    ).resolves.toBeUndefined();
+    expect(lifecycleAction.deleteMany).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("Jobs", "Sync job cleanup failed", { error: "Error: db busy" });
+  });
+});
+
+describe("pruneSyncJobs", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("keeps the newest jobs per server and anything younger than the retention, never an active one", async () => {
+    const now = new Date("2026-10-26T12:00:00Z");
+    m.executeRaw.mockResolvedValueOnce(12);
+
+    await expect(pruneSyncJobs(now)).resolves.toBe(12);
+
+    const [sql, keep, cutoff] = m.executeRaw.mock.calls[0] as [string, number, Date];
+    expect(sql).toContain("PARTITION BY \"mediaServerId\" ORDER BY \"startedAt\" DESC");
+    expect(sql).toContain("NOT IN ('PENDING', 'RUNNING')");
+    expect(keep).toBe(SYNC_JOB_KEEP_PER_SERVER);
+    expect(cutoff).toEqual(new Date(now.getTime() - SYNC_JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000));
   });
 });
 
@@ -255,6 +342,9 @@ describe("cleanupOldActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("sweeps orphaned pending actions whose media item was purged", async () => {
@@ -274,16 +364,34 @@ describe("cleanupOldActions", () => {
       where: { status: "PENDING", mediaItemId: null },
     });
     expect(lifecycleAction.deleteMany).not.toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: expect.any(Date) } },
+          { executedAt: null, createdAt: { lt: expect.any(Date) } },
+        ],
+      },
     });
   });
 
-  it("deletes non-pending actions older than the cutoff", async () => {
-    appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 30 });
+  it("deletes non-pending actions that ran before the configured retention window", async () => {
+    // A fixed clock in a stretch with no daylight-saving change anywhere, so
+    // the cutoff is exactly `retentionDays` of wall-clock days whatever the TZ.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 45 });
     lifecycleAction.deleteMany.mockResolvedValue({ count: 4 });
     await cleanupOldActions();
-    expect(lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+    const cutoff = new Date("2026-05-31T12:00:00.000Z");
+    expect(lifecycleAction.deleteMany).toHaveBeenLastCalledWith({
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          // Aged by when the action ran, falling back to when it was scheduled.
+          { executedAt: { lt: cutoff } },
+          { executedAt: null, createdAt: { lt: cutoff } },
+        ],
+      },
     });
   });
 });

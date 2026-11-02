@@ -27,9 +27,17 @@ vi.mock("@/lib/logger", () => ({
 import {
   getServerPresenceByDedupKey,
   getServerPresenceByGroup,
+  getServerPresenceForGroup,
 } from "@/lib/dedup/server-presence";
 
 const testPrisma = getTestPrisma();
+
+// One teardown for the whole file: disconnecting at the end of the first
+// describe would leave the second running on a closed client.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
 
 /** Helper to create a media item and then set its dedupKey via direct update. */
 async function createItemWithDedupKey(
@@ -51,11 +59,6 @@ describe("getServerPresenceByDedupKey", () => {
     clearMockSession();
   });
 
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
-  });
-
   it("returns empty map for empty array", async () => {
     const result = await getServerPresenceByDedupKey([], []);
     expect(result.size).toBe(0);
@@ -65,19 +68,16 @@ describe("getServerPresenceByDedupKey", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Plex 1" });
     const lib = await createTestLibrary(server.id, { type: "MOVIE" });
-    await createItemWithDedupKey(lib.id, "movie:tmdb:123", {
+    const matrix = await createItemWithDedupKey(lib.id, "movie:tmdb:603", {
       title: "The Matrix",
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:123"], [server.id]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:603"], [server.id]);
     expect(result.size).toBe(1);
-    expect(result.has("movie:tmdb:123")).toBe(true);
-
-    const servers = result.get("movie:tmdb:123")!;
-    expect(servers).toHaveLength(1);
-    expect(servers[0].serverName).toBe("Plex 1");
-    expect(servers[0].serverId).toBe(server.id);
+    expect(result.get("movie:tmdb:603")).toEqual([
+      { serverId: server.id, serverName: "Plex 1", serverType: "PLEX", mediaItemId: matrix.id },
+    ]);
   });
 
   it("shows all server presences for items with same dedupKey from different servers", async () => {
@@ -132,14 +132,14 @@ describe("getServerPresenceByDedupKey", () => {
 
     // Item without dedupKey (default null)
     await createTestMediaItem(lib.id, { title: "No Key Movie", type: "MOVIE" });
-    await createItemWithDedupKey(lib.id, "movie:tmdb:100", {
+    const keyed = await createItemWithDedupKey(lib.id, "movie:tmdb:100", {
       title: "Keyed Movie",
       type: "MOVIE",
     });
 
     const result = await getServerPresenceByDedupKey(["movie:tmdb:100"], [server.id]);
-    expect(result.size).toBe(1);
-    expect(result.has("movie:tmdb:100")).toBe(true);
+    expect([...result.keys()]).toEqual(["movie:tmdb:100"]);
+    expect(result.get("movie:tmdb:100")!.map((s) => s.mediaItemId)).toEqual([keyed.id]);
   });
 
   it("excludes servers not in the provided serverIds (filtered/disabled)", async () => {
@@ -182,15 +182,52 @@ describe("getServerPresenceByDedupKey", () => {
   });
 });
 
-describe("getServerPresenceByGroup", () => {
+describe("getServerPresenceByDedupKey copy choice", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
   });
 
-  afterAll(async () => {
+  it("links the oldest copy when one server holds two, whatever order the rows are stored in", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Main" });
+    const uhd = await createTestLibrary(server.id, { title: "Movies 4K" });
+    const hd = await createTestLibrary(server.id, { title: "Movies" });
+    // The newer copy is written first, so a read in storage order meets it
+    // before the older one.
+    const newer = await createItemWithDedupKey(uhd.id, "movie:tmdb:603");
+    const older = await createItemWithDedupKey(hd.id, "movie:tmdb:603");
+    await testPrisma.mediaItem.update({ where: { id: newer.id }, data: { createdAt: new Date("2025-01-01T00:00:00Z") } });
+    await testPrisma.mediaItem.update({ where: { id: older.id }, data: { createdAt: new Date("2024-01-01T00:00:00Z") } });
+
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:603"], [server.id]);
+    expect(result.get("movie:tmdb:603")).toEqual([
+      { serverId: server.id, serverName: "Main", serverType: "PLEX", mediaItemId: older.id },
+    ]);
+  });
+
+  it("orders two servers with the same name by id", async () => {
+    const user = await createTestUser();
+    // Ids chosen against insertion order: the server written first sorts last
+    // by id, so a stable sort of the rows as read keeps them the wrong way round.
+    const z = await testPrisma.mediaServer.create({
+      data: { id: "srv-z", userId: user.id, type: "PLEX", name: "Plex", url: "http://10.0.0.2:32400", accessToken: "t" },
+    });
+    const a = await testPrisma.mediaServer.create({
+      data: { id: "srv-a", userId: user.id, type: "PLEX", name: "Plex", url: "http://10.0.0.1:32400", accessToken: "t" },
+    });
+    await createItemWithDedupKey((await createTestLibrary(z.id)).id, "movie:tmdb:1");
+    await createItemWithDedupKey((await createTestLibrary(a.id)).id, "movie:tmdb:1");
+
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:1"], [z.id, a.id]);
+    expect(result.get("movie:tmdb:1")!.map((s) => s.serverId)).toEqual(["srv-a", "srv-z"]);
+  });
+});
+
+describe("getServerPresenceByGroup", () => {
+  beforeEach(async () => {
     await cleanDatabase();
-    await disconnectTestDb();
+    clearMockSession();
   });
 
   it("returns empty map for empty serverIds", async () => {
@@ -204,21 +241,21 @@ describe("getServerPresenceByGroup", () => {
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
 
     await createTestMediaItem(lib.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib.id, {
-      title: "S01E02",
+      title: "Cat's in the Bag...",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 2,
     });
     await createTestMediaItem(lib.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
@@ -239,14 +276,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
@@ -271,14 +308,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
@@ -302,14 +339,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Show A",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Show B",
       seasonNumber: 1,
@@ -367,6 +404,65 @@ describe("getServerPresenceByGroup", () => {
     expect(result.has("tvdb:78107")).toBe(true);
     expect(result.has("tvdb:73244")).toBe(true);
     expect(result.has("title:the office")).toBe(false);
+  });
+
+  it("links each server's oldest copy of the group, ties by id", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Plex" });
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const ep = (title: string) =>
+      createTestMediaItem(lib.id, { title, type: "SERIES", parentTitle: "Show", seriesKey: "tvdb:1" });
+    const newer = await ep("Newer");
+    const older = await ep("Older");
+    const tieA = await ep("Tie A");
+    const tieB = await ep("Tie B");
+    const at = (iso: string) => new Date(iso);
+    await testPrisma.mediaItem.update({ where: { id: newer.id }, data: { createdAt: at("2024-05-01T00:00:00.000Z") } });
+    await testPrisma.mediaItem.update({ where: { id: older.id }, data: { createdAt: at("2024-01-01T00:00:00.123Z") } });
+    // Two copies a millisecond older still: the lower id wins the tie.
+    await testPrisma.mediaItem.update({ where: { id: tieA.id }, data: { createdAt: at("2024-01-01T00:00:00.122Z") } });
+    await testPrisma.mediaItem.update({ where: { id: tieB.id }, data: { createdAt: at("2024-01-01T00:00:00.122Z") } });
+
+    const result = await getServerPresenceByGroup("SERIES", [server.id]);
+    expect(result.get("tvdb:1")!.map((s) => s.mediaItemId)).toEqual([[tieA.id, tieB.id].sort()[0]]);
+  });
+
+  it("answers for only the groups it is given", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Alpha" });
+    const server2 = await createTestServer(user.id, { name: "Beta" });
+    const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+    const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+    for (const lib of [lib1, lib2]) {
+      for (const key of ["tvdb:1", "tvdb:2", "tvdb:3"]) {
+        await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: key, seriesKey: key });
+      }
+    }
+
+    const whole = await getServerPresenceByGroup("SERIES", [server1.id, server2.id]);
+    const scoped = await getServerPresenceByGroup("SERIES", [server1.id, server2.id], { groupKeys: ["tvdb:1", "tvdb:3"] });
+    expect([...scoped.keys()].sort()).toEqual(["tvdb:1", "tvdb:3"]);
+    expect(scoped.get("tvdb:1")).toEqual(whole.get("tvdb:1"));
+    expect(scoped.get("tvdb:3")).toEqual(whole.get("tvdb:3"));
+    expect((await getServerPresenceByGroup("SERIES", [server1.id], { groupKeys: [] })).size).toBe(0);
+  });
+
+  it("reads one artist's presence by any spelling of its name", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Alpha" });
+    const server2 = await createTestServer(user.id, { name: "Beta" });
+    const lib1 = await createTestLibrary(server1.id, { type: "MUSIC" });
+    const lib2 = await createTestLibrary(server2.id, { type: "MUSIC" });
+    await createTestMediaItem(lib1.id, { type: "MUSIC", parentTitle: "Air" });
+    await createTestMediaItem(lib2.id, { type: "MUSIC", parentTitle: " air " });
+    await createTestMediaItem(lib2.id, { type: "MUSIC", parentTitle: "Other" });
+
+    const presence = await getServerPresenceForGroup("MUSIC", [server1.id, server2.id], { parentTitle: "AIR" });
+    expect(presence.map((s) => s.serverName)).toEqual(["Alpha", "Beta"]);
+    expect(await getServerPresenceForGroup("MUSIC", [server1.id, server2.id], { parentTitle: "Nobody" })).toEqual([]);
+    expect(
+      (await getServerPresenceForGroup("SERIES", [server1.id], { seriesKey: "tvdb:none" })),
+    ).toEqual([]);
   });
 
   it("merges the same show across servers via a shared seriesKey", async () => {

@@ -48,6 +48,14 @@ vi.mock("@/lib/logger", () => ({
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/auth/local/change-password/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 describe("POST /api/auth/local/change-password", () => {
   const prisma = getTestPrisma();
 
@@ -56,6 +64,7 @@ describe("POST /api/auth/local/change-password", () => {
     prisma.appSettings.create({ data: { userId, localAuthEnabled: true } });
 
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
     mockBcrypt.hash.mockClear();
@@ -106,8 +115,9 @@ describe("POST /api/auth/local/change-password", () => {
       method: "POST",
       body: { newPassword: "short" },
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["newPassword: Password must be at least 8 characters"]);
   });
 
   it("returns 400 for username shorter than 3 characters", async () => {
@@ -119,8 +129,9 @@ describe("POST /api/auth/local/change-password", () => {
       method: "POST",
       body: { newUsername: "ab" },
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["newUsername: Username must be at least 3 characters"]);
   });
 
   it("changes password successfully when user has existing password", async () => {
@@ -171,6 +182,9 @@ describe("POST /api/auth/local/change-password", () => {
     // budget across them, not one per route.
     expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
     expect(mockSucceeded).not.toHaveBeenCalled();
+    const unchanged = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(unchanged?.passwordHash).toBe("hashed_correctpassword");
+    expect(unchanged?.sessionVersion).toBe(user.sessionVersion);
   });
 
   it("stops before comparing when the attempt cannot be reserved", async () => {
@@ -223,6 +237,9 @@ describe("POST /api/auth/local/change-password", () => {
     });
     const body = await expectJson<{ error: string }>(response, 400);
     expect(body.error).toBe("Current password is required");
+    expect(mockBcrypt.compare).not.toHaveBeenCalled();
+    const unchanged = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(unchanged?.passwordHash).toBe("hashed_existing");
   });
 
   it("allows setting password without currentPassword when no existing password", async () => {
@@ -353,25 +370,27 @@ describe("POST /api/auth/local/change-password", () => {
     const updated = await prisma.user.findUnique({ where: { id: user.id } });
     expect(updated?.localUsername).toBe("newname");
     expect(updated?.username).toBe("NewName");
+    // The user chip and the dashboard greeting read the name from the shell.
+    expect(announced(user.id)).toBe(1);
   });
 
-  it("returns 409 when new username is already taken by another user", async () => {
-    const user1 = await createTestUser({ plexId: "u1", username: "User1" });
-    const user2 = await createTestUser({ plexId: "u2", username: "User2" });
-    await prisma.user.update({
-      where: { id: user2.id },
-      data: { localUsername: "takenname" },
-    });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true, authenticatedAt: Date.now() });
+  // A username alone is not a way in (an account with no password cannot use
+  // it to sign in), so renaming needs neither a password nor a recent sign-in.
+  it("renames an account with no password on a sign-in older than 15 minutes", async () => {
+    const user = await createTestUser({ username: "OldName" });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
       method: "POST",
-      body: { newUsername: "TakenName" },
+      body: { newUsername: "NewName" },
     });
-    const body = await expectJson<{ error: string }>(response, 409);
-    expect(body.error).toBe("Username is already taken");
+    const body = await expectJson<{ success: boolean; localUsername: string }>(response, 200);
+    expect(body).toEqual({ success: true, localUsername: "newname" });
+
+    const updated = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(updated?.localUsername).toBe("newname");
+    expect(updated?.passwordHash).toBeNull();
   });
 
   it("changes both password and username at once", async () => {
@@ -408,11 +427,12 @@ describe("POST /api/auth/local/change-password", () => {
     const initialVersion = user.sessionVersion;
     setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
-    await callRoute(POST, {
+    const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
       method: "POST",
       body: { newPassword: "newpassword123" },
     });
+    await expectJson(response, 200);
 
     const updated = await prisma.user.findUnique({ where: { id: user.id } });
     expect(updated?.sessionVersion).toBe(initialVersion + 1);
@@ -455,6 +475,10 @@ describe("POST /api/auth/local/change-password", () => {
     const body = await expectJson<{ success: boolean; localUsername: string }>(response, 200);
     expect(body.success).toBe(true);
     expect(body.localUsername).toBe("myname");
+
+    const updated = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(updated?.localUsername).toBe("myname");
+    expect(updated?.username).toBe("MyName");
   });
 
   it("returns 401 when user no longer exists in DB", async () => {

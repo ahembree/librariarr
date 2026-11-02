@@ -81,8 +81,10 @@ test.describe("API keys", () => {
     expect(me.status()).toBe(200);
     expect((await me.json()).apiKey.name).toBe("E2E dashboard");
     expect((await api.get("/api/v1/servers", { headers: auth })).status()).toBe(200);
-    // Read-only: every write is refused.
-    expect((await api.post("/api/v1/jobs/sync", { headers: auth })).status()).toBe(403);
+    // Read-only: every write is refused — by the key's scope, not by anything else.
+    const write = await api.post("/api/v1/jobs/sync", { headers: auth });
+    expect(write.status()).toBe(403);
+    expect((await write.json()).requiredScope).toBe("sync:write");
     // No key, no access — a browser session would not help either.
     expect((await api.get("/api/v1/me")).status()).toBe(401);
 
@@ -122,8 +124,13 @@ test.describe("API keys", () => {
     const auth = { Authorization: `Bearer ${key}` };
     const me = await (await api.get("/api/v1/me", { headers: auth })).json();
     expect(me.apiKey.scopes).toEqual(["servers:read", "sync:write"]);
-    expect(new Date(me.apiKey.expiresAt).getTime()).toBeGreaterThan(Date.now() + 6 * 86_400_000);
-    expect((await api.get("/api/v1/media/movies", { headers: auth })).status()).toBe(403);
+    // Seven days, not the 90-day default the picker starts on.
+    const expiresIn = new Date(me.apiKey.expiresAt).getTime() - Date.now();
+    expect(expiresIn).toBeGreaterThan(6 * 86_400_000);
+    expect(expiresIn).toBeLessThanOrEqual(7 * 86_400_000);
+    const movies = await api.get("/api/v1/media/movies", { headers: auth });
+    expect(movies.status()).toBe(403);
+    expect((await movies.json()).requiredScope).toBe("media:read");
 
     // Clean up so other specs see an empty list.
     const row = page.getByRole("listitem").filter({ hasText: "E2E sync bot" });

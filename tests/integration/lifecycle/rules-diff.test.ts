@@ -35,6 +35,7 @@ const mockHasSeerrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn().mockReturnValue(true));
 const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasPlayActivityRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
+const mockHasSeriesAggregateRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockGroupSeriesResults = vi.hoisted(() => vi.fn().mockImplementation((items: unknown[]) => items));
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
@@ -48,6 +49,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   hasPlayActivityRules: mockHasPlayActivityRules,
+  hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   groupSeriesResults: mockGroupSeriesResults,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
@@ -76,21 +78,38 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockHasAnyActiveRules.mockReturnValue(true);
+    // Reset (not only clear) every engine mock a test reconfigures, so neither a
+    // changed default nor an unconsumed `…Once` reaches the next test.
+    for (const mock of [
+      mockEvaluateRules, mockEvaluateSeriesScope, mockEvaluateMusicScope, mockHasArrRules, mockHasSeerrRules,
+      mockHasAnyActiveRules, mockHasWatchedByUserRules, mockHasPlayActivityRules, mockHasSeriesAggregateRules,
+      mockGroupSeriesResults, mockGetMatchedCriteriaForItems, mockGetActualValuesForAllRules,
+    ]) {
+      mock.mockReset();
+    }
+    mockEvaluateRules.mockResolvedValue([]);
+    mockEvaluateSeriesScope.mockResolvedValue([]);
+    mockEvaluateMusicScope.mockResolvedValue([]);
     mockHasArrRules.mockReturnValue(false);
     mockHasSeerrRules.mockReturnValue(false);
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasWatchedByUserRules.mockReturnValue(false);
+    mockHasPlayActivityRules.mockReturnValue(false);
+    mockHasSeriesAggregateRules.mockReturnValue(false);
+    mockGroupSeriesResults.mockImplementation((items: unknown[]) => items);
+    mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
+    mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockHasEnabledArrInstances.mockResolvedValue(true);
     mockHasEnabledSeerrInstances.mockResolvedValue(true);
-    mockEvaluateRules.mockResolvedValue([]);
   });
 
   afterAll(async () => {
     await disconnectTestDb();
   });
 
-  const validRules = [{ field: "playCount", operator: "equals", value: 0 }];
+  const validRules = [{ id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" }];
 
-  const activeGroup = validRules;
+  const activeGroup = [{ id: "g1", condition: "AND", rules: validRules, groups: [] }];
 
   /** A user + server + library + rule set of the given type. */
   async function seedSeriesFixture(type: "SERIES" | "MOVIE" = "SERIES") {
@@ -130,7 +149,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
         url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
         method: "POST",
         body: {
-          rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+          rules: [{ id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" }],
           type: "MOVIE",
           serverIds: [server.id],
         },
@@ -190,26 +209,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
         body: { rules: validRules, type: "MOVIE", serverIds: ["s1"] },
       }
     );
-    await expectJson(response, 404);
-  });
-
-  it("returns 404 for another user's rule set", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "intruder" });
-    const ruleSet = await createTestRuleSet(user1.id, { name: "Private" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRouteWithParams(
-      POST,
-      { id: ruleSet.id },
-      {
-        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
-        method: "POST",
-        body: { rules: validRules, type: "MOVIE", serverIds: ["s1"] },
-      }
-    );
-    await expectJson(response, 404);
+    expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Not found");
   });
 
   it("returns all existing matches as removed when no active rules", async () => {
@@ -443,6 +443,77 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     });
   });
 
+  // Track-scope music folds as detection does (`groupsTracksByArtist`): an
+  // artist-level Lidarr action stores ONE match per artist, on one server too,
+  // while a track file delete keeps a match per track and folds only another
+  // server's copy of the same track. Previewed per track, the diff a user
+  // reviews before arming an artist delete listed a row per track.
+  describe("track-scope music", () => {
+    async function artistTracks(servers: 1 | 2) {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "MUSIC" });
+      const l2 = await createTestLibrary(s2.id, { type: "MUSIC" });
+      const track = async (libraryId: string, n: number) => {
+        const t = await createTestMediaItem(libraryId, {
+          type: "MUSIC", title: `Song ${n}`, parentTitle: "The Artist", albumTitle: "Album", episodeNumber: n,
+        });
+        await createTestExternalId(t.id, "MUSICBRAINZ", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
+        await getTestPrisma().mediaItem.update({ where: { id: t.id }, data: { dedupKey: `music:the artist:song ${n}` } });
+        return getTestPrisma().mediaItem.findUniqueOrThrow({ where: { id: t.id } });
+      };
+      const tracks = [await track(l1.id, 1), await track(l1.id, 2), await track(l1.id, 3)];
+      const copy = servers === 2 ? await track(l2.id, 1) : null;
+      const ruleSet = await createTestRuleSet(user.id, { name: "Tracks", type: "MUSIC", seriesScope: false });
+      // The engine returns rows without external ids; the route loads them.
+      mockEvaluateRules.mockResolvedValue(
+        [...tracks, ...(copy ? [copy] : [])].map((t) => ({
+          id: t.id, title: t.title, parentTitle: t.parentTitle, dedupKey: t.dedupKey,
+        })),
+      );
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { tracks, copy, ruleSet, serverIds: servers === 2 ? [s1.id, s2.id] : [s1.id] };
+    }
+
+    async function diff(ruleSetId: string, body: Record<string, unknown>) {
+      return expectJson<{
+        added: { id: string; copyIds?: string[] }[];
+        counts: { added: number; removed: number; retained: number };
+      }>(
+        await callRouteWithParams(POST, { id: ruleSetId }, {
+          url: `/api/lifecycle/rules/${ruleSetId}/diff`, method: "POST", body,
+        }),
+        200,
+      );
+    }
+
+    it("adds an artist once for an artist-level action, on a single server", async () => {
+      const { tracks, ruleSet, serverIds } = await artistTracks(1);
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_LIDARR",
+      });
+
+      expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });
+      const [kept, ...folded] = tracks.map((t) => t.id).sort();
+      expect(body.added[0].id).toBe(kept);
+      expect([...(body.added[0].copyIds ?? [])].sort()).toEqual(folded);
+    });
+
+    it("adds a track file delete once per track, folding only another server's copy of the same track", async () => {
+      const { tracks, copy, ruleSet, serverIds } = await artistTracks(2);
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_FILES_LIDARR",
+      });
+
+      expect(body.counts).toEqual({ added: 3, removed: 0, retained: 0 });
+      const firstTrack = body.added.find((a) => a.id === tracks[0].id || a.id === copy!.id)!;
+      expect([firstTrack.id, ...(firstTrack.copyIds ?? [])].sort()).toEqual([tracks[0].id, copy!.id].sort());
+    });
+  });
+
   it("computes full diff with added, removed, and retained", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -492,7 +563,6 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     // (title = show, parentTitle = null, memberIds = every episode), while the
     // MediaItem row behind it is the representative EPISODE.
     const { user, server, library, ruleSet } = await seedSeriesFixture();
-    const prisma = getTestPrisma();
     const ep1 = await createTestMediaItem(library.id, {
       ratingKey: "s1e1", type: "SERIES", title: "Pilot",
       parentTitle: "The Show", seasonNumber: 1, episodeNumber: 1,
@@ -533,7 +603,6 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     expect(row.title).not.toBe("Pilot");
     // …and the size shown is the series total, not the one episode's.
     expect(String(row.fileSize)).toBe("4000000000");
-    await prisma.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
   });
 
   it("returns removed SERIES rows in series shape when the rule set has no active rules", async () => {
@@ -594,6 +663,29 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       seasonNumber: null,
       episodeNumber: null,
     });
+  });
+
+  it("routes a series-aggregate rule through the series path with series scope off, as detection does", async () => {
+    // Evaluated per episode the aggregate reads absent, and the diff a user
+    // reviews before arming an action disagreed with what detection stores.
+    const { user, server, ruleSet } = await seedSeriesFixture("SERIES");
+    mockHasSeriesAggregateRules.mockReturnValue(true);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    await expectJson(
+      await callRouteWithParams(POST, { id: ruleSet.id }, {
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        method: "POST",
+        body: { rules: activeGroup, type: "SERIES", seriesScope: false, serverIds: [server.id] },
+      }),
+      200,
+    );
+
+    // The rule set's own pending actions are left out of Has Pending Action, as detection leaves them out.
+    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(activeGroup, [server.id], undefined, undefined, true, {
+      excludeRuleSetId: ruleSet.id,
+    });
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 
   it("leaves MOVIE rows untouched — they have no group to aggregate", async () => {
@@ -693,7 +785,11 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     // that will actually delete it never saw.
     it("hides abandoned plays from the removed items it annotates", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
+      // Tracearr rows live on a Tracearr-mapped server.
+      const server = await createTestServer(user.id, {
+        tracearrServerId: "3f6c2b8e-9d41-4a7e-b5c0-1e2d3f4a5b6c",
+        tracearrBackfillComplete: true,
+      });
       const library = await createTestLibrary(server.id, { type: "MOVIE" });
       const removedItem = await createTestMediaItem(library.id, { title: "Removed", type: "MOVIE" });
       const ruleSet = await createTestRuleSet(user.id, { name: "Test" });
@@ -708,7 +804,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
             serverUsername: "alice",
             watchedAt: new Date("2025-01-01T00:00:00Z"),
             source: "TRACEARR",
-            sourceEventId: "chain-abandoned",
+            sourceEventId: "0b7e4d21-3c9a-4e58-8f16-a2d4c6e8b031",
             // Tracearr's completion verdict: this play never reached the
             // threshold, so it does not count as a watch.
             watched: false,
@@ -719,7 +815,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
             serverUsername: "bob",
             watchedAt: new Date("2025-01-02T00:00:00Z"),
             source: "TRACEARR",
-            sourceEventId: "chain-finished",
+            sourceEventId: "5f2a9c7e-1d84-4b36-b0e9-7c3d5a1f8e62",
             watched: true,
           },
         ],
@@ -729,19 +825,23 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       mockEvaluateRules.mockResolvedValue([]);
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRouteWithParams(
-        POST,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
-          method: "POST",
-          body: {
-            rules: [{ field: "watchedByUser", operator: "notEquals", value: "alice" }],
-            type: "MOVIE",
-            serverIds: [server.id],
-          },
-        }
+      const body = await expectJson<{ removed: { id: string }[] }>(
+        await callRouteWithParams(
+          POST,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+            method: "POST",
+            body: {
+              rules: [{ id: "r1", field: "watchedByUser", operator: "notEquals", value: "alice", condition: "AND" }],
+              type: "MOVIE",
+              serverIds: [server.id],
+            },
+          }
+        ),
+        200,
       );
+      expect(body.removed.map((r) => r.id)).toEqual([removedItem.id]);
 
       // The evaluator is handed the item; assert on the watch history it was
       // given, which is the thing the eager load controls.
@@ -750,7 +850,6 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       ];
       const names = (records[0]?.watchHistory ?? []).map((w) => w.serverUsername);
       expect(names).toEqual(["bob"]);
-      expect(names).not.toContain("alice");
     });
   });
 

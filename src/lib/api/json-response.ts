@@ -37,25 +37,62 @@ const MAX_LIST_DEPTH = 3;
  * `JSON.stringify(body)`: same keys in the same order, same values.
  */
 export async function stringifyYielding(body: unknown): Promise<string> {
-  return (await stringifyNode(body, MAX_LIST_DEPTH)) as string;
+  const chunks: string[] = [];
+  await writeJsonYielding(body, (chunk) => chunks.push(chunk));
+  // A body with no JSON form answers what `JSON.stringify` does.
+  return chunks.length > 0 ? chunks.join("") : (JSON.stringify(body) as string);
 }
 
-async function stringifyNode(value: unknown, depth: number): Promise<string | undefined> {
-  if (isLongList(value)) return stringifyList(value);
-  if (!holdsLongList(value, depth)) return JSON.stringify(value);
+/**
+ * `stringifyYielding`, handed to `write` a piece at a time instead of joined:
+ * the pieces, concatenated, are exactly `JSON.stringify(body)`. For a writer
+ * that sends them straight on (the NDJSON progress streams), the whole
+ * document never exists as one string — joining a 30 MB preview result held
+ * its slices and the joined copy at once, nearly doubling the request's peak
+ * memory against a 2 GB heap.
+ */
+export async function writeJsonYielding(body: unknown, write: (chunk: string) => void): Promise<void> {
+  const text = leafJson(body, MAX_LIST_DEPTH);
+  if (text === null) await writeNode(body, MAX_LIST_DEPTH, write);
+  else if (text !== undefined) write(text);
+}
+
+/**
+ * The JSON of a value that holds no long list, `undefined` when it has none
+ * (as `JSON.stringify` answers), or `null` when it does hold a long list and
+ * must be written in pieces.
+ */
+function leafJson(value: unknown, depth: number): string | undefined | null {
+  if (isLongList(value) || holdsLongList(value, depth)) return null;
+  return JSON.stringify(value);
+}
+
+async function writeNode(value: unknown, depth: number, write: (chunk: string) => void): Promise<void> {
+  if (isLongList(value)) return writeList(value, write);
   if (Array.isArray(value)) {
-    const parts: string[] = [];
-    // JSON.stringify writes an element with no JSON form as null.
-    for (const element of value) parts.push((await stringifyNode(element, depth - 1)) ?? "null");
-    return `[${parts.join(",")}]`;
+    write("[");
+    for (let i = 0; i < value.length; i++) {
+      if (i > 0) write(",");
+      const text = leafJson(value[i], depth - 1);
+      // JSON.stringify writes an element with no JSON form as null.
+      if (text === null) await writeNode(value[i], depth - 1, write);
+      else write(text ?? "null");
+    }
+    write("]");
+    return;
   }
-  const parts: string[] = [];
+  write("{");
+  let first = true;
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    const text = await stringifyNode(child, depth - 1);
+    const text = leafJson(child, depth - 1);
     // JSON.stringify leaves out a key whose value has no JSON form.
-    if (text !== undefined) parts.push(`${JSON.stringify(key)}:${text}`);
+    if (text === undefined) continue;
+    write(`${first ? "" : ","}${JSON.stringify(key)}:`);
+    first = false;
+    if (text === null) await writeNode(child, depth - 1, write);
+    else write(text);
   }
-  return `{${parts.join(",")}}`;
+  write("}");
 }
 
 /** Does a plain object or short array hold a long list within `depth` levels? */
@@ -94,14 +131,14 @@ export async function mapInSlices<T, U>(rows: readonly T[], fn: (row: T) => U): 
   return out;
 }
 
-async function stringifyList(rows: unknown[]): Promise<string> {
-  const slices: string[] = [];
+async function writeList(rows: unknown[], write: (chunk: string) => void): Promise<void> {
+  write("[");
   for (let i = 0; i < rows.length; i += STRINGIFY_SLICE_ROWS) {
     if (i > 0) await yieldToEventLoop();
-    // `[a,b]` → `a,b`: a slice is never empty, so this never yields "".
-    slices.push(JSON.stringify(rows.slice(i, i + STRINGIFY_SLICE_ROWS)).slice(1, -1));
+    // `[a,b]` → `a,b`: a slice is never empty, so this never writes "".
+    write(`${i > 0 ? "," : ""}${JSON.stringify(rows.slice(i, i + STRINGIFY_SLICE_ROWS)).slice(1, -1)}`);
   }
-  return `[${slices.join(",")}]`;
+  write("]");
 }
 
 /**

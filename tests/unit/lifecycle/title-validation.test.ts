@@ -3,7 +3,7 @@ import { normalizeTitle, validateArrItem } from "@/lib/lifecycle/actions";
 
 describe("normalizeTitle", () => {
   it("lowercases", () => {
-    expect(normalizeTitle("The Matrix")).toBe("matrix");
+    expect(normalizeTitle("INCEPTION")).toBe("inception");
   });
 
   it("strips leading articles", () => {
@@ -120,7 +120,7 @@ describe("validateArrItem", () => {
   });
 
   it("blocks 'Avatar' matching 'Avatar: The Way of Water'", () => {
-    // Normalized: "avatar" (6) vs "avatar way of water" (19) — ratio 0.32 < 0.5
+    // Normalized: "avatar" (6) vs "avatar the way of water" (23) — ratio 0.26 < 0.5
     expect(() =>
       validateArrItem("Avatar", "Avatar: The Way of Water", "Radarr movie", "12345")
     ).toThrow(/title mismatch/);
@@ -155,11 +155,10 @@ describe("validateArrItem", () => {
     ).toThrow(/title mismatch/);
   });
 
-  it("handles titles that normalize to same after punctuation removal", () => {
+  it("refuses titles that differ by a hyphen dropped versus spaced", () => {
     // "Spider-Man: No Way Home" → "spiderman no way home"
     // "Spider Man No Way Home" → "spider man no way home"
-    // These are NOT equal after normalization (spiderman vs spider man)
-    // But "spiderman no way home" contains "spider man no way home"? No — substring doesn't match
+    // Not equal after normalization, and neither contains the other.
     expect(() =>
       validateArrItem("Spider-Man: No Way Home", "Spider Man No Way Home", "Radarr movie", "12345")
     ).toThrow(/title mismatch/);
@@ -173,9 +172,9 @@ describe("validateArrItem — year guard (remake collisions)", () => {
     ).toThrow(/year mismatch/i);
   });
 
-  it("rejects even when titles match exactly but years are far apart", () => {
+  it("rejects a remake with the same title decades apart (The Thing 1982 vs 2011)", () => {
     expect(() =>
-      validateArrItem("The Office", "The Office", "Sonarr series", "73244", 2005, 2001)
+      validateArrItem("The Thing", "The Thing", "Radarr movie", "60935", 2011, 1982)
     ).toThrow(/year mismatch/i);
   });
 

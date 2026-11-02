@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
-import { validateRequest, prerollScheduleCreateSchema } from "@/lib/validation";
+import { validateRequest, prerollScheduleCreateSchema, TIME_REGEX } from "@/lib/validation";
 import { checkConflict } from "@/lib/preroll/schedule-conflict";
 
 const VALID_SCHEDULE_TYPES = ["one_time", "recurring", "seasonal"];
 const VALID_DAYS = [0, 1, 2, 3, 4, 5, 6];
-// Match the blackout route's stricter validation — the loose /^\d{2}:\d{2}$/
-// accepted nonsense like "99:99", producing wrong minute math in the enforcer.
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 interface ScheduleInput {
   name?: string;
@@ -68,26 +65,7 @@ function validateScheduleInput(body: ScheduleInput) {
   return null;
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const schedules = await prisma.prerollSchedule.findMany({
-    where: { userId: session.userId! },
-    orderBy: { priority: "desc" },
-  });
-
-  return NextResponse.json({ schedules });
-}
-
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, prerollScheduleCreateSchema);
   if (error) return error;
   const body = data as ScheduleInput;
@@ -96,20 +74,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
-  // Conflict detection
-  const existingSchedules = await prisma.prerollSchedule.findMany({
-    where: { userId: session.userId! },
-  });
+  // Conflict detection — only for a schedule created enabled, as the PUT does:
+  // a disabled one never plays, and enabling it later is checked then.
+  if (body.enabled !== false) {
+    const existingSchedules = await prisma.prerollSchedule.findMany({
+      where: { userId: session.userId },
+    });
 
-  const conflict = checkConflict(body, existingSchedules);
-  if (conflict) {
-    return NextResponse.json(
-      {
-        error: "Schedule conflicts with existing schedule",
-        conflictingSchedule: conflict,
-      },
-      { status: 409 }
-    );
+    const conflict = checkConflict(body, existingSchedules);
+    if (conflict) {
+      return NextResponse.json(
+        {
+          error: "Schedule conflicts with existing schedule",
+          conflictingSchedule: conflict,
+        },
+        { status: 409 }
+      );
+    }
   }
 
   const isDateType = body.scheduleType === "one_time" || body.scheduleType === "seasonal";
@@ -117,7 +98,7 @@ export async function POST(request: NextRequest) {
 
   const schedule = await prisma.prerollSchedule.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name: body.name!.trim(),
       prerollPath: body.prerollPath!.trim(),
       scheduleType: body.scheduleType!,
@@ -132,4 +113,4 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ schedule }, { status: 201 });
-}
+});

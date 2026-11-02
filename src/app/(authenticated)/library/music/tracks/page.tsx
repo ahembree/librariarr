@@ -1,211 +1,134 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect, useTransition } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { sameFilters } from "@/lib/filters/same-filters";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
+import { MediaCard } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
-import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
+import { Music, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaListItem } from "@/lib/types";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useRealtime } from "@/hooks/use-realtime";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
-import { fetchListProgressively } from "@/lib/media/progressive-load";
+import { useLibraryList } from "@/hooks/use-library-list";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useVirtualPosterGrid, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { EmptyState } from "@/components/empty-state";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { MediaGridSkeleton } from "@/components/skeletons";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
-const GAP = 16;
-const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 12;
+const TRACKS_FROM = `?from=${encodeURIComponent("/library/music/tracks")}`;
+
+const trackKey = (track: MediaListItem) => track.id;
+
+// The table's popover carries the track's art as its hero; the card's passes
+// the same fields (the card already shows the art).
+function trackTableHover(item: MediaListItem) {
+  return (
+    <MediaHoverPopover
+      summaryUrl={hoverSummaryUrl(item.id)}
+      imageUrl={`/api/media/${item.id}/image`}
+      imageAspect="square"
+      data={hoverDataFromListItem(item)}
+    />
+  );
+}
 
 export default function AllTracksPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaListItem[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sortBy, setSortBy] = useState("title");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [loading, setLoading] = useState(true);
-  // The first screenful arrives before the rest of the library; consumers that
-  // need the complete list (item count, scroll restoration) wait for this.
-  const [loadingRest, setLoadingRest] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("table");
-  const [, startTransition] = useTransition();
-  const { size, setSize, columns: actualColumns } = useCardSize();
+  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, filters, onFilterChange, clearFilters, hasFilters } =
+    useLibraryListState("tracks", "title", { defaultViewMode: "table" });
+  const filterPanel = useFilterPanelReset(undefined, clearFilters);
+  const { size, setSize, columns } = useCardSize();
+  const listParams = new URLSearchParams({
+    sortBy,
+    sortOrder,
+    ...filters,
+  });
+  const { items, loading, loadingRest } = useLibraryList<MediaListItem>({
+    url: "/api/media/music",
+    params: listParams,
+    mode: "progressive",
+    syncScope: { types: "MUSIC" },
+  });
 
-  const gridContainerRef = useRef<HTMLDivElement>(null);
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
+  const grid = useVirtualPosterGrid({
+    count: items.length,
+    columns,
+    aspect: SQUARE_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}`,
+  });
 
   const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loadingRest && items.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
-    },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / actualColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
   });
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("tracks-view-mode") as "cards" | "table" | null;
-      if (stored) setViewMode(stored);
-    } catch { /* private mode / quota — keep default */ }
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    try {
-      localStorage.setItem("tracks-view-mode", mode);
-    } catch { /* private mode / quota — ignore */ }
-  };
-
-  // Token guards against a stale slow response landing after a quick
-  // sort/filter flip and showing the wrong items for the selection.
-  const reqToken = useRef(0);
-
-  const fetchTracks = useCallback(async () => {
-    const token = ++reqToken.current;
-    setLoading(true);
-    setLoadingRest(true);
-    try {
-      const params = new URLSearchParams({
-        sortBy,
-        sortOrder,
-        ...filters,
-      });
-      // Paint the first screenful, then fill in the rest behind it — the whole
-      // library in one response meant nothing rendered until all of it landed.
-      let firstChunk = true;
-      await fetchListProgressively<MediaListItem>(
-        "/api/media/music",
-        params,
-        (loaded, done) => {
-          if (token !== reqToken.current) return;
-          const apply = () => {
-            setItems(loaded);
-            setLoading(false);
-            if (done) setLoadingRest(false);
-          };
-          // First screenful as a normal update (a transition only delayed it);
-          // the rest of the library stays a transition.
-          if (firstChunk) apply();
-          else startTransition(apply);
-          firstChunk = false;
-        },
-      );
-    } catch (error) {
-      console.error("Failed to fetch tracks:", error);
-      if (token === reqToken.current) {
-        setLoading(false);
-        setLoadingRest(false);
-      }
-    }
-  }, [sortBy, sortOrder, filters]);
-
-  useListFetch(fetchTracks);
-
-  // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchTracks);
-
-  useEffect(() => {
-    scrollElementRef.current = document.querySelector<HTMLElement>("main");
-  }, []);
-
-  // Re-measure once the grid mounts behind the loading skeleton (the ref is
-  // null on the first pass), so the virtualized rows aren't mis-positioned.
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, items.length]);
-
-  const rowCount = useMemo(
-    () => Math.ceil(items.length / actualColumns),
-    [items.length, actualColumns],
+  const openTrack = useCallback(
+    (item: MediaListItem) => {
+      markChildNavigation();
+      router.push(`/library/music/track/${item.id}${TRACKS_FROM}`);
+    },
+    [markChildNavigation, router],
   );
 
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * 1.0; // square
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [actualColumns]);
-
-  const overscan = useDeferredOverscan(!loading && rowCount > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    scrollMargin,
-    overscan,
-  });
-
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const handleSort = useCallback(
-    (field: string) => {
-      if (field === sortBy) {
-        setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-      } else {
-        setSortBy(field);
-        setSortOrder("asc");
-      }
-    },
-    [sortBy],
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (track: MediaListItem, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${track.id}/image`}
+        title={track.title}
+        aspectRatio="square"
+        fallbackIcon="music"
+        href={`/library/music/track/${track.id}${TRACKS_FROM}`}
+        prefetchMediaId={track.id}
+        onClick={markChildNavigation}
+        qualityBar={qualitySegments(qualityChips(track, "music"), getHex, (toggle) => show("badges", toggle))}
+        hoverContent={<MediaHoverPopover summaryUrl={hoverSummaryUrl(track.id)} data={hoverDataFromListItem(track)} />}
+        servers={serverChips ? track.servers : undefined}
+        metadata={
+          <MetadataLine stacked>
+            {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}
+            {show("metadata", "duration") && track.duration && <MetadataItem icon={<Clock />}>{formatDuration(track.duration)}</MetadataItem>}
+            {show("metadata", "fileSize") && track.fileSize && <MetadataItem icon={<HardDrive />}>{formatFileSize(track.fileSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
   );
 
   return (
     <div className="p-4 sm:p-6 md:pr-12">
-      <div className="flex items-center gap-3 mb-4">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
-      </div>
+      <PageHeader className="mb-4" title="Music" />
 
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music/tracks" />
 
       <MediaFilters
-        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
+        resetKey={filterPanel.resetKey}
+        onFilterChange={onFilterChange}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -218,126 +141,19 @@ export default function AllTracksPage() {
       {loading ? (
         <MediaGridSkeleton />
       ) : items.length === 0 ? (
-        <EmptyState
-          icon={ListMusic}
-          title="No tracks found."
-          description="Try adjusting your filters."
-        />
+        <LibraryEmptyState icon={ListMusic} noun="tracks" hasFilters={hasFilters} onClear={filterPanel.clear} />
       ) : viewMode === "table" ? (
         <MediaTable
           items={items}
-          onItemClick={(item) => { markChildNavigation(); router.push(`/library/music/track/${item.id}?from=${encodeURIComponent("/library/music/tracks")}`); }}
+          onItemClick={openTrack}
           sortBy={sortBy}
           sortOrder={sortOrder}
-          onSort={handleSort}
+          onSort={toggleSort}
           mediaType="MUSIC"
-          renderHoverContent={(item) => (
-            <MediaHoverPopover
-              summaryUrl={`/api/media/${item.id}`}
-              imageUrl={`/api/media/${item.id}/image`}
-              imageAspect="square"
-              data={{
-                title: item.title,
-                year: item.year,
-                contentRating: item.contentRating,
-                rating: item.rating,
-                audienceRating: item.audienceRating,
-                ratingImage: item.ratingImage,
-                audienceRatingImage: item.audienceRatingImage,
-                duration: item.duration,
-                resolution: item.resolution,
-                dynamicRange: item.dynamicRange,
-                audioProfile: item.audioProfile,
-                audioCodecCounts: item.audioCodec ? { [item.audioCodec.toUpperCase()]: 1 } : undefined,
-                fileSize: item.fileSize,
-                genres: item.genres,
-                studio: item.studio,
-                playCount: item.playCount,
-                lastPlayedAt: item.lastPlayedAt,
-                addedAt: item.addedAt,
-                servers: item.servers,
-              }}
-            />
-          )}
+          renderHoverContent={trackTableHover}
         />
       ) : (
-        <div ref={gridContainerRef}>
-          <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const rowStart = virtualRow.index * actualColumns;
-              const rowItems = items.slice(rowStart, rowStart + actualColumns);
-              return (
-                <div
-                  key={virtualRow.key}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    paddingBottom: GAP,
-                    transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                  }}
-                >
-                  <div style={{ display: "grid", gap: `${GAP}px`, gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))` }}>
-                    {rowItems.map((track) => (
-                      <MediaCard
-                        key={track.id}
-                        priority={virtualRow.index < PRIORITY_ROWS}
-                        imageUrl={`/api/media/${track.id}/image`}
-                        title={track.title}
-                        aspectRatio="square"
-                        fallbackIcon="music"
-                        href={`/library/music/track/${track.id}?from=${encodeURIComponent("/library/music/tracks")}`}
-                        onClick={markChildNavigation}
-                        qualityBar={
-                          track.audioCodec
-                            ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]
-                            : undefined
-                        }
-                        hoverContent={
-                          <MediaHoverPopover
-                            summaryUrl={`/api/media/${track.id}`}
-                            data={{
-                              title: track.title,
-                              year: track.year,
-                              contentRating: track.contentRating,
-                              rating: track.rating,
-                              audienceRating: track.audienceRating,
-                              ratingImage: track.ratingImage,
-                              audienceRatingImage: track.audienceRatingImage,
-                              duration: track.duration,
-                              resolution: track.resolution,
-                              dynamicRange: track.dynamicRange,
-                              audioProfile: track.audioProfile,
-                              audioCodecCounts: track.audioCodec ? { [track.audioCodec.toUpperCase()]: 1 } : undefined,
-                              fileSize: track.fileSize,
-                              genres: track.genres,
-                              studio: track.studio,
-                              playCount: track.playCount,
-                              lastPlayedAt: track.lastPlayedAt,
-                              addedAt: track.addedAt,
-                              servers: track.servers,
-                            }}
-                          />
-                        }
-                        servers={showServers && servers.length > 1 ? track.servers : undefined}
-                        metadata={
-                          <MetadataLine stacked>
-                            {track.parentTitle && <MetadataItem icon={<Music />}>{track.parentTitle}</MetadataItem>}
-                            {show("metadata", "duration") && track.duration && <MetadataItem icon={<Clock />}>{formatDuration(track.duration)}</MetadataItem>}
-                            {show("metadata", "fileSize") && track.fileSize && <MetadataItem icon={<HardDrive />}>{formatFileSize(track.fileSize)}</MetadataItem>}
-                          </MetadataLine>
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <VirtualCardGrid grid={grid} items={items} getKey={trackKey} renderItem={renderCard} />
       )}
     </div>
   );

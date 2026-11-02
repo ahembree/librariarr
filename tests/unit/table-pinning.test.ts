@@ -64,6 +64,7 @@ describe("arrangePinnedColumns on a narrow screen", () => {
   it("applies every pin again once there is room", () => {
     const layout = arrangePinnedColumns(cols, new Set(["type", "title", "year"]), widths, 1200);
     expect(layout.pinnedCount).toBe(4);
+    expect(layout.offsets).toEqual({ select: 0, type: 44, title: 124, year: 424 });
     expect(layout.suspended.size).toBe(0);
   });
 });

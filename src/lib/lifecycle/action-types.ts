@@ -41,7 +41,7 @@ export const MUSIC_ACTION_TYPES = [
  * (series / artist / movie) and ignores the member list, so a partially-
  * excepted member set cannot be honored by them.
  */
-export const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
+const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
   "UNMONITOR_DELETE_FILES_SONARR",
   "MONITOR_DELETE_FILES_SONARR",
   "DELETE_FILES_SONARR",
@@ -52,6 +52,44 @@ export const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
 
 export function actionHonorsMemberIds(actionType: string): boolean {
   return MEMBER_SCOPED_ACTION_TYPES.has(actionType);
+}
+
+/**
+ * Sonarr actions Sonarr can apply to single episodes as well as to a series.
+ * The Query page's episode view and a Series rule set with series scope off
+ * run them on the matched episodes only (`ActionRecord.episodeScope`).
+ */
+const EPISODE_SCOPABLE_ACTION_TYPES = new Set<string>(["UNMONITOR_SONARR", "SEARCH_SONARR"]);
+
+export function actionCanScopeToEpisodes(actionType: string): boolean {
+  return EPISODE_SCOPABLE_ACTION_TYPES.has(actionType);
+}
+
+/**
+ * Whether the action acts on its member list (`matchedMediaItemIds`) rather
+ * than the whole record: the member-scoped file deletes always, Unmonitor and
+ * Search when episode-scoped. Every member-aware consumer asks this.
+ */
+export function actsOnMembers(actionType: string, episodeScope?: boolean | null): boolean {
+  return actionHonorsMemberIds(actionType) || (!!episodeScope && actionCanScopeToEpisodes(actionType));
+}
+
+/** Whether a rule set's action acts on its matched episodes rather than the series. */
+export function ruleSetActsOnEpisodes(
+  actionType: string,
+  ruleSet: { type: string; seriesScope: boolean },
+): boolean {
+  return ruleSet.type === "SERIES" && !ruleSet.seriesScope && actionCanScopeToEpisodes(actionType);
+}
+
+/**
+ * Whether the action removes the whole Arr record — the movie, series or
+ * artist — from Radarr/Sonarr/Lidarr. Tags on a record about to be deleted
+ * would be deleted with it, so tag options are offered for every other action,
+ * the file-only deletes included (their record stays).
+ */
+export function deletesArrRecord(actionType: string): boolean {
+  return actionType === "DELETE_RADARR" || actionType === "DELETE_SONARR" || actionType === "DELETE_LIDARR";
 }
 
 /** Whether the action removes media/files (not just monitoring/quality). */
@@ -77,7 +115,7 @@ export function supportsSearchAfter(actionType: string): boolean {
 }
 
 /** Human-readable labels for every action type (notifications, summaries). */
-export const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<string, string> = {
   DO_NOTHING: "Monitor Only",
   DELETE_RADARR: "Delete from Radarr",
   DELETE_SONARR: "Delete from Sonarr",

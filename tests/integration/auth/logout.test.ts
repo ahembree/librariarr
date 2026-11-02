@@ -45,6 +45,7 @@ describe("POST /api/auth/logout", () => {
     const body = await expectJson<{ success: boolean }>(response, 200);
 
     expect(body.success).toBe(true);
+    expect(getMockSession()).toEqual({ isLoggedIn: false });
   });
 
   it("should succeed even when no session is active", async () => {
@@ -77,7 +78,8 @@ describe("POST /api/auth/logout", () => {
     const user = await createTestUser();
     const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
 
-    await callRoute(POST, { url: "/api/auth/logout", method: "POST" });
+    const response = await callRoute(POST, { url: "/api/auth/logout", method: "POST" });
+    await expectJson(response, 200);
 
     const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
     expect(after).toBe(before);
@@ -88,6 +90,27 @@ describe("POST /api/auth/logout", () => {
     const response = await callRoute(POST, { url: "/api/auth/logout", method: "POST" });
     const body = await expectJson<{ success: boolean }>(response, 200);
     expect(body.success).toBe(true);
+    expect(getMockSession()).toEqual({ isLoggedIn: false });
+  });
+
+  // SameSite=Lax already keeps the cookie off most cross-site POSTs; the
+  // origin check is the defence where a browser's enforcement is not.
+  it("refuses a POST from another origin and signs nobody out", async () => {
+    const user = await createTestUser();
+    const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/logout",
+      method: "POST",
+      headers: { Origin: "https://evil.example" },
+    });
+    const body = await expectJson<{ error: string }>(response, 403);
+    expect(body.error).toBe("Forbidden");
+
+    const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    expect(after).toBe(before);
+    expect(getMockSession().isLoggedIn).toBe(true);
   });
 
   it("GET logout also revokes every outstanding session", async () => {
@@ -126,10 +149,8 @@ describe("GET /api/auth/logout", () => {
 
     // NextResponse.redirect returns a 307 by default
     expect(response.status).toBe(307);
-
-    const locationHeader = response.headers.get("location");
-    expect(locationHeader).toBeDefined();
-    expect(locationHeader).toContain("/login");
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    expect(getMockSession()).toEqual({ isLoggedIn: false });
   });
 
   it("should redirect to /login even when no session is active", async () => {
@@ -139,10 +160,26 @@ describe("GET /api/auth/logout", () => {
     });
 
     expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+  });
 
-    const locationHeader = response.headers.get("location");
-    expect(locationHeader).toBeDefined();
-    expect(locationHeader).toContain("/login");
+  // `<img src="/api/auth/logout">` on another site sends its own Origin.
+  it("signs nobody out for a request from another origin", async () => {
+    const user = await createTestUser();
+    const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+    const response = await callRoute(GET, {
+      url: "/api/auth/logout",
+      method: "GET",
+      headers: { Referer: "https://evil.example/page" },
+    });
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+
+    const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    expect(after).toBe(before);
+    expect(getMockSession().isLoggedIn).toBe(true);
   });
 
   // A link on another site with rel=noreferrer sends neither Origin nor
@@ -160,7 +197,7 @@ describe("GET /api/auth/logout", () => {
         headers: { "Sec-Fetch-Site": fetchSite },
       });
       expect(response.status).toBe(307);
-      expect(response.headers.get("location")).toContain("/login");
+      expect(response.headers.get("location")).toBe("http://localhost:3000/login");
 
       const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
       expect(after).toBe(before);
@@ -173,9 +210,16 @@ describe("GET /api/auth/logout", () => {
     const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
     setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
 
-    await callRoute(GET, { url: "/api/auth/logout", method: "GET", headers: { "Sec-Fetch-Site": fetchSite } });
+    const response = await callRoute(GET, {
+      url: "/api/auth/logout",
+      method: "GET",
+      headers: { "Sec-Fetch-Site": fetchSite },
+    });
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
 
     const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
     expect(after).toBe(before + 1);
+    expect(getMockSession()).toEqual({ isLoggedIn: false });
   });
 });

@@ -8,7 +8,7 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { InsightCard, InsightEmpty } from "@/components/dashboard/insight-card";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
-import type { MediaHoverData } from "@/components/media-hover-popover";
+import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
 
 interface TopMovie {
   id: string;
@@ -38,6 +38,13 @@ interface TopPlayedProps {
   onSeriesClick?: (seriesName: string, mediaItemId?: string) => void;
   onArtistClick?: (mediaItemId: string) => void;
 }
+
+// The popovers' readers, module-level so each row hands its popover the same
+// function on every render.
+/** A movie's `/api/media/[id]` record, through the one record mapping. */
+const movieHoverData = (json: unknown) => hoverDataFromRecord((json as { item: MediaHoverData }).item);
+/** `group-summary` already answers in the popover's shape. */
+const groupSummaryHoverData = (json: unknown) => json as MediaHoverData;
 
 /** Artwork thumbnail with icon fallback; 2:3 for video, square for music. */
 function Thumb({
@@ -169,7 +176,7 @@ export function TopPlayed({
               <LazyMediaHoverPopover
                 key={movie.id}
                 fetchUrl={`/api/media/${movie.id}`}
-                extractData={(json) => (json as { item: MediaHoverData }).item}
+                extractData={movieHoverData}
                 placeholder={placeholder}
                 imageUrl={`/api/media/${movie.id}/image`}
                 imageAspect="poster"
@@ -245,7 +252,7 @@ export function TopPlayed({
               <LazyMediaHoverPopover
                 key={series.mediaItemId}
                 fetchUrl={`/api/media/${series.mediaItemId}/group-summary?type=SERIES`}
-                extractData={(json) => json as MediaHoverData}
+                extractData={groupSummaryHoverData}
                 placeholder={placeholder}
                 imageUrl={`/api/media/${series.mediaItemId}/image?type=parent`}
                 imageAspect="poster"
@@ -302,7 +309,7 @@ export function TopPlayed({
               <LazyMediaHoverPopover
                 key={artist.parentTitle}
                 fetchUrl={`/api/media/${artist.mediaItemId}/group-summary?type=MUSIC`}
-                extractData={(json) => json as MediaHoverData}
+                extractData={groupSummaryHoverData}
                 placeholder={placeholder}
                 imageUrl={`/api/media/${artist.mediaItemId}/image?type=parent`}
                 imageAspect="square"

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 /**
  * The write half of `MediaServer.watchHistorySyncedAt`.
@@ -21,8 +21,40 @@ vi.mock("@/lib/db", () => ({
 import {
   invalidateWatchHistoryEvidence,
   invalidateServersWithoutWatchHistory,
+  markWatchHistoryEstablished,
   restartTracearrBackfill,
 } from "@/lib/media/watch-evidence";
+
+const NOW = new Date("2026-03-01T12:00:00.000Z");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("markWatchHistoryEstablished", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 0 });
+  });
+
+  it("stamps the given servers with the time the sync established their history", async () => {
+    vi.useFakeTimers({ now: NOW });
+    m.updateMany.mockResolvedValue({ count: 2 });
+
+    await expect(markWatchHistoryEstablished(["s1", "s2"])).resolves.toBe(2);
+
+    expect(m.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["s1", "s2"] } },
+      data: { watchHistorySyncedAt: NOW },
+    });
+  });
+
+  it("issues no UPDATE at all for an empty list", async () => {
+    // Unscoped, it would mark every server on the install as established.
+    await expect(markWatchHistoryEstablished([])).resolves.toBe(0);
+    expect(m.updateMany).not.toHaveBeenCalled();
+  });
+});
 
 describe("invalidateWatchHistoryEvidence", () => {
   beforeEach(() => {
@@ -34,15 +66,16 @@ describe("invalidateWatchHistoryEvidence", () => {
   it("withdraws the marker only from servers that currently claim one", async () => {
     m.updateMany.mockResolvedValue({ count: 2 });
 
-    await invalidateWatchHistoryEvidence(["s1", "s2"]);
+    await expect(invalidateWatchHistoryEvidence(["s1", "s2"])).resolves.toBe(2);
 
-    const arg = m.updateMany.mock.calls[0][0];
-    expect(arg.where).toMatchObject({
-      id: { in: ["s1", "s2"] },
-      // Only servers that currently claim established history need withdrawing.
-      watchHistorySyncedAt: { not: null },
+    expect(m.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ["s1", "s2"] },
+        // Only servers that currently claim established history need withdrawing.
+        watchHistorySyncedAt: { not: null },
+      },
+      data: { watchHistorySyncedAt: null },
     });
-    expect(arg.data.watchHistorySyncedAt).toBeNull();
   });
 
   it("issues no UPDATE at all for an empty list", async () => {
@@ -67,9 +100,13 @@ describe("invalidateServersWithoutWatchHistory", () => {
 
     await expect(invalidateServersWithoutWatchHistory()).resolves.toBe(1);
 
-    expect(m.findMany.mock.calls[0][0].where).toMatchObject({
+    expect(m.findMany.mock.calls[0][0].where).toEqual({
       watchHistorySyncedAt: { not: null },
       watchHistory: { none: {} },
+    });
+    expect(m.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["s1"] }, watchHistorySyncedAt: { not: null } },
+      data: { watchHistorySyncedAt: null },
     });
   });
 
@@ -88,8 +125,8 @@ describe("restartTracearrBackfill", () => {
   });
 
   it("reopens the archive walk from now, for Tracearr-mapped servers only", async () => {
+    vi.useFakeTimers({ now: NOW });
     m.updateMany.mockResolvedValue({ count: 1 });
-    const before = Date.now();
 
     await expect(restartTracearrBackfill(["s1", "s2"])).resolves.toBe(1);
 
@@ -102,8 +139,7 @@ describe("restartTracearrBackfill", () => {
     // The cursor is moved to NOW, not cleared: with no cursor the walk resumes
     // below the oldest stored row, which after a partial purge is the far end of
     // the archive — so nothing purged would be walked again.
-    expect(arg.data.tracearrBackfillCursorAt).toBeInstanceOf(Date);
-    expect(arg.data.tracearrBackfillCursorAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(arg.data.tracearrBackfillCursorAt).toEqual(NOW);
   });
 
   it("issues no UPDATE at all for an empty list", async () => {

@@ -51,17 +51,17 @@ describe("GET /api/settings/auth", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
-    const body = await expectJson<{
-      plexConnected: boolean;
-      localAuthEnabled: boolean;
-      hasPassword: boolean;
-      displayName: string;
-    }>(res);
-    expect(body.localAuthEnabled).toBe(true);
-    expect(body.plexConnected).toBe(true);
-    expect(body.hasPassword).toBe(false);
-    expect(body.displayName).toBe("testuser");
-    expect((body as unknown as { passwordSignInEnabled: boolean }).passwordSignInEnabled).toBe(true);
+    const body = await expectJson(res);
+    expect(body).toEqual({
+      plexConnected: true,
+      localUsername: null,
+      hasPassword: false,
+      localAuthEnabled: true,
+      plexLoginEnabled: true,
+      localAuthHiddenBySso: false,
+      passwordSignInEnabled: true,
+      displayName: "testuser",
+    });
   });
 
   it("returns default localAuthEnabled=false when no AppSettings exists", async () => {
@@ -69,8 +69,30 @@ describe("GET /api/settings/auth", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
-    const body = await expectJson<{ localAuthEnabled: boolean }>(res);
+    const body = await expectJson<{ localAuthEnabled: boolean; plexLoginEnabled: boolean }>(res);
     expect(body.localAuthEnabled).toBe(false);
+    expect(body.plexLoginEnabled).toBe(true);
+  });
+
+  it("reports localAuthHiddenBySso=true when SSO is usable", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: true,
+        ssoEnabled: true,
+        ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(GET);
+    const body = await expectJson<{ localAuthHiddenBySso: boolean; passwordSignInEnabled: boolean }>(res);
+    expect(body.localAuthHiddenBySso).toBe(true);
+    // SSO replaces the local form, so the password is accepted for nothing.
+    expect(body.passwordSignInEnabled).toBe(false);
   });
 });
 
@@ -94,7 +116,9 @@ describe("PUT /api/settings/auth", () => {
       method: "PUT",
       body: { localAuthEnabled: "not-a-boolean" },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["localAuthEnabled: Invalid input: expected boolean, received string"]);
+    expect(await prisma.appSettings.count()).toBe(0);
   });
 
   // ── SSO branches ───────────────────────────────────────────────────
@@ -105,27 +129,6 @@ describe("PUT /api/settings/auth", () => {
   //   2. SSO with a linked subject IS a valid fallback for the lockout guard.
   //   3. Toggling plexLoginEnabled off when SSO is the only remaining method
   //      must work without tripping the lockout guard.
-
-  it("reports localAuthHiddenBySso=true when SSO is usable", async () => {
-    const user = await createTestUser();
-    await prisma.appSettings.create({
-      data: {
-        userId: user.id,
-        localAuthEnabled: true,
-        ssoEnabled: true,
-        ssoMode: "OIDC",
-        oidcIssuer: "https://idp.example.com",
-        oidcClientId: "client",
-      },
-    });
-    setMockSession({ isLoggedIn: true, userId: user.id});
-
-    const res = await callRoute(GET);
-    const body = await expectJson<{ localAuthHiddenBySso: boolean; passwordSignInEnabled: boolean }>(res);
-    expect(body.localAuthHiddenBySso).toBe(true);
-    // SSO replaces the local form, so the password is accepted for nothing.
-    expect(body.passwordSignInEnabled).toBe(false);
-  });
 
   it("allows disabling Plex login when SSO is the fallback", async () => {
     const user = await createTestUser({ plexId: "p1" });
@@ -151,6 +154,7 @@ describe("PUT /api/settings/auth", () => {
     });
     const body = await expectJson<{ plexLoginEnabled: boolean }>(res);
     expect(body.plexLoginEnabled).toBe(false);
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.plexLoginEnabled).toBe(false);
   });
 
   it("rejects disabling Plex login when SSO is the only fallback but unlinked", async () => {
@@ -176,6 +180,22 @@ describe("PUT /api/settings/auth", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toMatch(/no way to sign in/);
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.plexLoginEnabled).toBe(true);
+  });
+
+  it("rejects turning local login off when it is the only way in", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { plexId: null, passwordHash: "hashed_existing", localUsername: "testuser" },
+    });
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const res = await callRoute(PUT, { method: "PUT", body: { localAuthEnabled: false } });
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toMatch(/no way to sign in/);
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.localAuthEnabled).toBe(true);
   });
 
   it("refuses to enable local auth without a passwordHash set", async () => {
@@ -189,6 +209,7 @@ describe("PUT /api/settings/auth", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toMatch(/Set a local password first/);
+    expect(await prisma.appSettings.count()).toBe(0);
   });
 
   it("updates localAuthEnabled to true", async () => {
@@ -262,8 +283,11 @@ describe("PUT /api/settings/auth", () => {
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
 
     // SSO hides the local form, so the password stays off: nothing to confirm.
+    const stored = async () => (await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.localAuthEnabled;
     await expectJson(await callRoute(PUT, { method: "PUT", body: { localAuthEnabled: true } }), 200);
+    expect(await stored()).toBe(true);
     await expectJson(await callRoute(PUT, { method: "PUT", body: { localAuthEnabled: false } }), 200);
+    expect(await stored()).toBe(false);
   });
 
   // Plex login is turned off where a household shares the Plex account:
@@ -307,8 +331,12 @@ describe("PUT /api/settings/auth", () => {
     it("lets a stale session turn it off, or on with no Plex account linked", async () => {
       const unlinked = await seed(null);
       setMockSession({ isLoggedIn: true, userId: unlinked.id, authenticatedAt: STALE });
+      const stored = async () =>
+        (await prisma.appSettings.findUnique({ where: { userId: unlinked.id } }))?.plexLoginEnabled;
       await expectJson(await callRoute(PUT, { method: "PUT", body: { plexLoginEnabled: true } }), 200);
+      expect(await stored()).toBe(true);
       await expectJson(await callRoute(PUT, { method: "PUT", body: { plexLoginEnabled: false } }), 200);
+      expect(await stored()).toBe(false);
     });
 
     it("asks nothing under SSO_DISABLE_OVERRIDE, which already accepts a Plex login", async () => {
@@ -320,6 +348,7 @@ describe("PUT /api/settings/auth", () => {
       } finally {
         vi.unstubAllEnvs();
       }
+      expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.plexLoginEnabled).toBe(true);
     });
   });
 
@@ -341,5 +370,6 @@ describe("PUT /api/settings/auth", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.localAuthEnabled).toBe(true);
   });
 });

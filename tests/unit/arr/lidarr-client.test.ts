@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { LidarrClient } from "@/lib/arr/lidarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("LidarrClient", () => {
   let client: LidarrClient;
@@ -49,21 +48,25 @@ describe("LidarrClient", () => {
   describe("testConnection", () => {
     it("returns ok when Lidarr responds correctly", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Lidarr", version: "2.0.0" },
+        data: { appName: "Lidarr", instanceName: "Lidarr", version: "2.9.6.4552" },
       });
       const result = await client.testConnection();
-      expect(result).toEqual({ ok: true, appName: "Lidarr", version: "2.0.0" });
+      expect(result).toEqual({ ok: true, appName: "Lidarr", version: "2.9.6.4552" });
       // The connection test opts out of transport retries (NO_RETRY).
       expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/system/status", { __noRetry: true });
     });
 
     it("returns error when appName is wrong", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { appName: "Radarr", version: "5.0.0" },
+        data: { appName: "Radarr", instanceName: "Radarr", version: "5.14.0.9383" },
       });
       const result = await client.testConnection();
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("Radarr");
+      expect(result).toEqual({
+        ok: false,
+        error: "Expected Lidarr but connected to Radarr",
+        appName: "Radarr",
+        version: "5.14.0.9383",
+      });
     });
 
     it("returns error on network failure", async () => {
@@ -75,7 +78,7 @@ describe("LidarrClient", () => {
 
   describe("getArtists", () => {
     it("returns array of artists", async () => {
-      const artists = [{ id: 1, artistName: "Artist 1" }];
+      const artists = [{ id: 1, artistName: "Radiohead", foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: artists });
       const result = await client.getArtists();
       expect(result).toEqual(artists);
@@ -85,7 +88,7 @@ describe("LidarrClient", () => {
 
   describe("getArtistById", () => {
     it("fetches a single artist", async () => {
-      const artist = { id: 10, artistName: "Test Artist" };
+      const artist = { id: 10, artistName: "Radiohead", foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: artist });
       const result = await client.getArtistById(10);
       expect(result).toEqual(artist);
@@ -94,32 +97,36 @@ describe("LidarrClient", () => {
   });
 
   describe("getArtistByMusicBrainzId", () => {
-    it("returns artist when found", async () => {
+    const RADIOHEAD = "a74b1b7f-71a5-4011-9441-d0b5e4122711";
+    const DAFT_PUNK = "056e4f3e-d505-4dad-8ec1-d04f521cbb56";
+
+    it("returns the artist carrying the id, asking Lidarr to filter by it", async () => {
       const artists = [
-        { id: 1, foreignArtistId: "mb-abc", artistName: "A" },
-        { id: 2, foreignArtistId: "mb-xyz", artistName: "B" },
+        { id: 1, foreignArtistId: DAFT_PUNK, artistName: "Daft Punk" },
+        { id: 2, foreignArtistId: RADIOHEAD, artistName: "Radiohead" },
       ];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: artists });
-      const result = await client.getArtistByMusicBrainzId("mb-xyz");
-      expect(result?.id).toBe(2);
+      const result = await client.getArtistByMusicBrainzId(RADIOHEAD);
+      expect(result).toEqual(artists[1]);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/artist", { params: { mbId: RADIOHEAD } });
     });
 
     it("returns null when not found", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: [] });
-      const result = await client.getArtistByMusicBrainzId("nonexistent");
+      const result = await client.getArtistByMusicBrainzId("8c538f11-c141-4588-8ecb-931083524186");
       expect(result).toBeNull();
     });
 
     it("accepts the one artist Lidarr answers for a merged (old) MusicBrainz id", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, foreignArtistId: "mb-new" }] });
-      expect((await client.getArtistByMusicBrainzId("mb-old"))?.id).toBe(1);
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, foreignArtistId: RADIOHEAD }] });
+      expect((await client.getArtistByMusicBrainzId("0f3f1e5c-8a4e-4b2a-9d6b-3c1e7a2f9b10"))?.id).toBe(1);
     });
 
     it("never picks an arbitrary artist when the filter was ignored", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [{ id: 1, foreignArtistId: "mb-abc" }, { id: 2, foreignArtistId: "mb-def" }],
+        data: [{ id: 1, foreignArtistId: RADIOHEAD }, { id: 2, foreignArtistId: DAFT_PUNK }],
       });
-      expect(await client.getArtistByMusicBrainzId("mb-other")).toBeNull();
+      expect(await client.getArtistByMusicBrainzId("8c538f11-c141-4588-8ecb-931083524186")).toBeNull();
     });
   });
 
@@ -135,24 +142,35 @@ describe("LidarrClient", () => {
 
   describe("updateArtist", () => {
     it("merges current with update and puts", async () => {
-      const current = { id: 5, artistName: "Artist", monitored: true };
-      const updated = { id: 5, artistName: "Artist", monitored: false };
+      const current = { id: 5, artistName: "Radiohead", monitored: true, qualityProfileId: 1, tags: [3] };
+      const updated = { ...current, monitored: false };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: current });
       mockAxiosInstance.put.mockResolvedValueOnce({ data: updated });
 
       const result = await client.updateArtist(5, { monitored: false });
       expect(result).toEqual(updated);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/artist/5");
+      // The whole resource goes back, with only the changed field replaced.
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/5", updated);
+    });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, artistName: "Radiohead", monitored: true, qualityProfileId: 1, tags: [3] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: current });
+      await client.updateArtist(5, { qualityProfileId: 2 }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/5", { ...current, qualityProfileId: 2 });
     });
   });
 
-  describe("getTrackFiles", () => {
-    it("fetches track files for artist", async () => {
-      const files = [{ id: 1, artistId: 5 }];
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: files });
-      const result = await client.getTrackFiles(5);
-      expect(result).toEqual(files);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/trackfile", {
-        params: { artistId: 5 },
+  describe("removeTagsFromArtists", () => {
+    it("removes the tags through the v1 artist bulk editor", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromArtists([9], [3]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/editor", {
+        artistIds: [9],
+        tags: [3],
+        applyTags: "remove",
       });
     });
   });
@@ -178,6 +196,7 @@ describe("LidarrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: profiles });
       const result = await client.getQualityProfiles();
       expect(result).toEqual(profiles);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/qualityprofile");
     });
   });
 
@@ -192,46 +211,13 @@ describe("LidarrClient", () => {
     });
   });
 
-  describe("getQueue", () => {
-    it("does not report a completed (inactive) record as downloading", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ artistId: 1, status: "completed" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: "completed" });
-    });
-
-    it("ignores another item's active download and sends artistIds unbracketed", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ artistId: 2, status: "downloading" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        params: expect.objectContaining({ artistIds: [1] }),
-        paramsSerializer: { indexes: null },
-      }));
-    });
-
-    it("returns not downloading when no records", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("returns not downloading on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-  });
-
   describe("getTags", () => {
     it("returns tags", async () => {
       const tags = [{ id: 1, label: "test" }];
       mockAxiosInstance.get.mockResolvedValueOnce({ data: tags });
       const result = await client.getTags();
       expect(result).toEqual(tags);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tag");
     });
   });
 
@@ -241,6 +227,7 @@ describe("LidarrClient", () => {
       mockAxiosInstance.post.mockResolvedValueOnce({ data: tag });
       const result = await client.createTag("new");
       expect(result).toEqual(tag);
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v1/tag", { label: "new" });
     });
   });
 
@@ -252,23 +239,26 @@ describe("LidarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Lidarr", {
-        config: { url: "/api/v1/importlistexclusion", method: "post" },
-        response: { status: 400, data: [{ propertyName: "ForeignId", errorMessage: "This exclusion has already been added." }] },
-        code: "ERR_BAD_REQUEST",
-      } as never));
-      await expect(client.addExclusion("mb-abc", "A")).resolves.toBeUndefined();
-    });
+  describe("getAlbums / getTracks", () => {
+    it("scopes both listings to one artist", async () => {
+      const albums = [{ id: 3, title: "OK Computer" }];
+      const tracks = [{ id: 30, albumId: 3, trackFileId: 300, title: "Airbag", hasFile: true, trackNumber: "1" }];
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: albums });
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: tracks });
 
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion("foreign-123", "Test Artist");
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v1/importlistexclusion", {
-        foreignId: "foreign-123",
-        artistName: "Test Artist",
-      });
+      expect(await client.getAlbums(7)).toEqual(albums);
+      expect(await client.getTracks(7)).toEqual(tracks);
+      expect(mockAxiosInstance.get).toHaveBeenNthCalledWith(1, "/api/v1/album", { params: { artistId: 7 } });
+      expect(mockAxiosInstance.get).toHaveBeenNthCalledWith(2, "/api/v1/track", { params: { artistId: 7 } });
+    });
+  });
+
+  describe("getMediaManagementConfig", () => {
+    it("reads the recycle bin settings without transport retries", async () => {
+      const config = { recycleBin: "/music/.recycle", recycleBinCleanupDays: 7 };
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: config });
+      expect(await client.getMediaManagementConfig()).toEqual(config);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/config/mediamanagement", { __noRetry: true });
     });
   });
 });

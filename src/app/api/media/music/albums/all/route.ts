@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
+import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 import { audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
+import type { Prisma } from "@/generated/prisma/client";
 
 const UNKNOWN_ALBUM = "Unknown Album";
 const UNKNOWN_ARTIST = "Unknown Artist";
@@ -40,23 +46,20 @@ interface AlbumRepresentativeRow {
   summary: string | null;
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serverId = searchParams.get("serverId");
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "albumTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";
-  const limitParam = searchParams.get("limit");
-  const pageParam = searchParams.get("page");
+  // The shared parser, as on the artist listing beside it: this route read
+  // `limit` with a bare parseInt, so `limit=-1` sliced to nothing and answered
+  // `hasMore: true` forever, nothing capped a page, and `offset` was ignored.
+  const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
-    return NextResponse.json({ albums: [], pagination: { page: 1, limit: 50, hasMore: false } });
+    return NextResponse.json({ albums: [], pagination: { page, limit, hasMore: false } });
   }
 
   // Aggregated in SQL, like the artist and series listings: this loaded every
@@ -73,6 +76,36 @@ export async function GET(request: NextRequest) {
   if (search) {
     params.push(escapeLike(search));
     conditions.push(`(mi."albumTitle" ILIKE '%' || $${params.length} || '%' OR mi."parentTitle" ILIKE '%' || $${params.length} || '%')`);
+  }
+  // The library filters the Albums tab sends (genre, codec, year, …) were
+  // ignored entirely: the page forwarded every one and this route read only
+  // the search. Applied as the artist listing applies them — the same tab
+  // strip, so the two must agree: Prisma resolves the matching tracks
+  // (`applyCommonFilters` builds a where with no SQL form here) and every
+  // album aggregate runs over those.
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, searchParams, genreSpellings, resolutionSpellings);
+  if (Object.keys(narrowing).length > 0) {
+    const matching = await prisma.mediaItem.findMany({
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "MUSIC",
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+      select: { id: true },
+    });
+    params.push(matching.map((r) => r.id));
+    conditions.push(`mi.id = ANY($${params.length}::text[])`);
   }
   const scope = `
       FROM "MediaItem" mi
@@ -196,25 +229,18 @@ export async function GET(request: NextRequest) {
     }
   });
 
-  // Pagination
-  const parsedLimit = limitParam !== null ? parseInt(limitParam, 10) : 50;
-  const limit = Number.isNaN(parsedLimit) ? 50 : parsedLimit;
-  const page = pageParam !== null ? Math.max(1, parseInt(pageParam, 10) || 1) : 1;
-
-  if (limit === 0) {
-    return jsonResponse(request, {
-      albums,
-      pagination: { page: 1, limit: 0, hasMore: false },
-    });
+  if (limit > 0) {
+    const fetched = albums.slice(skip, skip + limit + 1);
+    const hasMore = fetched.length > limit;
+    if (hasMore) fetched.pop();
+    return jsonResponse(request, { albums: fetched, pagination: { page, limit, hasMore } });
   }
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, { albums: albums.slice(skip), pagination: { page, limit, hasMore: false } });
+});
 
-  const start = (page - 1) * limit;
-  const fetched = albums.slice(start, start + limit + 1);
-  const hasMore = fetched.length > limit;
-  if (hasMore) fetched.pop();
-
-  return jsonResponse(request, {
-    albums: fetched,
-    pagination: { page, limit, hasMore },
-  });
-}
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-music-albums-all", listGet);

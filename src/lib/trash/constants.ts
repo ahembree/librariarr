@@ -1,10 +1,10 @@
-import type { ServiceType, ResourceType } from "./types";
+import type { ServiceType } from "./types";
 
 /**
  * Source repository for the guide JSON. Overridable via env so an operator can
  * point at a fork or an internal mirror. Defaults to the upstream guides repo.
  */
-export const TRASH_REPO = process.env.TRASH_GUIDES_REPO || "TRaSH-Guides/Guides";
+const TRASH_REPO = process.env.TRASH_GUIDES_REPO || "TRaSH-Guides/Guides";
 export const TRASH_REF = process.env.TRASH_GUIDES_REF || "master";
 
 /** GitHub tree API — one request lists every file in the repo. */
@@ -30,11 +30,11 @@ export function servicePaths(service: ServiceType) {
 }
 
 /** Catalog cache: guide content changes rarely, so cache for hours. */
-export const CATALOG_CACHE_PREFIX = "trash-catalog:";
+const CATALOG_CACHE_PREFIX = "trash-catalog:";
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 // Bump when the parsed catalog shape changes so a running process doesn't serve
 // a stale cached catalog missing new fields (e.g. cfGroups / categories).
-export const CATALOG_SCHEMA_VERSION = 2;
+const CATALOG_SCHEMA_VERSION = 2;
 
 export function catalogCacheKey(service: ServiceType): string {
   return `${CATALOG_CACHE_PREFIX}v${CATALOG_SCHEMA_VERSION}:${TRASH_REPO}@${TRASH_REF}:${service}`;
@@ -42,11 +42,3 @@ export function catalogCacheKey(service: ServiceType): string {
 
 /** Bounded concurrency when fetching many small raw files. */
 export const FETCH_CONCURRENCY = 12;
-
-export const RESOURCE_LABELS: Record<ResourceType, string> = {
-  CUSTOM_FORMAT: "Custom Format",
-  QUALITY_PROFILE: "Quality Profile",
-  QUALITY_DEFINITION: "Quality Definition",
-  NAMING: "Naming Scheme",
-  PROFILE_CF: "Profile Custom Formats",
-};

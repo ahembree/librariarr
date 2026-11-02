@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { eventBus } from "@/lib/events/event-bus";
 import type { AppEvent } from "@/lib/events/event-bus";
 
 export const dynamic = "force-dynamic";
 
-const HEARTBEAT_INTERVAL = 30000;
+// Under the 30s idle timeout common to reverse proxies, which a 30s heartbeat
+// raced: the proxy closed the stream just before each heartbeat arrived.
+const HEARTBEAT_INTERVAL = 15000;
 const MAX_STREAM_LIFETIME = 3600000; // 1 hour safety limit
 
 /**
@@ -22,13 +24,8 @@ export async function HEAD() {
   return new Response(null, { status: session.isLoggedIn ? 200 : 401 });
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const userId = session.userId!;
+export const GET = withSession(async (session) => {
+  const userId = session.userId;
   let closed = false;
   // Idempotent teardown — assigned in start(); called directly from cancel()
   // and the lifetime timer so the eventBus subscription + timers are released
@@ -55,8 +52,10 @@ export async function GET() {
         send(event.type, { timestamp: event.timestamp, ...event.meta });
       });
 
-      // Send initial connected event
-      send("connected", { timestamp: Date.now() });
+      // Send initial connected event. `lastEventAtByType` lets a page rendered
+      // with its data on the server tell which events went out before this
+      // stream was there to deliver them (see `resyncIfEventsSince`).
+      send("connected", { timestamp: Date.now(), lastEventAtByType: eventBus.lastEventAtByType() });
 
       // Heartbeat to keep connection alive
       const heartbeatTimer = setInterval(() => {
@@ -106,4 +105,4 @@ export async function GET() {
       "X-Accel-Buffering": "no",
     },
   });
-}
+});

@@ -17,7 +17,8 @@ function principal(overrides: Partial<ApiKeyPrincipal> = {}): ApiKeyPrincipal {
   };
 }
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+/** Cross into a later macrotask, where only the async context still says who is calling. */
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 describe("API key principal", () => {
   it("exists only inside runAsApiKey", async () => {
@@ -65,6 +66,7 @@ describe("apiKeySession", () => {
     expect(session.userId).toBe("user-1");
     expect("plexToken" in session).toBe(false);
     expect(session.sessionVersion).toBeUndefined();
+    expect(Object.keys(session).sort()).toEqual(["destroy", "isLoggedIn", "save", "updateConfig", "userId"]);
   });
 
   it("refuses every cookie write", async () => {

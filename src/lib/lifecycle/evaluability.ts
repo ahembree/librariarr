@@ -26,7 +26,7 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
  * This is the single policy point for the guard — the detection paths log
  * the reason and skip, the preview/test/diff routes return it as a 400.
  */
-export type RuleEvaluability =
+type RuleEvaluability =
   | { evaluable: true }
   | { evaluable: false; reason: string; permanent: boolean };
 

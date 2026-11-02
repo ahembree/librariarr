@@ -54,12 +54,27 @@ describe("actionConfigSignature", () => {
     );
   });
 
-  it("differs when searchAfterAction or addImportExclusion change", () => {
+  it("differs when searchAfterAction changes", () => {
     expect(actionConfigSignature(base)).not.toBe(
       actionConfigSignature({ ...base, searchAfterAction: true }),
     );
-    expect(actionConfigSignature(base)).not.toBe(
-      actionConfigSignature({ ...base, addImportExclusion: true }),
+  });
+
+  it("differs when addImportExclusion changes on a whole-record delete", () => {
+    const del = { ...base, actionType: "DELETE_RADARR" };
+    expect(actionConfigSignature(del)).not.toBe(
+      actionConfigSignature({ ...del, addImportExclusion: true }),
     );
+  });
+
+  it("ignores addImportExclusion on an action that adds no exclusion", () => {
+    // A rule set switched from a delete kept the hidden flag; saving it now
+    // clears it, and that must not re-fire every completed unmonitor.
+    for (const actionType of ["DO_NOTHING", "UNMONITOR_RADARR", "DELETE_FILES_SONARR"]) {
+      const cfg = { ...base, actionType };
+      expect(actionConfigSignature(cfg)).toBe(
+        actionConfigSignature({ ...cfg, addImportExclusion: true }),
+      );
+    }
   });
 });

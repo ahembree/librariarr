@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { SeerrClient, type SeerrMediaInfo, type SeerrRequest } from "@/lib/seerr/seerr-client";
 import { walkSeerrRequests } from "@/lib/seerr/request-walk";
 import { seerrRequesterName } from "@/lib/seerr/seerr-data-map";
 import { apiLogger } from "@/lib/logger";
 import { withTimeout } from "@/lib/api/bounded";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 interface SeerrRequestSummary {
   id: number;
@@ -86,31 +87,22 @@ function pickMediaStatus(media: SeerrMediaInfo | null | undefined, requests: See
 // the bound is looser than the health check's 5s.
 const PER_INSTANCE_TIMEOUT_MS = 10_000;
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
-  const item = await prisma.mediaItem.findUnique({
-    where: { id },
+  const item = await prisma.mediaItem.findFirst({
+    where: { id, library: { mediaServer: { userId: session.userId } } },
     include: {
       externalIds: true,
-      library: { include: { mediaServer: true } },
     },
   });
 
   if (!item) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  if (!item.library.mediaServer || item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const empty: SeerrInfoResponse = { matches: [] };
@@ -131,7 +123,7 @@ export async function GET(
   const externalId = item.type === "MOVIE" ? tmdbId! : (tvdbId ?? tmdbId)!;
 
   const seerrInstances = await prisma.seerrInstance.findMany({
-    where: { userId: session.userId!, enabled: true },
+    where: { userId: session.userId, enabled: true },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
@@ -172,7 +164,7 @@ export async function GET(
       // The browser follows this link, so prefer the browser-facing URL. Seerr
       // pages are keyed by TMDB id; a series matched through its TVDB id alone
       // still has one — on the Seerr media the requests belong to.
-      const baseUrl = (instance.externalUrl || instance.url || "").replace(/\/+$/, "");
+      const baseUrl = stripTrailingSlashes(instance.externalUrl || instance.url || "");
       const linkTmdbId = tmdbId ?? (media?.tmdbId != null ? String(media.tmdbId) : null);
       const seerrUrl = linkTmdbId ? `${baseUrl}/${mediaType}/${linkTmdbId}` : null;
 
@@ -208,4 +200,4 @@ export async function GET(
   const matches = settled.filter((m): m is SeerrMatch => m !== null);
 
   return NextResponse.json({ matches });
-}
+});

@@ -24,8 +24,11 @@ describe("tracearr import activity", () => {
   });
 
   it("reports a started import before its first page, with no pass yet", () => {
+    const before = Date.now();
     begin("srv-1");
-    expect(getTracearrImportActivity("srv-1")).toMatchObject({
+    const activity = getTracearrImportActivity("srv-1");
+    expect(Date.parse(activity!.startedAt)).toBeGreaterThanOrEqual(before);
+    expect(activity).toMatchObject({
       pass: null,
       pages: 0,
       imported: 0,
@@ -70,9 +73,12 @@ describe("tracearr import activity", () => {
 
   it("keeps servers independent", () => {
     const first = begin("srv-1");
-    begin("srv-2");
+    const second = begin("srv-2");
+    recordTracearrImportPage(first, { pass: "backfill", pages: 9, imported: 800, oldestReached: null });
+    recordTracearrImportPage(second, { pass: "forward", pages: 2, imported: 30, oldestReached: null });
     endTracearrImport(first);
-    expect(getTracearrImportActivity("srv-2")).not.toBeNull();
+    expect(getTracearrImportActivity("srv-1")).toBeNull();
+    expect(getTracearrImportActivity("srv-2")).toMatchObject({ pass: "forward", pages: 2, imported: 30 });
   });
 
   describe("two runs of the same server at once", () => {
@@ -97,9 +103,11 @@ describe("tracearr import activity", () => {
 
     it("does not let the older run's end remove the newer one", () => {
       const backfill = begin("srv-1");
-      begin("srv-1");
+      const refresh = begin("srv-1");
+      recordTracearrImportPage(backfill, { pass: "backfill", pages: 40, imported: 3900, oldestReached: null });
+      recordTracearrImportPage(refresh, { pass: "forward", pages: 1, imported: 12, oldestReached: null });
       expect(endTracearrImport(backfill)).toEqual({ userId: "user-1" });
-      expect(getTracearrImportActivity("srv-1")).not.toBeNull();
+      expect(getTracearrImportActivity("srv-1")).toMatchObject({ pass: "forward", pages: 1, imported: 12 });
     });
   });
 });

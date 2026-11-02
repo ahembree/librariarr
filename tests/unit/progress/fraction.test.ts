@@ -46,10 +46,10 @@ describe("splitProgress", () => {
     b(1); //   (0.5 + 1)/3
     a(1); //   (1 + 1)/3
     c(1); //   (1 + 1 + 1)/3
+    expect(values).toEqual([0.5 / 3, 1.5 / 3, 2 / 3, 1]);
     for (let i = 1; i < values.length; i++) {
       expect(values[i]).toBeGreaterThanOrEqual(values[i - 1]);
     }
-    expect(values[values.length - 1]).toBe(1);
   });
 
   it("produces working no-op reporters when there is no parent", () => {

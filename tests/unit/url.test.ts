@@ -69,13 +69,33 @@ describe("getExternalBaseUrl", () => {
     expect(getExternalBaseUrl(req)).toBe("http://192.168.1.50:3000");
   });
 
-  it("no explicit Host header — NextRequest synthesises one from the URL", () => {
+  it("no Host header — falls back to the request URL's own host", () => {
+    // NextRequest sends no Host header of its own, and its URL normalises a
+    // loopback address to "localhost".
     const req = makeRequest("http://127.0.0.1:3000/dashboard");
-    // NextRequest always synthesises a host header from the URL, so the
-    // fallback to parsing request.url.host is never actually reached.
-    // We just verify the result is a valid base URL derived from the request.
-    const result = getExternalBaseUrl(req);
-    expect(result).toMatch(/^http:\/\/.+:3000$/);
+    expect(req.headers.get("host")).toBeNull();
+    expect(getExternalBaseUrl(req)).toBe("http://localhost:3000");
+  });
+
+  // -- A proxy passing client-supplied X-Forwarded-* through verbatim --
+
+  it("ignores a forwarded proto that is not http or https", () => {
+    const req = makeRequest("http://127.0.0.1:3000/dashboard", {
+      "x-forwarded-proto": "javascript",
+      "x-forwarded-host": "app.example.com",
+    });
+    expect(getExternalBaseUrl(req)).toBe("http://app.example.com");
+  });
+
+  it("ignores a forwarded host carrying a path, whitespace or an unbalanced bracket", () => {
+    for (const host of ["evil.example/login", "evil.example extra", "[::1"]) {
+      // The app container as the proxy reaches it.
+      const req = makeRequest("http://librariarr:3000/dashboard", {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": host,
+      });
+      expect(getExternalBaseUrl(req), host).toBe("https://librariarr:3000");
+    }
   });
 });
 

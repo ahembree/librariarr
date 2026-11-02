@@ -12,6 +12,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     lifecycleAction: {
       findMany: vi.fn(),
     },
+    $queryRawUnsafe: vi.fn(),
   },
 }));
 
@@ -19,16 +20,17 @@ vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
 }));
 
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 
 describe("fetchCrossSystemData", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: no rows in any table so individual tests can override per-call.
     mockPrisma.mediaItem.findMany.mockResolvedValue([]);
     mockPrisma.mediaItem.groupBy.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
   });
 
   it("returns an empty map and queries nothing for empty input", async () => {
@@ -144,6 +146,23 @@ describe("fetchCrossSystemData", () => {
     expect(result.get("b")?.matchedRuleSets).toEqual(["Leaving Soon"]);
   });
 
+  it("counts the requested members of a series/artist match, reading each member list whole", async () => {
+    // A show match is stored on one representative episode and lists every
+    // episode it covers in itemData.memberIds; the query takes no id list
+    // (joining a whole library's ids in SQL triggered Postgres JIT).
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { memberIds: ["rep", "b", "unrequested"], name: "Keep" },
+      { memberIds: ["b", 42, null], name: "Leaving Soon" },
+    ]);
+
+    const result = await fetchCrossSystemData(["b", "c"]);
+
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledWith(expect.any(String));
+    expect(result.get("b")?.matchedRuleSets).toEqual(["Keep", "Leaving Soon"]);
+    expect(result.get("c")?.matchedRuleSets).toEqual([]);
+    expect(result.has("unrequested")).toBe(false);
+  });
+
   it("skips rule matches with empty rule set names", async () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
       { mediaItemId: "a", ruleSet: { name: "" } },
@@ -164,21 +183,105 @@ describe("fetchCrossSystemData", () => {
 
   it("flags items with a pending lifecycle action", async () => {
     mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
-      { mediaItemId: "a" },
-      { mediaItemId: null }, // null mediaItemId is skipped
-      { mediaItemId: "ghost" }, // not in requested ids
+      { ruleSetId: "rs", mediaItemId: "a", matchedMediaItemIds: [] },
+      { ruleSetId: "rs", mediaItemId: null, matchedMediaItemIds: [] }, // null mediaItemId is skipped
+      { ruleSetId: "rs", mediaItemId: "ghost", matchedMediaItemIds: [] }, // not in requested ids
     ]);
 
     const result = await fetchCrossSystemData(["a", "b"]);
 
     expect(result.get("a")?.hasPendingAction).toBe(true);
     expect(result.get("b")?.hasPendingAction).toBe(false);
+    expect(result.has("ghost")).toBe(false);
+
+    // Every pending action is read whole: none of the requested ids is a bind parameter.
+    expect(mockPrisma.lifecycleAction.findMany).toHaveBeenCalledWith({
+      where: { status: "PENDING" },
+      select: { ruleSetId: true, mediaItemId: true, matchedMediaItemIds: true },
+    });
+  });
+
+  it("flags the requested members of a pending grouped action", async () => {
+    // A show/artist action is stored against one representative and names the
+    // episodes/tracks it acts on in matchedMediaItemIds.
+    mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
+      { ruleSetId: "rs", mediaItemId: "rep", matchedMediaItemIds: ["rep", "b", "unrequested"] },
+    ]);
+
+    const result = await fetchCrossSystemData(["rep", "b", "c"]);
+
+    expect(result.get("rep")?.hasPendingAction).toBe(true);
+    expect(result.get("b")?.hasPendingAction).toBe(true);
+    expect(result.get("c")?.hasPendingAction).toBe(false);
+    expect(result.has("unrequested")).toBe(false);
+  });
+
+  it("leaves the evaluating rule set's own actions out", async () => {
+    await fetchCrossSystemData(["a"], { excludeRuleSetId: "own" });
 
     expect(mockPrisma.lifecycleAction.findMany).toHaveBeenCalledWith({
-      where: { mediaItemId: { in: ["a", "b"], not: null }, status: "PENDING" },
-      select: { mediaItemId: true },
-      distinct: ["mediaItemId"],
+      where: { status: "PENDING", OR: [{ ruleSetId: null }, { ruleSetId: { not: "own" } }] },
+      select: { ruleSetId: true, mediaItemId: true, matchedMediaItemIds: true },
     });
+  });
+
+  it("flags the copies a held match lists when its action is pending", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
+      { ruleSetId: "rs", mediaItemId: "kept", matchedMediaItemIds: [] },
+    ]);
+    // ruleMatch.findMany: requested ids, copyIds overlap, then the held matches with copies.
+    mockPrisma.ruleMatch.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { ruleSetId: "rs", mediaItemId: "kept", copyIds: ["copy"] },
+        { ruleSetId: "other", mediaItemId: "kept", copyIds: ["not-pending"] },
+      ]);
+
+    const result = await fetchCrossSystemData(["copy", "not-pending"]);
+
+    expect(result.get("copy")?.hasPendingAction).toBe(true);
+    expect(result.get("not-pending")?.hasPendingAction).toBe(false);
+  });
+
+  it("flags an item whose other copy (same dedupKey) has a pending action", async () => {
+    // "b" is another server's copy of "a"; the action on "a" acts on the one
+    // Arr record both copies are backed by.
+    mockPrisma.mediaItem.findMany
+      .mockResolvedValueOnce([
+        { id: "b", dedupKey: "k1" },
+        { id: "c", dedupKey: "k2" },
+      ])
+      .mockResolvedValueOnce([{ dedupKey: "k1" }]);
+    mockPrisma.mediaItem.groupBy.mockResolvedValueOnce([
+      { dedupKey: "k1", _count: { id: 2 } },
+      { dedupKey: "k2", _count: { id: 1 } },
+    ]);
+    mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
+      { ruleSetId: "rs", mediaItemId: "a", matchedMediaItemIds: [] },
+    ]);
+
+    const result = await fetchCrossSystemData(["b", "c"]);
+
+    expect(result.get("b")?.hasPendingAction).toBe(true);
+    expect(result.get("c")?.hasPendingAction).toBe(false);
+    // Only the pending items' keys are read, never the requested library's.
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenLastCalledWith({
+      where: { id: { in: ["a"] }, dedupKey: { not: null } },
+      select: { dedupKey: true },
+    });
+  });
+
+  it("splits a server-count lookup past the bind-parameter limit", async () => {
+    const ids = Array.from({ length: 25_000 }, (_, i) => `id-${i}`);
+    mockPrisma.mediaItem.findMany.mockResolvedValueOnce(ids.map((id) => ({ id, dedupKey: `k-${id}` })));
+
+    await fetchCrossSystemData(ids);
+
+    const chunks = mockPrisma.mediaItem.groupBy.mock.calls.map(
+      ([args]) => (args as { where: { dedupKey: { in: string[] } } }).where.dedupKey.in.length,
+    );
+    expect(chunks).toEqual([10_000, 10_000, 5_000]);
   });
 
   it("combines all three enrichment sources for the same item", async () => {
@@ -192,7 +295,7 @@ describe("fetchCrossSystemData", () => {
       { mediaItemId: "a", ruleSet: { name: "Watched" } },
     ]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
-      { mediaItemId: "a" },
+      { ruleSetId: "rs", mediaItemId: "a", matchedMediaItemIds: [] },
     ]);
 
     const result = await fetchCrossSystemData(["a"]);
@@ -215,5 +318,34 @@ describe("fetchCrossSystemData", () => {
       where: { mediaItemId: { in: ["a", "b"] } },
       select: { mediaItemId: true, ruleSet: { select: { name: true } } },
     });
+  });
+});
+
+describe("foldCrossSystemData", () => {
+  const data = new Map([
+    ["e1", { serverCount: 1, matchedRuleSets: ["Keep"], hasPendingAction: false }],
+    ["e2", { serverCount: 3, matchedRuleSets: ["Keep", "Leaving Soon"], hasPendingAction: true }],
+    ["e3", { serverCount: 2, matchedRuleSets: [], hasPendingAction: false }],
+  ]);
+
+  it("reads a show as matched by any member's rule sets, pending if any member is, on its most-copied member's servers", () => {
+    expect(foldCrossSystemData(["e1", "e2", "e3"], data)).toEqual({
+      serverCount: 3,
+      matchedRuleSets: ["Keep", "Leaving Soon"],
+      hasPendingAction: true,
+    });
+  });
+
+  it("reads members with no entry as single-server, unmatched and not pending", () => {
+    expect(foldCrossSystemData(["e1", "missing"], data)).toEqual({
+      serverCount: 1,
+      matchedRuleSets: ["Keep"],
+      hasPendingAction: false,
+    });
+    expect(foldCrossSystemData([], data)).toEqual({ serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
+  });
+
+  it("is undefined when no cross-system data was fetched", () => {
+    expect(foldCrossSystemData(["e1"], undefined)).toBeUndefined();
   });
 });

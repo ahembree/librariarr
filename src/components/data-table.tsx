@@ -66,6 +66,32 @@ function formatList(items: string[]): string {
 /** Header cell width around its title: `px-3` both sides plus the 4px resize handle. */
 const HEADER_CELL_CHROME = 12 * 2 + 4;
 
+/** What the measuring, the widths and the pinned layout read of a column. */
+interface ColumnShape {
+  id: string;
+  defaultWidth: number | null;
+  alwaysPinned: boolean;
+}
+
+/**
+ * The columns' shapes as a string, so work that reads only the shape is keyed
+ * on it rather than on the `columns` array: pages build that array inline, a
+ * new one on every render, and keyed on its identity the header measuring
+ * re-observed every title, the widths and the pinned layout were rebuilt, and
+ * every row was re-sorted on each keystroke anywhere on the page.
+ */
+function columnShapeKey(columns: readonly DataTableColumn<never>[]): string {
+  return JSON.stringify(columns.map((c) => [c.id, c.defaultWidth ?? null, !!c.alwaysPinned]));
+}
+
+function parseColumnShapes(key: string): ColumnShape[] {
+  return (JSON.parse(key) as [string, number | null, boolean][]).map(([id, defaultWidth, alwaysPinned]) => ({
+    id,
+    defaultWidth,
+    alwaysPinned,
+  }));
+}
+
 export function DataTable<T>({
   columns,
   data,
@@ -88,8 +114,12 @@ export function DataTable<T>({
   const hoverSuppressedRef = useRef(false);
 
   // When controlled, use defaultSortId/defaultSortOrder as current values
-  const sortId = onSortChange ? (defaultSortId ?? "") : internalSortId;
-  const sortOrder = onSortChange ? (defaultSortOrder ?? "asc") : internalSortOrder;
+  const controlledSort = !!onSortChange;
+  const sortId = controlledSort ? (defaultSortId ?? "") : internalSortId;
+  const sortOrder = controlledSort ? (defaultSortOrder ?? "asc") : internalSortOrder;
+
+  const shapeKey = columnShapeKey(columns as readonly DataTableColumn<never>[]);
+  const shapes = useMemo(() => parseColumnShapes(shapeKey), [shapeKey]);
 
   // Each header's natural width, measured from its rendered title. A column is
   // never narrower than its title: with `table-fixed` and nowrap headers, a
@@ -114,15 +144,16 @@ export function DataTable<T>({
     const observer = new ResizeObserver(measure);
     for (const el of headerRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
-  }, [columns]);
+    // The header spans are keyed by column id: a new set of them is a new shape.
+  }, [shapeKey]);
 
   const resizeColumns = useMemo(
-    () => columns.map((c) => ({
+    () => shapes.map((c) => ({
       id: c.id,
       defaultWidth: c.defaultWidth ?? 150,
       minWidth: headerMinWidths[c.id],
     })),
-    [columns, headerMinWidths],
+    [shapes, headerMinWidths],
   );
 
   const { columnWidths, totalWidth, getResizeProps } = useColumnResize({
@@ -132,20 +163,23 @@ export function DataTable<T>({
 
   // --- Column pinning ---
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => loadPins(pinning));
-  const pinnedSet = useMemo(
-    () => new Set(pinning ? pinnedIds : []),
-    [pinning, pinnedIds],
-  );
   const pinnable = !!pinning;
+  const pinnedSet = useMemo(
+    () => new Set(pinnable ? pinnedIds : []),
+    [pinnable, pinnedIds],
+  );
   // The table's visible width, which caps how much of it pinned columns take.
   const [viewportWidth, setViewportWidth] = useState(0);
   const layout = useMemo(
     () => pinnable
-      ? arrangePinnedColumns(columns, pinnedSet, columnWidths, viewportWidth)
-      : { ordered: columns, pinnedCount: 0, offsets: {} as Record<string, number>, suspended: new Set<string>() },
-    [columns, pinnable, pinnedSet, columnWidths, viewportWidth],
+      ? arrangePinnedColumns(shapes, pinnedSet, columnWidths, viewportWidth)
+      : { ordered: shapes, pinnedCount: 0, offsets: {} as Record<string, number>, suspended: new Set<string>() },
+    [shapes, pinnable, pinnedSet, columnWidths, viewportWidth],
   );
-  const orderedColumns = layout.ordered;
+  // The layout orders shapes; the cells render from this render's columns,
+  // whose accessors may read state the previous render's did not have.
+  const columnsById = new Map(columns.map((c) => [c.id, c]));
+  const orderedColumns = layout.ordered.map((shape) => columnsById.get(shape.id)!);
   const lastPinnedId = layout.pinnedCount > 0 ? orderedColumns[layout.pinnedCount - 1].id : null;
   const togglePin = (id: string) => {
     setPinnedIds((prev) => {
@@ -163,13 +197,15 @@ export function DataTable<T>({
   const pinnedStyle = (id: string): React.CSSProperties | undefined =>
     id in layout.offsets ? { position: "sticky", left: layout.offsets[id] } : undefined;
 
+  // Keyed on the sort column's own `sortValue`, not on the whole `columns`
+  // array: a page that rebuilds its columns without changing that function
+  // gets the same order, while one whose function changed (it reads values
+  // that just loaded) is re-sorted.
+  const sortValue = controlledSort || !sortId ? undefined : columns.find((c) => c.id === sortId)?.sortValue;
   const sortedData = useMemo(() => {
     // When controlled (server-side sorting), data is already in correct order
-    if (onSortChange) return data;
-    if (!sortId) return data;
-    const col = columns.find((c) => c.id === sortId);
-    if (!col?.sortValue) return data;
-    const getValue = col.sortValue;
+    if (!sortValue) return data;
+    const getValue = sortValue;
     return [...data].sort((a, b) => {
       const aVal = getValue(a);
       const bVal = getValue(b);
@@ -181,7 +217,7 @@ export function DataTable<T>({
         : String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
       return sortOrder === "asc" ? cmp : -cmp;
     });
-  }, [data, sortId, sortOrder, columns, onSortChange]);
+  }, [data, sortOrder, sortValue]);
 
   const handleSort = (colId: string) => {
     const newOrder = sortId === colId ? (sortOrder === "asc" ? "desc" : "asc") : "asc";
@@ -215,15 +251,23 @@ export function DataTable<T>({
     }
   }, []);
 
+  // Where the table starts in the scroll element's content. Re-measured
+  // whenever that content resizes: anything above the table (the paused-pins
+  // note re-wrapping on rotation, a page's progress bar) moves it.
   useLayoutEffect(() => {
     const scrollEl = scrollElementRef.current;
     const tableEl = tableContainerRef.current;
-    if (scrollEl && tableEl) {
-      const margin = Math.round(
+    if (!scrollEl || !tableEl) return;
+    const update = () => {
+      setScrollMargin(Math.round(
         tableEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
-      );
-      setScrollMargin(margin);
-    }
+      ));
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    for (const child of Array.from(scrollEl.children)) observer.observe(child);
+    return () => observer.disconnect();
   }, [data.length]);
 
   // --- Sticky horizontal scrollbar ---
@@ -319,10 +363,19 @@ export function DataTable<T>({
     else if (e.clientX > thumbRect.right) container.scrollBy({ left: page, behavior: "smooth" });
   };
 
+  // Stable: the virtualizer rebuilds every row's measurement when it changes.
+  const getItemKey = useCallback((index: number) => keyExtractor(sortedData[index]), [keyExtractor, sortedData]);
+
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => 37,
+    // Rows are measured: a cell stacking two lines (the Query title column's
+    // title and episode line) makes a row taller than the estimate, and
+    // unmeasured the padding rows and the real rows disagreed, so the list
+    // jumped as rows scrolled in. Keyed by item so a re-sort does not apply
+    // one row's height to another.
+    getItemKey,
     overscan: 15,
     scrollMargin,
   });
@@ -472,6 +525,7 @@ export function DataTable<T>({
             const tableRow = (
               <tr
                 key={key}
+                ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
                 data-clickable={onRowClick ? "" : undefined}
                 className={cn(

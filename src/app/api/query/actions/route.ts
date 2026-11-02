@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionCanScopeToEpisodes, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { ARR_FAMILY_FOR_TYPE, ARR_TYPE_FOR_FAMILY, familyOfArrInstance, findArrInstance } from "@/lib/arr/instances";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
-import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
+import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
+import { beginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
 import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
@@ -25,6 +27,7 @@ import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 import { collapseActionItems } from "@/lib/query/collapse-actions";
+import { actedRecords, markRecordsActed } from "@/lib/query/run-records";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -46,41 +49,23 @@ function familyFromActionType(actionType: string): MediaType | null {
 }
 
 /** The user's Arr instance of the family serving `type`, or null. */
-async function findArrInstance(
+function findUserArrInstance(
   arrInstanceId: string,
   userId: string,
   type: MediaType,
 ): Promise<{ id: string; name: string; enabled: boolean } | null> {
-  const where = { id: arrInstanceId, userId };
-  const select = { id: true, name: true, enabled: true } as const;
-  if (type === "MOVIE") return prisma.radarrInstance.findFirst({ where, select });
-  if (type === "SERIES") return prisma.sonarrInstance.findFirst({ where, select });
-  return prisma.lidarrInstance.findFirst({ where, select });
-}
-
-/** Confirm an Arr instance belongs to the user and matches the expected media type. */
-async function arrInstanceMatchesType(
-  arrInstanceId: string,
-  userId: string,
-  type: MediaType,
-): Promise<boolean> {
-  return (await findArrInstance(arrInstanceId, userId, type)) !== null;
+  return findArrInstance(ARR_FAMILY_FOR_TYPE[type], { id: arrInstanceId, userId }, { id: true, name: true, enabled: true });
 }
 
 /** Find which Arr family an instance belongs to (for DO_NOTHING tag-only ops). */
 async function typeForArrInstance(arrInstanceId: string, userId: string): Promise<MediaType | null> {
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "MOVIE")) return "MOVIE";
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "SERIES")) return "SERIES";
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "MUSIC")) return "MUSIC";
-  return null;
+  // The three tables are probed together; ids are per table, so one answers.
+  const found = await familyOfArrInstance(arrInstanceId, userId);
+  return found ? ARR_TYPE_FOR_FAMILY[found.family] : null;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = session.userId!;
+export const POST = withSession(async (session, request: NextRequest) => {
+  const userId = session.userId;
 
   const { data, error } = await validateRequest(request, queryActionSchema);
   if (error) return error;
@@ -105,6 +90,10 @@ export async function POST(request: NextRequest) {
 
   const hasTagOps = addArrTags.length > 0 || removeArrTags.length > 0;
 
+  if (hasTagOps && deletesArrRecord(actionType)) {
+    return NextResponse.json({ error: "Tags can't be changed by an action that deletes the whole Arr record" }, { status: 400 });
+  }
+
   if (actionType === "DO_NOTHING" && !hasTagOps) {
     return NextResponse.json({ error: "No action configured" }, { status: 400 });
   }
@@ -123,7 +112,7 @@ export async function POST(request: NextRequest) {
   // instance belongs to the user and the correct family.
   let targetType = familyFromActionType(actionType);
   if (targetType) {
-    if (arrInstanceId && !(await arrInstanceMatchesType(arrInstanceId, userId, targetType))) {
+    if (arrInstanceId && !(await findUserArrInstance(arrInstanceId, userId, targetType))) {
       return NextResponse.json({ error: "Arr instance not found for this action type" }, { status: 404 });
     }
   } else if (arrInstanceId) {
@@ -153,7 +142,7 @@ export async function POST(request: NextRequest) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
     const selectedArrId = query.arrServerIds?.[familyKey];
     const selectedArr = selectedArrId
-      ? await findArrInstance(selectedArrId, userId, resolvedType)
+      ? await findUserArrInstance(selectedArrId, userId, resolvedType)
       : null;
     if (!selectedArr) {
       return NextResponse.json(
@@ -233,6 +222,7 @@ export async function POST(request: NextRequest) {
   {
     const verdict = await checkDeleteCeilingForRun(userId, actionType, runUnits ?? mediaItemIds.length);
     if (!verdict.allowed) {
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action").catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
@@ -245,11 +235,22 @@ export async function POST(request: NextRequest) {
   // requests, so one key per user refuses only a genuinely concurrent second
   // run (a double-click, or a second tab) and never a legitimate batch. Held
   // until the stream's run finishes, which is when the last Arr call has
-  // returned. See `execute-in-flight.ts`.
-  const executeKey = queryExecuteKey(userId);
-  if (!tryBeginExecute(executeKey)) {
+  // returned. Rule-set executions (Execute, force-retry, the scheduled
+  // executor) are kept apart from it too: they can act on the same Arr records
+  // through other rows. See `execute-in-flight.ts`.
+  // A lifecycle execution in progress is waited for (bounded), not refused:
+  // the page sends a large selection as sequential batches, and refusing one
+  // of them because the scheduled executor was mid-action stopped the run
+  // part-way.
+  const claim = await beginQueryExecution(userId);
+  if (claim !== "claimed") {
     return NextResponse.json(
-      { error: "A query action is already running — wait for it to finish" },
+      {
+        error:
+          claim === "query-running"
+            ? "A query action is already running — wait for it to finish"
+            : "A lifecycle execution is running — try again when it finishes",
+      },
       { status: 409 },
     );
   }
@@ -266,15 +267,15 @@ export async function POST(request: NextRequest) {
         try {
           return await runQueryAction(emit);
         } finally {
-          endExecute(executeKey);
+          endQueryExecution(userId);
         }
       },
-      { signal: request.signal },
+      { request },
     );
   } catch (err) {
     // Only reachable if the stream itself failed to start — the run's own
     // `finally` never ran, so the key would otherwise leak for the process.
-    endExecute(executeKey);
+    endQueryExecution(userId);
     throw err;
   }
 
@@ -354,10 +355,13 @@ export async function POST(request: NextRequest) {
       return { executed: 0, failed: 0, skipped, errors: [] };
     }
 
-    // Whole-record series actions (DELETE_SONARR, UNMONITOR_SONARR, …) hit the
-    // ENTIRE series and ignore the member list; member-scoped actions
-    // (DELETE_FILES_SONARR, …) act only on the named episodes.
-    const isMemberScoped = actionHonorsMemberIds(actionType);
+    // Whole-record series actions (DELETE_SONARR, CHANGE_QUALITY_PROFILE_SONARR,
+    // …) hit the ENTIRE series and ignore the member list; member-scoped
+    // actions (DELETE_FILES_SONARR, …) act only on the named episodes, as do
+    // Unmonitor and Search in episode view (`episodeScope`).
+    const episodeScope =
+      resolvedType === "SERIES" && !!query.includeEpisodes && actionCanScopeToEpisodes(actionType);
+    const isMemberScoped = actsOnMembers(actionType, episodeScope);
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
     // Group a show's episodes by the SAME series identity the query engine
@@ -503,13 +507,11 @@ export async function POST(request: NextRequest) {
       const protectedGroups = await findExceptionProtectedGroups(userId, items);
       if (protectedGroups.size > 0) {
         const before = items.length;
-        // `protectionKey` on both sides — see the guard: SERIES identity is
+        // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
         // `seriesKey`, so an exception filed under another server's title for
-        // the same show still protects this copy.
-        items = items.filter((i) => {
-          const key = protectionKey(i);
-          return !key || !protectedGroups.has(key);
-        });
+        // the same show still protects this copy, and a same-named artist with
+        // a different MusicBrainz id does not.
+        items = items.filter((i) => !isGroupProtected(protectedGroups, i));
         if (items.length < before) {
           skipped += before - items.length;
           logger.warn("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} whole-record target(s) — an episode/track of the series/artist is excluded via lifecycle exception`);
@@ -531,6 +533,24 @@ export async function POST(request: NextRequest) {
     items = collapsed.items;
     const actionMembers = collapsed.members;
 
+    // One action per Arr record across the whole RUN, not only this batch. The
+    // client keeps a show's or an artist's rows in one batch, but a group too
+    // big for a batch is split, and two servers' copies of a movie can land in
+    // different batches: a whole-record action would then run once per batch —
+    // the first deletes the artist and the next re-sends it. Member-scoped file
+    // deletes are exempt: each batch acts on its own episodes or tracks.
+    const trackRecords = !!runId && !isMemberScoped;
+    const doneRecords = trackRecords ? actedRecords(runId!) : new Set<string>();
+    if (doneRecords.size > 0) {
+      const before = items.length;
+      items = items.filter((i) => !doneRecords.has(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
+      if (items.length < before) {
+        skipped += before - items.length;
+        logger.info("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} record(s) an earlier batch of this run already acted on`);
+      }
+      if (items.length === 0) return { executed: 0, failed: 0, skipped, errors: [] };
+    }
+
     // The ceiling over the whole run: every earlier batch's actions plus this
     // one's, counted after the collapse (a show's episodes are one action).
     const unitsKey = runId ? `query-action-units:${runId}` : null;
@@ -541,15 +561,28 @@ export async function POST(request: NextRequest) {
       Math.max(runUnits ?? 0, priorUnits + items.length),
     );
     if (!verdict.allowed) {
+      // Earlier batches of this run may already have acted, so "nothing was
+      // deleted" would be false here.
+      const reason =
+        priorUnits > 0
+          ? `This run would delete ${verdict.count} item(s), above the configured limit of ${verdict.limit}. ` +
+            `It was stopped after ${priorUnits} had already been acted on; the rest were not sent. ` +
+            `Run it on at most ${verdict.limit} item(s) at a time, or raise the limit in Settings.`
+          : verdict.reason;
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action", { stoppedAfter: priorUnits }).catch(() => {});
       return {
         executed: 0,
         failed: 0,
         skipped: skipped + items.length,
-        errors: [verdict.reason ?? "Held by the deletion ceiling"],
+        errors: [reason ?? "Held by the deletion ceiling"],
         stopped: true,
       };
     }
     if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
+    // Recorded before the Arr calls: a timed-out delete may still have landed,
+    // so a record attempted once is never re-sent by a later batch.
+    const batchRecordKeys = items.map((i) => collapsed.recordKeys.get(i.id) ?? `id:${i.id}`);
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
@@ -564,6 +597,7 @@ export async function POST(request: NextRequest) {
         searchAfterAction,
         addArrTags,
         removeArrTags,
+        episodeScope,
       },
       actionMembers,
       {
@@ -585,6 +619,11 @@ export async function POST(request: NextRequest) {
         }),
     );
 
+    // A batch can outlast the TTL both run stores were given when it started;
+    // refresh them so the next batch still sees what this one acted on.
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
+    if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
+
     emit({ type: "phase", key: "finalize" });
 
     // The NDJSON stream above reports progress to the tab that started the
@@ -594,11 +633,11 @@ export async function POST(request: NextRequest) {
     if (executed > 0 || failed > 0) {
       eventBus.emit({
         type: "lifecycle:action-executed",
-        userId: session.userId!,
+        userId: session.userId,
         meta: { executed, failed, source: "query" },
       });
     }
 
     return { executed, failed, skipped, errors };
   }
-}
+});

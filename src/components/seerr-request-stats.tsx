@@ -34,8 +34,9 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UserAvatar } from "@/components/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SeerrUserRequestsDialog } from "@/components/seerr-user-requests-dialog";
+import { lazyComponent } from "@/components/lazy-component";
 
 interface UserStats {
   userKey: string;
@@ -102,43 +103,6 @@ function watchedScores(u: UserStats): Scores {
 
 function fmtPct(p: number | null): string {
   return p == null ? "—" : `${p}%`;
-}
-
-const AVATAR_PALETTE = [
-  "bg-rose-500/15 text-rose-300 ring-rose-500/30",
-  "bg-orange-500/15 text-orange-300 ring-orange-500/30",
-  "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  "bg-teal-500/15 text-teal-300 ring-teal-500/30",
-  "bg-cyan-500/15 text-cyan-300 ring-cyan-500/30",
-  "bg-sky-500/15 text-sky-300 ring-sky-500/30",
-  "bg-indigo-500/15 text-indigo-300 ring-indigo-500/30",
-  "bg-violet-500/15 text-violet-300 ring-violet-500/30",
-  "bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30",
-];
-
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
-function UserAvatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
-  const initial = (name.trim().charAt(0) || "?").toUpperCase();
-  const color = AVATAR_PALETTE[hashString(name) % AVATAR_PALETTE.length];
-  const dims = size === "sm" ? "h-5 w-5 text-[10px]" : "h-7 w-7 text-xs";
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center justify-center rounded-full font-semibold shrink-0 ring-1",
-        dims,
-        color
-      )}
-      aria-hidden
-    >
-      {initial}
-    </span>
-  );
 }
 
 function pctTone(p: number | null): string {
@@ -227,6 +191,13 @@ function sortValue(u: UserStats, col: SortColumn): number | string {
   }
 }
 
+// The per-user drill-down loads when a user is first opened: it is most of
+// this card's code, and the card is on the dashboard by default.
+const SeerrUserRequestsDialog = lazyComponent(
+  () => import("@/components/seerr-user-requests-dialog").then((m) => m.SeerrUserRequestsDialog),
+  () => null,
+);
+
 export function SeerrRequestStats() {
   const [data, setData] = useState<Response | null>(null);
   const [loading, setLoading] = useState(true);
@@ -235,6 +206,9 @@ export function SeerrRequestStats() {
   const [sortColumn, setSortColumn] = useState<SortColumn>("total");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [openUserKey, setOpenUserKey] = useState<string | null>(null);
+  // Mounted from the first open on, so its closing animation plays.
+  const [dialogUsed, setDialogUsed] = useState(false);
+  if (openUserKey !== null && !dialogUsed) setDialogUsed(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -425,13 +399,13 @@ export function SeerrRequestStats() {
     );
   }
 
-  const dialog = (
+  const dialog = dialogUsed ? (
     <SeerrUserRequestsDialog
       userKey={openUserKey}
       open={openUserKey !== null}
       onClose={() => setOpenUserKey(null)}
     />
-  );
+  ) : null;
 
   if (showAll) {
     return (

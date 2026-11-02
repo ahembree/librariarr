@@ -1,4 +1,4 @@
-export interface AccentPreset {
+interface AccentPreset {
   name: string;
   label: string;
   color: string; // Display color for the swatch (hex)
@@ -9,31 +9,16 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   {
     name: "default",
     label: "Default",
-    color: "#e5e5e5",
+    // The stylesheet's brand blue (`--brand` in globals.css): choosing Default
+    // clears every override, so these values only describe what shows.
+    color: "#457cfd",
     cssVars: {
-      "--primary": "oklch(0.90 0 0)",
-      "--primary-foreground": "oklch(0.18 0.01 270)",
+      "--primary": "oklch(0.62 0.2 264)",
+      "--primary-foreground": "oklch(0.98 0.005 270)",
       "--ring": "oklch(0.50 0.015 260)",
       "--sidebar-primary": "oklch(0.55 0.26 264)",
       "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
       "--chart-1": "oklch(0.55 0.26 264)",
-    },
-  },
-  {
-    name: "blue",
-    label: "Blue",
-    color: "#3b82f6",
-    cssVars: {
-      "--primary": "oklch(0.65 0.24 260)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.65 0.24 260)",
-      "--sidebar-primary": "oklch(0.65 0.24 260)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.65 0.24 260)",
-      "--brand": "oklch(0.65 0.24 260)",
-      "--brand-bright": "oklch(0.73 0.2 260)",
-      "--brand-dim": "color-mix(in oklch, oklch(0.65 0.24 260) 15%, transparent)",
-      "--brand-faint": "color-mix(in oklch, oklch(0.65 0.24 260) 8%, transparent)",
     },
   },
   {
@@ -127,4 +112,14 @@ export const ACCENT_NAMES = ACCENT_PRESETS.map((p) => p.name);
 
 export function getAccentPreset(name: string): AccentPreset | undefined {
   return ACCENT_PRESETS.find((p) => p.name === name);
+}
+
+/**
+ * The inline style that applies a stored accent before any script runs, for
+ * the server-rendered `<html>`. `null` for the default (or a removed preset),
+ * since the stylesheet already shows it.
+ */
+export function accentStyle(name: string | null | undefined): Record<string, string> | null {
+  if (!name || name === "default") return null;
+  return getAccentPreset(name)?.cssVars ?? null;
 }

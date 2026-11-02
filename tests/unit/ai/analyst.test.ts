@@ -21,7 +21,7 @@ vi.mock("@/lib/ai/tools", () => {
 import { runAnalyst } from "@/lib/ai/analyst";
 import type { AiConfig, AiStreamEvent } from "@/lib/ai/types";
 
-const config: AiConfig = { provider: "openai-compatible", baseUrl: "x", apiKey: "", model: "m" };
+const config: AiConfig = { provider: "openai-compatible", baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3.1:8b" };
 
 beforeEach(() => {
   mockChat.mockReset();
@@ -36,10 +36,8 @@ describe("ai/analyst — runAnalyst", () => {
         toolCalls: [{ id: "1", name: "get_breakdown", arguments: { dimension: "resolution" } }],
       })
       .mockResolvedValueOnce({ content: "Final answer", toolCalls: [] });
-    mockExecute.mockResolvedValue({
-      data: { rows: [] },
-      evidence: { tool: "get_breakdown", kind: "breakdown", title: "t", data: {} },
-    });
+    const evidence = { tool: "get_breakdown", kind: "breakdown", title: "Resolution distribution", data: { rows: [] } };
+    mockExecute.mockResolvedValue({ data: { rows: [{ value: "4K", count: 3 }] }, evidence });
 
     const events: AiStreamEvent[] = [];
     const result = await runAnalyst(
@@ -47,11 +45,21 @@ describe("ai/analyst — runAnalyst", () => {
       (e) => events.push(e),
     );
 
-    expect(result.answer).toBe("Final answer");
-    expect(result.evidence).toHaveLength(1);
+    expect(result).toEqual({ answer: "Final answer", evidence: [evidence] });
     expect(mockExecute).toHaveBeenCalledWith("u", { dimension: "resolution" });
-    expect(events.some((e) => e.type === "tool" && e.tool === "get_breakdown")).toBe(true);
-    expect(events.some((e) => e.type === "status")).toBe(true);
+    expect(events).toEqual([
+      { type: "status", label: "Analyzing your question" },
+      { type: "tool", tool: "get_breakdown", label: "Computing a distribution" },
+      { type: "status", label: "Reviewing the results" },
+    ]);
+    // The tool's result goes back to the model as the answer to its call.
+    const secondCallMessages = mockChat.mock.calls[1][0] as { role: string; toolCallId?: string; content: string }[];
+    expect(secondCallMessages.at(-1)).toEqual({
+      role: "tool",
+      toolCallId: "1",
+      name: "get_breakdown",
+      content: JSON.stringify({ rows: [{ value: "4K", count: 3 }] }),
+    });
   });
 
   it("feeds an error result back for an unknown tool", async () => {
@@ -68,7 +76,28 @@ describe("ai/analyst — runAnalyst", () => {
     expect(mockExecute).not.toHaveBeenCalled();
     const secondCallMessages = mockChat.mock.calls[1][0] as { role: string; content: string }[];
     const toolMsg = secondCallMessages.find((m) => m.role === "tool");
-    expect(toolMsg?.content).toContain("Unknown tool");
+    expect(toolMsg?.content).toBe(JSON.stringify({ error: 'Unknown tool "nope".' }));
+  });
+
+  it("feeds a tool's thrown error back to the model instead of failing the run", async () => {
+    mockChat
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: [{ id: "1", name: "get_breakdown", arguments: { dimension: "resolution" } }],
+      })
+      .mockResolvedValueOnce({ content: "answer", toolCalls: [] });
+    mockExecute.mockRejectedValue(new Error("database unavailable"));
+
+    const result = await runAnalyst(
+      { userId: "u", config, messages: [{ role: "user", content: "q" }] },
+      () => {},
+    );
+
+    expect(result).toEqual({ answer: "answer", evidence: [] });
+    const secondCallMessages = mockChat.mock.calls[1][0] as { role: string; content: string }[];
+    expect(secondCallMessages.find((m) => m.role === "tool")?.content).toBe(
+      JSON.stringify({ error: "database unavailable" }),
+    );
   });
 
   it("stops at the iteration cap and falls back gracefully", async () => {
@@ -88,6 +117,13 @@ describe("ai/analyst — runAnalyst", () => {
 
     // 6 loop iterations + 1 tool-disabled fallback call.
     expect(mockChat).toHaveBeenCalledTimes(7);
-    expect(result.answer.toLowerCase()).toContain("gathered the data");
+    expect(mockChat.mock.calls[6][1]).toEqual([]);
+    expect(mockExecute).toHaveBeenCalledTimes(6);
+    // The fallback call answered with nothing either, so the canned summary
+    // points at the evidence that was gathered.
+    expect(result.answer).toBe(
+      "I gathered the data but couldn't compose a written summary — see the results below.",
+    );
+    expect(result.evidence).toHaveLength(6);
   });
 });

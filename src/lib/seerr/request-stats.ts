@@ -12,6 +12,8 @@ import {
   type SeerrShowRef,
 } from "@/lib/seerr/library-match";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
+import { invalidateSeerrMetadataCache } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 
@@ -20,7 +22,7 @@ const STATS_CACHE_KEY = "seerr-request-stats";
 /** The per-requester drill-down (`/api/seerr/users/[userKey]/requests`) caches under this prefix. */
 export const USER_REQUESTS_CACHE_PREFIX = "seerr-user-requests:";
 
-export interface SeerrUserRequestStats {
+interface SeerrUserRequestStats {
   /** Stable identity key — see `seerrRequesterKey`. */
   userKey: string;
   seerrUsername: string;
@@ -41,7 +43,7 @@ export interface SeerrUserRequestStats {
   correlatable: boolean;
 }
 
-export interface SeerrRequestStatsResult {
+interface SeerrRequestStatsResult {
   configured: boolean;
   /**
    * True when at least one instance's request list could not be read in full
@@ -86,13 +88,14 @@ export async function getSeerrRequestStats(
 /**
  * Drop every cached Seerr-derived answer. Called by the Seerr instance
  * create/update/delete routes, so removing or disabling an instance doesn't
- * leave the dashboard card, the drill-down and the integration health banner
- * reporting it for another minute.
+ * leave the dashboard card, the drill-down, the integration health banner and
+ * the rule editor's previews reporting it for another minute.
  */
 export function invalidateSeerrCaches(): void {
   appCache.invalidate(STATS_CACHE_KEY);
   appCache.invalidatePrefix(USER_REQUESTS_CACHE_PREFIX);
-  appCache.invalidatePrefix("integrations:health:");
+  appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
+  invalidateSeerrMetadataCache();
 }
 
 async function computeSeerrRequestStats(

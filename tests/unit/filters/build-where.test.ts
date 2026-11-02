@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { escapeLike as reExportedEscapeLike } from "@/lib/conditions/where-builder";
@@ -24,16 +24,82 @@ describe("applyCommonFilters", () => {
 
     it("handles multi-select resolution with OR", () => {
       const where = buildWhere({ resolution: "4K|1080P" });
-      expect(where.AND).toBeDefined();
-      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
-      expect(andClauses[0]).toHaveProperty("OR");
+      expect(where.resolution).toBeUndefined();
+      expect(where.AND).toEqual([
+        {
+          OR: [
+            { resolution: { in: ["4k", "2160", "2160p"], mode: "insensitive" } },
+            { resolution: { in: ["1080", "1080p"], mode: "insensitive" } },
+          ],
+        },
+      ]);
     });
 
-    it("handles Other resolution as NOT IN known values", () => {
-      const where = buildWhere({ resolution: "Other" });
-      expect(where.AND).toBeDefined();
-      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
-      expect(andClauses.length).toBeGreaterThanOrEqual(1);
+    it("handles Other resolution as a non-null value outside every known spelling", () => {
+      const allKnown = ["4k", "2160", "2160p", "1080", "1080p", "720", "720p", "480", "480p", "sd", "360", "360p"];
+      expect(buildWhere({ resolution: "Other" }).AND).toEqual([
+        { resolution: { not: null } },
+        { NOT: { resolution: { in: allKnown, mode: "insensitive" } } },
+      ]);
+      // Inside a multi-select it is the same pair, as one OR branch.
+      expect(buildWhere({ resolution: "4K|Other" }).AND).toEqual([
+        {
+          OR: [
+            { resolution: { in: ["4k", "2160", "2160p"], mode: "insensitive" } },
+            { AND: [{ resolution: { not: null } }, { NOT: { resolution: { in: allKnown, mode: "insensitive" } } }] },
+          ],
+        },
+      ]);
+    });
+
+    // With the stored values grouped by label (`loadResolutionSpellings`), a
+    // label matches what `normalizeResolutionLabel` calls it — the label the
+    // quality chips show — not only its fixed spellings.
+    describe("with resolution spellings", () => {
+      const spellings = new Map([
+        ["480P", ["480", "576"]],
+        ["1080P", ["1080", "1024"]],
+        ["Other", ["", "weird"]],
+      ]);
+      const build = (resolution: string) => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution }), undefined, spellings);
+        return where.AND as Prisma.MediaItemWhereInput[];
+      };
+
+      it("matches every stored value the label covers", () => {
+        expect(build("480P")).toEqual([{ resolution: { in: ["480", "576"] } }]);
+      });
+
+      it("ORs a multi-select", () => {
+        expect(build("480P|1080P")).toEqual([
+          { OR: [{ resolution: { in: ["480", "576"] } }, { resolution: { in: ["1080", "1024"] } }] },
+        ]);
+      });
+
+      // A movie, episode or track card shows no chip for a missing resolution,
+      // so on those listings it is not Other.
+      it("leaves a missing resolution out of Other by default", () => {
+        expect(build("Other")).toEqual([{ resolution: { in: ["", "weird"] } }]);
+      });
+
+      it("takes a missing resolution as Other where the chips count it so", () => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution: "Other" }), undefined, spellings, {
+          resolutionOtherIncludesNull: true,
+        });
+        expect(where.AND).toEqual([
+          { OR: [{ resolution: { in: ["", "weird"] } }, { resolution: null }] },
+        ]);
+      });
+
+      it("matches nothing for a label no stored value has", () => {
+        expect(build("4K")).toEqual([{ resolution: { in: [] } }]);
+      });
+
+      it("matches a value that is not a label as a stored value", () => {
+        expect(build("1440")).toEqual([{ resolution: { in: ["1440"] } }]);
+      });
     });
   });
 
@@ -45,10 +111,15 @@ describe("applyCommonFilters", () => {
 
     it("applies multi-select videoCodec with OR", () => {
       const where = buildWhere({ videoCodec: "h264|hevc" });
-      expect(where.AND).toBeDefined();
-      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
-      const orClause = andClauses.find((c) => "OR" in c);
-      expect(orClause).toBeDefined();
+      expect(where.videoCodec).toBeUndefined();
+      expect(where.AND).toEqual([
+        {
+          OR: [
+            { videoCodec: { contains: "h264", mode: "insensitive" } },
+            { videoCodec: { contains: "hevc", mode: "insensitive" } },
+          ],
+        },
+      ]);
     });
   });
 
@@ -182,14 +253,13 @@ describe("applyCommonFilters", () => {
 
     it("applies multiple year conditions with AND", () => {
       const where = buildWhere({ yearConditions: "gte:2020|lte:2024", yearLogic: "and" });
-      expect(where.AND).toBeDefined();
+      expect(where.year).toBeUndefined();
+      expect(where.AND).toEqual([{ year: { gte: 2020 } }, { year: { lte: 2024 } }]);
     });
 
     it("applies multiple year conditions with OR", () => {
       const where = buildWhere({ yearConditions: "eq:2020|eq:2024", yearLogic: "or" });
-      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
-      const orClause = andClauses.find((c) => "OR" in c);
-      expect(orClause).toBeDefined();
+      expect(where.AND).toEqual([{ OR: [{ year: 2020 }, { year: 2024 }] }]);
     });
 
     it("applies play count condition", () => {
@@ -208,22 +278,58 @@ describe("applyCommonFilters", () => {
 
     it("applies multiple genres as AND", () => {
       const where = buildWhere({ genre: "Action|Comedy" });
-      const andClauses = where.AND as Prisma.MediaItemWhereInput[];
-      expect(andClauses).toHaveLength(2);
+      expect(where.AND).toEqual([
+        { genres: { array_contains: "Action" } },
+        { genres: { array_contains: "Comedy" } },
+      ]);
+    });
+
+    it("matches any stored spelling of a genre when given them", () => {
+      // `array_contains` is case-sensitive; the dropdown offers one entry per
+      // genre whatever its case, so the filter must cover every spelling.
+      const where: Prisma.MediaItemWhereInput = {};
+      applyCommonFilters(
+        where,
+        new URLSearchParams({ genre: "SCI-FI|Drama" }),
+        new Map([["sci-fi", ["Sci-Fi", "sci-fi"]], ["drama", ["Drama"]]]),
+      );
+      expect(where.AND).toEqual([
+        { OR: [{ genres: { array_contains: "Sci-Fi" } }, { genres: { array_contains: "sci-fi" } }] },
+        { genres: { array_contains: "Drama" } },
+      ]);
     });
   });
 
   describe("date filters", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // "N days" reaches back to midnight UTC N days ago, whatever the server's zone.
     it("applies lastPlayedAtDays filter", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2025-06-15T18:30:00.000Z"));
       const where = buildWhere({ lastPlayedAtDays: "30" });
-      expect(where.lastPlayedAt).toBeDefined();
-      expect((where.lastPlayedAt as Record<string, Date>).gte).toBeInstanceOf(Date);
+      expect(where.lastPlayedAt).toEqual({ gte: new Date("2025-05-16T00:00:00.000Z") });
     });
 
     it("applies addedAtDays filter", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2025-06-15T00:30:00.000Z"));
       const where = buildWhere({ addedAtDays: "7" });
-      expect(where.addedAt).toBeDefined();
-      expect((where.addedAt as Record<string, Date>).gte).toBeInstanceOf(Date);
+      expect(where.addedAt).toEqual({ gte: new Date("2025-06-08T00:00:00.000Z") });
+    });
+
+    it("ignores a non-positive day count", () => {
+      expect(buildWhere({ addedAtDays: "0" }).addedAt).toBeUndefined();
+      expect(buildWhere({ lastPlayedAtDays: "-5" }).lastPlayedAt).toBeUndefined();
+    });
+
+    it("ends a max date at the last millisecond of that UTC day", () => {
+      expect(buildWhere({ addedAtMin: "2024-03-01", addedAtMax: "2024-03-31" }).addedAt).toEqual({
+        gte: new Date("2024-03-01T00:00:00.000Z"),
+        lte: new Date("2024-03-31T23:59:59.999Z"),
+      });
     });
   });
 

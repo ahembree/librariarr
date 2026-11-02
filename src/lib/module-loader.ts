@@ -7,7 +7,7 @@
  * again (a chunk can fail to load on a flaky connection or after a deploy
  * replaced it).
  */
-export interface ModuleLoader<T> {
+interface ModuleLoader<T> {
   /** The loaded value, or null while it has not loaded. */
   get(): T | null;
   /** Start the load if it has not started; resolves with the value. */

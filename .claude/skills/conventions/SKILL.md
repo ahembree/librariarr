@@ -13,15 +13,15 @@ description: Quick reference for all Librariarr project conventions and patterns
 | Validation | `import { validateRequest, schema } from "@/lib/validation"` | Inline schemas |
 | Zod | `import { z } from "zod/v4"` | `from "zod"` |
 | Sanitize | `import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize"` | — |
-| Session | `import { getSession } from "@/lib/auth/session"` | — |
+| Session (routes) | `import { withSession } from "@/lib/auth/with-session"` | An inline `getSession()` + `isLoggedIn` check |
 | Prisma types | `import type { X } from "@/generated/prisma/client"` | — |
 
 ## API Route Checklist
 
 Every route handler must:
-1. Check auth: `getSession()` + `session.isLoggedIn`
+1. Check auth: wrap it in `withSession(async (session, request, ctx) => …)` (401s for you; `session.userId` is a string)
 2. Validate mutations: `validateRequest(request, schema)` — schema from `@/lib/validation`
-3. Verify ownership: include `userId: session.userId!` in all queries
+3. Verify ownership: include `userId: session.userId` in all queries
 4. Sanitize responses: wrap with `sanitize()` from `@/lib/api/sanitize`
 5. Use `sanitizeErrorDetail()` for error messages from external services
 6. Never send stored API keys to frontend — use `[id]/test-connection` endpoints
@@ -47,7 +47,7 @@ Every route handler must:
 - `vi.hoisted()`: required when mock variables are referenced inside `vi.mock()` factory functions
 - Route imports: MUST come AFTER all `vi.mock()` calls
 - Standard mocks: `@/lib/db` → test DB, `@/lib/logger` → all 3 loggers suppressed (logger, apiLogger, dbLogger)
-- Session: `setMockSession({ userId, plexToken: "tok", isLoggedIn: true })`
+- Session: `setMockSession({ userId, isLoggedIn: true })`
 - Cleanup: `cleanDatabase()` + `clearMockSession()` in `beforeEach`, `disconnectTestDb()` in `afterAll`
 - Helpers: `callRoute()`, `callRouteWithParams()`, `expectJson<T>(response, status)`
 
@@ -80,6 +80,7 @@ Every route handler must:
 | All Zod schemas | `src/lib/validation.ts` |
 | Response sanitization | `src/lib/api/sanitize.ts` |
 | Session/auth | `src/lib/auth/session.ts` |
+| Route session guard | `src/lib/auth/with-session.ts` |
 | Multi-server dedup | `src/lib/dedup/server-filter.ts` |
 | Filter utilities | `src/lib/filters/build-where.ts` |
 | Memory cache | `src/lib/cache/memory-cache.ts` |

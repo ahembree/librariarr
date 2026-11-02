@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, trashAssignSchema } from "@/lib/validation";
 import { resolveInstance, managedInstanceWhere } from "@/lib/trash/status";
@@ -9,12 +9,7 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import type { ServiceType } from "@/lib/trash/types";
 
 // List the managed (assigned) resources, optionally scoped to one instance.
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serviceType = searchParams.get("serviceType")?.toUpperCase();
   const instanceId = searchParams.get("instanceId");
@@ -25,25 +20,20 @@ export async function GET(request: NextRequest) {
       : {};
 
   const assignments = await prisma.trashManagedResource.findMany({
-    where: { userId: session.userId!, ...instanceFilter },
+    where: { userId: session.userId, ...instanceFilter },
     orderBy: { createdAt: "asc" },
   });
   return NextResponse.json({ assignments });
-}
+});
 
 // Opt guide resources into Librariarr management. This is the consent gate:
 // creating a managed row is what later permits the sync to write to the Arr.
 // Creating the row itself performs NO Arr write.
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, trashAssignSchema);
   if (error) return error;
 
-  const inst = await resolveInstance(session.userId!, data.serviceType, data.instanceId);
+  const inst = await resolveInstance(session.userId, data.serviceType, data.instanceId);
   if (!inst) {
     return NextResponse.json({ error: "Instance not found" }, { status: 404 });
   }
@@ -110,7 +100,7 @@ export async function POST(request: NextRequest) {
         data.serviceType === "SONARR"
           ? {
               userId_sonarrInstanceId_resourceType_trashId: {
-                userId: session.userId!,
+                userId: session.userId,
                 sonarrInstanceId: data.instanceId,
                 resourceType: item.resourceType,
                 trashId: item.trashId,
@@ -118,7 +108,7 @@ export async function POST(request: NextRequest) {
             }
           : {
               userId_radarrInstanceId_resourceType_trashId: {
-                userId: session.userId!,
+                userId: session.userId,
                 radarrInstanceId: data.instanceId,
                 resourceType: item.resourceType,
                 trashId: item.trashId,
@@ -127,7 +117,7 @@ export async function POST(request: NextRequest) {
       return prisma.trashManagedResource.upsert({
         where,
         create: {
-          userId: session.userId!,
+          userId: session.userId,
           serviceType: data.serviceType,
           ...instanceKey,
           resourceType: item.resourceType,
@@ -141,4 +131,4 @@ export async function POST(request: NextRequest) {
   );
 
   return NextResponse.json({ assignments: results }, { status: 201 });
-}
+});

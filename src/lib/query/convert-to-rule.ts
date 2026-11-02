@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import type { z } from "zod/v4";
 import type { ConditionGroup, LibraryType } from "@/lib/conditions";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
@@ -7,9 +7,9 @@ import {
   dropIncompatibleRules,
 } from "@/components/builder/library-type-validity";
 
-export type RuleSetCreateBody = z.infer<typeof ruleSetCreateSchema>;
+type RuleSetCreateBody = z.infer<typeof ruleSetCreateSchema>;
 
-export interface ConvertOptions {
+interface ConvertOptions {
   name: string;
   targetLibraryType: LibraryType;
   serverIds: string[];

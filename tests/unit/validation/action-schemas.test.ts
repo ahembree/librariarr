@@ -1,15 +1,26 @@
 import { describe, it, expect } from "vitest";
 import { ruleSetCreateSchema, ruleSetUpdateSchema } from "@/lib/validation";
 
-// Minimal valid rule for schema tests
-const validRule = { id: "1", field: "playCount", operator: "greaterThan", value: 5, condition: "AND" };
+// A minimal rule group, as the rule editor sends it (values are strings).
+const validGroup = {
+  id: "g1",
+  condition: "AND",
+  rules: [{ id: "r1", field: "playCount", operator: "greaterThan", value: "5", condition: "AND" }],
+  groups: [],
+};
+
+/** The distinct fields a failed parse names, as dotted paths. */
+function failedPaths(result: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } }): string[] {
+  expect(result.success).toBe(false);
+  return [...new Set(result.error!.issues.map((i) => i.path.map(String).join(".")))].sort();
+}
 
 describe("actionDelayDays validation", () => {
   describe("ruleSetCreateSchema", () => {
     const basePayload = {
       name: "Test",
       type: "MOVIE" as const,
-      rules: [validRule],
+      rules: [validGroup],
       serverIds: ["server-1"],
     };
 
@@ -30,22 +41,22 @@ describe("actionDelayDays validation", () => {
 
     it("rejects actionDelayDays = -1 (negative)", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionDelayDays: -1 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("rejects actionDelayDays = -30 (negative)", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionDelayDays: -30 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("rejects actionDelayDays = 366 (over max)", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionDelayDays: 366 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("rejects actionDelayDays = 1.5 (non-integer)", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionDelayDays: 1.5 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("allows omitting actionDelayDays entirely", () => {
@@ -62,12 +73,12 @@ describe("actionDelayDays validation", () => {
 
     it("rejects actionDelayDays = -1 (negative)", () => {
       const result = ruleSetUpdateSchema.safeParse({ actionDelayDays: -1 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("rejects actionDelayDays = 366 (over max)", () => {
       const result = ruleSetUpdateSchema.safeParse({ actionDelayDays: 366 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionDelayDays"]);
     });
 
     it("allows omitting actionDelayDays entirely", () => {
@@ -82,7 +93,7 @@ describe("actionType validation", () => {
     const basePayload = {
       name: "Test",
       type: "MOVIE" as const,
-      rules: [validRule],
+      rules: [validGroup],
       serverIds: ["server-1"],
     };
 
@@ -120,12 +131,12 @@ describe("actionType validation", () => {
 
     it("rejects non-integer targetQualityProfileId", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, targetQualityProfileId: 1.5 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["targetQualityProfileId"]);
     });
 
     it("rejects string targetQualityProfileId", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, targetQualityProfileId: "7" });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["targetQualityProfileId"]);
     });
 
     it("accepts null actionType", () => {
@@ -140,17 +151,17 @@ describe("actionType validation", () => {
 
     it("rejects unknown action type strings", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionType: "DELETE_EVERYTHING" });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionType"]);
     });
 
     it("rejects empty string action type", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionType: "" });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionType"]);
     });
 
     it("rejects numeric action type", () => {
       const result = ruleSetCreateSchema.safeParse({ ...basePayload, actionType: 42 });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionType"]);
     });
   });
 
@@ -167,7 +178,7 @@ describe("actionType validation", () => {
 
     it("rejects unknown action type strings", () => {
       const result = ruleSetUpdateSchema.safeParse({ actionType: "NUKE_FROM_ORBIT" });
-      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toEqual(["actionType"]);
     });
 
     it("allows omitting actionType entirely", () => {

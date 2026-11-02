@@ -48,6 +48,21 @@ describe("actionTargetTitle", () => {
     expect(actionTargetTitle({ ...action, memberEpisodes: new Map() })).toBe("Breaking Bad");
   });
 
+  it("names an episode-scoped Unmonitor or Search on one episode by show and SxxExx", () => {
+    for (const actionType of ["UNMONITOR_SONARR", "SEARCH_SONARR"]) {
+      expect(actionTargetTitle({ actionType, episodeScope: true, matchedMediaItemIds: ["ep-1"], mediaItem: episode })).toBe(
+        "Breaking Bad S01E01",
+      );
+      // The same action on the series is named by the show.
+      expect(actionTargetTitle({ actionType, episodeScope: false, matchedMediaItemIds: ["ep-1"], mediaItem: episode })).toBe(
+        "Breaking Bad",
+      );
+    }
+    expect(
+      actionTitleSnapshot({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["ep-1"], mediaItem: episode }),
+    ).toEqual(expect.objectContaining({ mediaItemSeasonNumber: 1, mediaItemEpisodeNumber: 1 }));
+  });
+
   it("names a whole-series action by the show even when it matched one episode", () => {
     expect(actionTargetTitle({ actionType: "DELETE_SONARR", matchedMediaItemIds: ["ep-1"], mediaItem: episode })).toBe(
       "Breaking Bad",
@@ -91,7 +106,12 @@ describe("actionTitleSnapshot", () => {
         mediaItem: episode,
         memberEpisodes: new Map([["ep-10", { title: "Fly", seasonNumber: 3, episodeNumber: 10 }]]),
       }),
-    ).toMatchObject({ mediaItemTitle: "Breaking Bad", mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 });
+    ).toEqual({
+      mediaItemTitle: "Breaking Bad",
+      mediaItemParentTitle: null,
+      mediaItemSeasonNumber: 3,
+      mediaItemEpisodeNumber: 10,
+    });
   });
 
   it("keeps the numbers of the one episode a file delete acted on", () => {

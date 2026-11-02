@@ -21,8 +21,8 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const emit = vi.fn();
-vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: (e: unknown) => emit(e) } }));
+const { emit } = vi.hoisted(() => ({ emit: vi.fn() }));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit } }));
 
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: vi.fn().mockResolvedValue(undefined),
@@ -68,12 +68,12 @@ describe("mutation routes emit app events", () => {
       });
       await expectJson(res, 200);
 
-      expect(emittedTypes()).toContain("settings:changed");
-      const event = emit.mock.calls
-        .map((c) => c[0] as { type: string; userId: string; meta?: Record<string, unknown> })
-        .find((e) => e.type === "settings:changed")!;
-      expect(event.userId).toBe(user.id);
-      expect(event.meta).toMatchObject({ maintenanceMode: true });
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith({
+        type: "settings:changed",
+        userId: user.id,
+        meta: { maintenanceMode: true },
+      });
     });
 
     it("stays silent when the toggle did not change state", async () => {
@@ -82,11 +82,12 @@ describe("mutation routes emit app events", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "a" } });
+      await expectJson(await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "a" } }), 200);
+      expect(emittedTypes()).toEqual(["settings:changed"]);
       emit.mockClear();
-      await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "ab" } });
+      await expectJson(await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "ab" } }), 200);
 
-      expect(emittedTypes()).not.toContain("settings:changed");
+      expect(emit).not.toHaveBeenCalled();
     });
   });
 
@@ -98,7 +99,11 @@ describe("mutation routes emit app events", () => {
       const res = await callRoute(dedupPut, { method: "PUT", body: { dedupStats: false } });
       await expectJson(res, 200);
 
-      expect(emittedTypes()).toContain("sync:completed");
+      expect(emit).toHaveBeenCalledWith({
+        type: "sync:completed",
+        userId: user.id,
+        meta: { dedupStats: false },
+      });
     });
   });
 
@@ -114,16 +119,20 @@ describe("mutation routes emit app events", () => {
         method: "DELETE",
         searchParams: { libraryId: library.id },
       });
-      await expectJson(res, 200);
+      expect(await expectJson(res, 200)).toEqual({ deleted: 1 });
 
-      expect(emittedTypes()).toContain("sync:completed");
+      expect(emit).toHaveBeenCalledWith({
+        type: "sync:completed",
+        userId: user.id,
+        meta: { purged: 1 },
+      });
     });
   });
 
   it("does not emit for an unauthenticated caller", async () => {
     clearMockSession();
 
-    await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "x" } });
+    await expectJson(await callRoute(maintenancePut, { method: "PUT", body: { enabled: true, message: "x" } }), 401);
 
     expect(emit).not.toHaveBeenCalled();
   });

@@ -542,6 +542,11 @@ const structuredData = {
         flex-direction: column;
       }
 
+      a.bento-card {
+        color: inherit;
+        text-decoration: none;
+      }
+
       .bento-card:hover {
         border-color: var(--border-strong);
         background: var(--bg-card-hover);
@@ -1296,7 +1301,7 @@ const structuredData = {
       </div>
 
       <div class="bento" data-reveal-stagger>
-        <div class="bento-card">
+        <a class="bento-card" href="/docs/features/system-logs/">
           <div class="bento-media">
             <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" decoding="async" />
           </div>
@@ -1307,9 +1312,8 @@ const structuredData = {
               filterable by level, category, and source.
             </p>
           </div>
-        </div>
-
-        <div class="bento-card">
+        </a>
+        <a class="bento-card" href="/docs/features/preroll-manager/">
           <div class="bento-media">
             <img src="/screenshots/preroll.webp" width="1360" height="883" alt="Preroll manager showing saved presets and recurring and seasonal schedules" loading="lazy" decoding="async" />
           </div>
@@ -1320,9 +1324,8 @@ const structuredData = {
               them in sequential or random order.
             </p>
           </div>
-        </div>
-
-        <div class="bento-card">
+        </a>
+        <a class="bento-card" href="/docs/getting-started/configuration/#general-settings">
           <div class="bento-media">
             <img src="/screenshots/settings.webp" width="1360" height="850" alt="Settings page with accent color and badge color customization" loading="lazy" decoding="async" />
           </div>
@@ -1333,9 +1336,8 @@ const structuredData = {
               retention — tune Librariarr to taste.
             </p>
           </div>
-        </div>
-
-        <div class="bento-card">
+        </a>
+        <a class="bento-card" href="/docs/features/backup-restore/">
           <div class="bento-body">
             <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg>
             <h4>Backup &amp; Restore</h4>
@@ -1344,20 +1346,18 @@ const structuredData = {
               passphrase — plus retention policies and scheduled runs.
             </p>
           </div>
-        </div>
-
-        <div class="bento-card">
+        </a>
+        <a class="bento-card" href="/docs/features/notifications/">
           <div class="bento-body">
             <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 01-3.46 0"></path></svg>
             <h4>Notifications</h4>
             <p>
-              Discord notifications for lifecycle actions, match changes, and
-              maintenance mode — pick the events you care about.
+              Discord notifications for lifecycle actions, match changes,
+              maintenance mode and API keys — pick the events you care about.
             </p>
           </div>
-        </div>
-
-        <div class="bento-card">
+        </a>
+        <a class="bento-card" href="/docs/getting-started/configuration/#scheduling">
           <div class="bento-body">
             <svg class="bento-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
             <h4>Flexible Scheduling</h4>
@@ -1366,9 +1366,10 @@ const structuredData = {
               presets or a custom cadence — or run anything on demand.
             </p>
           </div>
-        </div>
+        </a>
       </div>
-    </section>
+    
+</section>
 
     <section class="integrations">
       <h2>Built to integrate</h2>

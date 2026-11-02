@@ -107,10 +107,13 @@ describe("MemoryCache", () => {
     });
 
     it("removes expired entry from the store on access", () => {
+      const store = (cache as unknown as { store: Map<string, unknown> }).store;
       cache.set("key", "value", 1000);
       vi.advanceTimersByTime(1001);
+      expect(store.has("key")).toBe(true);
       // First get should find it expired and remove it
       expect(cache.get("key")).toBeUndefined();
+      expect(store.has("key")).toBe(false);
       // Set a new value at the same key
       cache.set("key", "new");
       expect(cache.get("key")).toBe("new");
@@ -281,8 +284,31 @@ describe("MemoryCache", () => {
       bounded.set("c", 3);
       bounded.set("d", 4); // exceeds cap → oldest ("a") evicted
       expect(bounded.get("a")).toBeUndefined();
-      expect(bounded.get("d")).toBe(4);
+      expect(bounded.get("b")).toBe(2);
       expect(bounded.get("c")).toBe(3);
+      expect(bounded.get("d")).toBe(4);
+    });
+
+    it("sweeps an expired entry before evicting the oldest live one", () => {
+      const bounded = new MemoryCache(60_000, 3);
+      bounded.set("a", 1);
+      bounded.set("b", 2, 1000);
+      bounded.set("c", 3);
+      vi.advanceTimersByTime(1001);
+      bounded.set("d", 4); // "b" has expired, so making room costs it, not "a"
+      expect(bounded.get("a")).toBe(1);
+      expect(bounded.get("b")).toBeUndefined();
+      expect(bounded.get("c")).toBe(3);
+      expect(bounded.get("d")).toBe(4);
+    });
+
+    it("overwrites a key at capacity without evicting anything", () => {
+      const bounded = new MemoryCache(60_000, 2);
+      bounded.set("a", 1);
+      bounded.set("b", 2);
+      bounded.set("a", 10);
+      expect(bounded.get("a")).toBe(10);
+      expect(bounded.get("b")).toBe(2);
     });
   });
 
@@ -346,8 +372,11 @@ describe("MemoryCache", () => {
     });
 
     it("does nothing on an empty cache", () => {
-      // Should not throw
-      cache.clear();
+      expect(() => cache.clear()).not.toThrow();
+      expect(cache.get("a")).toBeUndefined();
+      // Still usable afterwards.
+      cache.set("a", 1);
+      expect(cache.get("a")).toBe(1);
     });
   });
 });

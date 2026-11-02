@@ -4,12 +4,19 @@ import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test
 import { clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, createTestUser } from "../../setup/test-helpers";
 
+// Reserved before the headers are trusted and given back on a sign-in that
+// succeeds (login-lockout.test.ts runs the real limiter).
+const { mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
+  return {
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
+    ),
+    mockSucceeded,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
-  checkAuthRateLimit: () => null,
-  peekAuthRateLimit: () => null,
-  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
-  authRateLimiter: { check: () => ({ limited: false }) },
-  getClientIp: () => "127.0.0.1",
+  reserveAuthAttempt: mockReserve,
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -62,35 +69,68 @@ async function seedForwardAuth(userId: string, overrides: Partial<{
   });
 }
 
+/** The admin, linked to the forward-auth subject "alice". */
+async function linkedAlice() {
+  const user = await createTestUser();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+  });
+  await seedForwardAuth(user.id);
+  return user;
+}
+
 describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
+    vi.clearAllMocks();
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
 
   afterAll(async () => {
     await disconnectTestDb();
   });
 
+  // Every header a real sign-in carries, so only the CSRF check stands in the way.
   it("rejects requests with no Origin and no Referer (strict CSRF)", async () => {
-    const user = await createTestUser();
-    await seedForwardAuth(user.id);
-
-    const res = await callRoute(GET, { method: "GET" });
-    const loc = new URL(res.headers.get("location")!);
-    expect(loc.searchParams.get("sso_error")).toBe("csrf_blocked");
-  });
-
-  it("rejects cross-origin requests", async () => {
-    const user = await createTestUser();
-    await seedForwardAuth(user.id);
+    await linkedAlice();
 
     const res = await callRoute(GET, {
       method: "GET",
-      headers: { Origin: "https://evil.example.com" },
+      headers: { "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("csrf_blocked");
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(mockReserve).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-origin requests", async () => {
+    await linkedAlice();
+
+    const res = await callRoute(GET, {
+      method: "GET",
+      headers: { Origin: "https://evil.example.com", "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
+    });
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("sso_error")).toBe("csrf_blocked");
+    expect(getMockSession().isLoggedIn).toBe(false);
+  });
+
+  it("returns the limiter's 429 before trusting any header", async () => {
+    await linkedAlice();
+    mockReserve.mockReturnValue({
+      refused: Response.json({ error: "Too many attempts. Try again later." }, { status: 429 }),
+    });
+
+    const res = await callRoute(GET, {
+      method: "GET",
+      headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice" },
+    });
+    expect(res.status).toBe(429);
+    expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "sso-forward");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("redirects with sso_not_configured when SSO is disabled", async () => {
@@ -120,17 +160,6 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
   });
 
   describe("the proxy secret", () => {
-
-    async function linkedAlice() {
-      const user = await createTestUser();
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
-      });
-      await seedForwardAuth(user.id);
-      return user;
-    }
-
     // A client reaching the app's port directly can send the identity header
     // itself; it cannot send the secret only the proxy knows.
     it.each([
@@ -145,7 +174,9 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
       });
       const loc = new URL(res.headers.get("location")!);
       expect(loc.searchParams.get("sso_error")).toBe("untrusted_proxy");
-      expect(getMockSession().isLoggedIn).toBeFalsy();
+      expect(getMockSession().isLoggedIn).toBe(false);
+      // A refused sign-in stays charged.
+      expect(mockSucceeded).not.toHaveBeenCalled();
     });
 
     it("signs in when the proxy sends the secret — and the cookie carries no Plex token", async () => {
@@ -154,9 +185,11 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
         method: "GET",
         headers: { ...REFERER, "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
       });
-      expect(new URL(res.headers.get("location")!).pathname).toBe("/");
-      expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+      expect(res.headers.get("location")).toBe("http://localhost:3000/");
+      expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id, sessionVersion: user.sessionVersion });
       expect("plexToken" in getMockSession()).toBe(false);
+      // A sign-in that succeeded is given back to the budget.
+      expect(mockSucceeded).toHaveBeenCalledTimes(1);
     });
 
     // The secret used to be opt-in: unset, any client that reached the app's
@@ -186,19 +219,19 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
           });
           const loc = new URL(res.headers.get("location")!);
           expect(loc.searchParams.get("sso_error")).toBe("forward_auth_unconfigured");
-          expect(getMockSession().isLoggedIn).toBeFalsy();
+          expect(getMockSession().isLoggedIn).toBe(false);
         }
       });
     });
   });
 
   it("redirects with missing_user_header when the configured header is absent", async () => {
-    const user = await createTestUser();
-    await seedForwardAuth(user.id);
+    await linkedAlice();
 
     const res = await callRoute(GET, { method: "GET", headers: SAME_ORIGIN_HEADERS });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("missing_user_header");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("trims whitespace from the user header before matching", async () => {
@@ -214,7 +247,8 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
       headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "  alice  " },
     });
     expect(res.status).toBe(307);
-    expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
   });
 
   it("rejects when subject header doesn't match any linked user", async () => {
@@ -227,6 +261,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("rejects when matching row has ssoEnabled=false", async () => {
@@ -243,6 +278,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("rejects when the linked user's ssoIssuer is OIDC, not forward-auth", async () => {
@@ -264,6 +300,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("backfills ssoIssuer for legacy rows with null issuer", async () => {
@@ -274,10 +311,12 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     });
     await seedForwardAuth(user.id);
 
-    await callRoute(GET, {
+    const res = await callRoute(GET, {
       method: "GET",
       headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice" },
     });
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
 
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.ssoIssuer).toBe("forward-auth");
@@ -306,7 +345,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     expect(refreshed?.username).toBe("Alice Liddell");
   });
 
-  it("attaches plexToken to the new session when present", async () => {
+  it("keeps a stored Plex token in the User row, never in the new session", async () => {
     const user = await createTestUser({ plexToken: "kept-token" });
     await prisma.user.update({
       where: { id: user.id },
@@ -339,7 +378,26 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
       method: "GET",
       headers: { ...SAME_ORIGIN_HEADERS, "X-Authentik-Username": "alice" },
     });
-    expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+  });
+
+  // The proxy only overwrites the header it is configured to set; any other
+  // one passes through from the client, so it must never be read.
+  it("ignores the default header when a custom one is configured", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await seedForwardAuth(user.id, { forwardAuthUserHeader: "X-Authentik-Username" });
+
+    const res = await callRoute(GET, {
+      method: "GET",
+      headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice" },
+    });
+    expect(new URL(res.headers.get("location")!).searchParams.get("sso_error")).toBe("missing_user_header");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   // ── Identity-claim sanitization ─────────────────────────────────────
@@ -369,6 +427,8 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
         "Remote-Name": "x".repeat(5000),
       },
     });
+    // The sign-in itself still succeeds; only the claims are dropped.
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
 
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.username).toBe("Keep");

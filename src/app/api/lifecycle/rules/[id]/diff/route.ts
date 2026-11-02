@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
@@ -75,15 +74,11 @@ async function applyGroupShape(
   });
 }
 
-export async function POST(
+export const POST = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { data, error } = await validateRequest(request, ruleDiffSchema);
   if (error) return error;
@@ -146,36 +141,33 @@ export async function POST(
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
   const arrInstanceId = data.arrInstanceId !== undefined ? data.arrInstanceId : ruleSet.arrInstanceId;
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds, arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   // Evaluate the new rules to get candidate matches
-  let arrData: ArrDataMap | undefined;
-  if (hasArrRules(typedRules)) {
-    arrData = await fetchArrMetadata(session.userId!, type, undefined, arrInstanceId);
-  }
-
-  let seerrData: SeerrDataMap | undefined;
-  if (hasSeerrRules(typedRules) && type !== "MUSIC") {
-    seerrData = await fetchSeerrMetadata(session.userId!, type);
-  }
+  const { arrData, seerrData } = await loadPreviewMetadata(session.userId, type, typedRules, arrInstanceId);
 
   let items;
-  if (type === "SERIES" && seriesScope !== false) {
-    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData);
+  // Routed exactly as detection routes it: a series-aggregate field forces the
+  // series path even with series scope off (see the preview route).
+  const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+  // "Has Pending Action" reads other rule sets' actions, as detection reads it.
+  const crossSystemOptions = { excludeRuleSetId: id };
+  if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
+    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData, aggregateForced, crossSystemOptions);
   } else if (type === "MUSIC" && seriesScope !== false) {
-    items = await evaluateMusicScope(typedRules, serverIds, arrData);
+    items = await evaluateMusicScope(typedRules, serverIds, arrData, crossSystemOptions);
   } else {
-    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData, crossSystemOptions);
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 
   // Filter out excluded items — an exception on another server's copy of an
   // item (same dedupKey) excludes it too, exactly as detection does.
   const candidateIds = items.map((item) => (item as Record<string, unknown>).id as string);
-  const excludedIds = await findExceptedItemIds(session.userId!, candidateIds);
+  const excludedIds = await findExceptedItemIds(session.userId, candidateIds);
 
   // Detection stores a title matched on several servers once, listing the
   // other copies in `itemData.copies`. Such a copy matching again is that same
@@ -193,14 +185,16 @@ export async function POST(
   const candidates = (items as unknown as Record<string, unknown>[]).filter(
     (rec) => !excludedIds.has(rec.id as string),
   );
+  const actionType = data.actionType !== undefined ? data.actionType : ruleSet.actionType;
   const copyKeys = await crossServerCopyKeys(candidates, {
     type,
     serverCount: serverIds.length,
     arrData,
     // The config being saved, not the stored one: arming an action in the
     // same edit is what makes detection collapse copies without Arr data.
-    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) &&
-      !!(data.actionType !== undefined ? data.actionType : ruleSet.actionType),
+    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) && !!actionType,
+    trackScope: seriesScope === false,
+    actionType,
   });
   // Ranked exactly as detection's collapse ranks them (`copyRank`).
   const keptForKey = new Map<string, string>();
@@ -314,11 +308,11 @@ export async function POST(
     );
   }
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     added,
     removed,
     retained,
     removedItems,
     counts: { added: added.length, removed: removed.length, retained: retained.length },
   });
-}
+});

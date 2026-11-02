@@ -75,6 +75,11 @@ describe("POST /api/query/actions", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations: without these a test's
+    // mockResolvedValue / mockImplementation would answer the next test's
+    // re-query. mockReset restores executeAction's no-op echo above.
+    mockedExecuteQuery.mockReset();
+    mockedExecuteAction.mockReset();
   });
 
   afterAll(async () => {
@@ -149,6 +154,97 @@ describe("POST /api/query/actions", () => {
     expect(mockedExecuteQuery).toHaveBeenCalledTimes(1);
   });
 
+  it("never acts on one Arr record twice in a run, even across batches", async () => {
+    // Two servers' copies of a movie (one TMDB id) sent in different batches:
+    // the second batch must not re-send the delete the first already made.
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const libA = await createTestLibrary((await createTestServer(user.id, { name: "A" })).id, { type: "MOVIE" });
+    const libB = await createTestLibrary((await createTestServer(user.id, { name: "B" })).id, { type: "MOVIE" });
+    const copyA = await createTestMediaItem(libA.id, { type: "MOVIE", title: "Same" });
+    const copyB = await createTestMediaItem(libB.id, { type: "MOVIE", title: "Same" });
+    await createTestExternalId(copyA.id, "TMDB", "777");
+    await createTestExternalId(copyB.id, "TMDB", "777");
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: copyA.id, type: "MOVIE", title: "Same", parentTitle: null },
+        { id: copyB.id, type: "MOVIE", title: "Same", parentTitle: null },
+      ]),
+    );
+    const batch = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId: "run-dedup", actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+
+    const { result: b1 } = await expectStreamResult<{ executed: number; skipped: number }>(await batch(copyA.id));
+    const { result: b2 } = await expectStreamResult<{ executed: number; skipped: number }>(await batch(copyB.id));
+
+    expect(b1.executed).toBe(1);
+    expect(b2).toMatchObject({ executed: 0, skipped: 1 });
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a member-scoped file delete act in every batch of a run", async () => {
+    // File deletes act on each batch's own tracks, so a split artist is fine.
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MUSIC" });
+    const t1 = await createTestMediaItem(lib.id, { type: "MUSIC", title: "One", parentTitle: "Artist" });
+    const t2 = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Two", parentTitle: "Artist" });
+    await createTestExternalId(t1.id, "MUSICBRAINZ", "mbid-1");
+    await createTestExternalId(t2.id, "MUSICBRAINZ", "mbid-1");
+    const lidarr = await createTestLidarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: t1.id, type: "MUSIC", title: "One", parentTitle: "Artist" },
+        { id: t2.id, type: "MUSIC", title: "Two", parentTitle: "Artist" },
+      ]),
+    );
+    const batch = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId: "run-files", actionType: "DELETE_FILES_LIDARR", arrInstanceId: lidarr.id },
+      });
+
+    await expectStreamResult(await batch(t1.id));
+    await expectStreamResult(await batch(t2.id));
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses tag changes on an action that deletes the whole Arr record", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const radarr = await createTestRadarrInstance(user.id);
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: ["x"], actionType: "DELETE_RADARR", arrInstanceId: radarr.id, addArrTags: ["gone"] },
+    });
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toContain("deletes the whole Arr record");
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it("runs tag changes alongside a file-only delete, whose Arr record stays", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m = await createTestMediaItem(lib.id, { type: "MOVIE", title: "Keep Record" });
+    await createTestExternalId(m.id, "TMDB", "888");
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: m.id, type: "MOVIE", title: "Keep Record", parentTitle: null }]));
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [m.id], actionType: "DELETE_FILES_RADARR", arrInstanceId: radarr.id, addArrTags: ["redownload"] },
+    });
+    const { result } = await expectStreamResult<{ executed: number }>(response);
+    expect(result.executed).toBe(1);
+    expect(mockedExecuteAction.mock.calls[0][0]).toMatchObject({ actionType: "DELETE_FILES_RADARR", addArrTags: ["redownload"] });
+  });
+
   it("re-runs the safety query per request when no runId is shared", async () => {
     appCache.clear();
     const user = await createTestUser();
@@ -208,10 +304,14 @@ describe("POST /api/query/actions", () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       status: "COMPLETED",
+      mediaItemId: movie.id,
       ruleSetId: null,
       ruleSetName: "Ad-hoc query action",
       ruleSetType: "MOVIE",
       actionType: "DELETE_RADARR",
+      arrInstanceId: radarr.id,
+      // The movie's own file (the factory's 1 GiB) is what the delete freed.
+      deletedBytes: BigInt(1073741824),
     });
   });
 
@@ -236,7 +336,9 @@ describe("POST /api/query/actions", () => {
     const { result } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
     expect(result.executed).toBe(0);
     expect(result.skipped).toBe(1);
+    expect(result.errors).toEqual(["All selected items are excluded from lifecycle actions"]);
     expect(mockedExecuteAction).not.toHaveBeenCalled();
+    expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
   it("streams phase progress events with determinate per-item execute progress", async () => {
@@ -324,7 +426,8 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: ["a"], actionType: "DROP_TABLE", arrInstanceId: radarr.id },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("Unknown action type");
     expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
@@ -336,7 +439,8 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: ["a"], actionType: "DELETE_RADARR" },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("An Arr instance is required for this action");
     expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
@@ -354,7 +458,9 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("A target quality profile is required");
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
   it("executes a quality profile change with search-after and records both fields", async () => {
@@ -467,8 +573,13 @@ describe("POST /api/query/actions", () => {
       },
     });
     const { result: body } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
-    expect(body.executed).toBe(0);
+    expect(body).toMatchObject({
+      executed: 0,
+      skipped: 1,
+      errors: ["All selected items are excluded from lifecycle actions"],
+    });
     expect(mockedExecuteAction).not.toHaveBeenCalled();
+    expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
   it("resolves grouped-series member episode IDs for file-deletion actions", async () => {
@@ -733,6 +844,57 @@ describe("POST /api/query/actions", () => {
     expect(new Set(mockedExecuteAction.mock.calls[0][0].matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
   });
 
+  it.each(["UNMONITOR_SONARR", "SEARCH_SONARR"])(
+    "%s in episode (includeEpisodes) mode acts on the selected episodes only, not the series",
+    async (actionType) => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+      const sonarr = await createTestSonarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+        { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+      ]));
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, includeEpisodes: true },
+          mediaItemIds: [ep2.id],
+          actionType,
+          arrInstanceId: sonarr.id,
+        },
+      });
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+      const record = mockedExecuteAction.mock.calls[0][0];
+      expect(record.episodeScope).toBe(true);
+      expect(record.matchedMediaItemIds).toEqual([ep2.id]);
+    },
+  );
+
+  it("UNMONITOR_SONARR in the grouped series view still acts on the series", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const sonarr = await createTestSonarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: ep1.id, type: "SERIES", title: "Show", parentTitle: "Show" }]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "UNMONITOR_SONARR", arrInstanceId: sonarr.id },
+    });
+    await expectStreamResult(response);
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockedExecuteAction.mock.calls[0][0].episodeScope).toBe(false);
+  });
+
   it("records a FAILED action and surfaces the error when execution throws", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
@@ -754,11 +916,14 @@ describe("POST /api/query/actions", () => {
     });
     const { result: body } = await expectStreamResult<{ executed: number; failed: number; errors: string[] }>(response);
     expect(body).toMatchObject({ executed: 0, failed: 1 });
+    expect(body.errors).toHaveLength(1);
     expect(body.errors[0]).toContain("Radarr exploded");
 
     const prisma = getTestPrisma();
     const actions = await prisma.lifecycleAction.findMany({ where: { userId: user.id } });
-    expect(actions[0].status).toBe("FAILED");
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ status: "FAILED", mediaItemId: movie.id, actionType: "DELETE_RADARR", deletedBytes: null });
+    expect(actions[0].error).toContain("Radarr exploded");
   });
 
   it("refuses a whole-series DELETE_SONARR when a NON-matching sibling episode is excepted", async () => {
@@ -1290,7 +1455,9 @@ describe("POST /api/query/actions", () => {
       });
 
       const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toMatch(/play-activity/i);
+      expect(body.error).toMatch(/^The query uses play-activity criteria but 1 server\(s\) have no established play history yet/);
+      // The refusal names the server and which fault applies (wait for the import).
+      expect(body.error).toContain('"Test Server" (its Tracearr history import has not finished walking back through the archive)');
       // The query must not even run: executing it would produce the vacuous
       // whole-library match set this guard exists to keep out of an action.
       expect(mockedExecuteQuery).not.toHaveBeenCalled();
@@ -1320,7 +1487,10 @@ describe("POST /api/query/actions", () => {
         },
       });
 
-      await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      // The other fault: nothing to wait for, a sync has to re-establish it.
+      expect(body.error).toContain('"Test Server" (no sync has established what was played there');
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -1399,7 +1569,20 @@ describe("POST /api/query/actions", () => {
 
       const { result: body } = await expectStreamResult<{ executed: number }>(response);
       expect(body.executed).toBe(1);
-      expect(importing.id).not.toBe(native.id);
+
+      // The same query aimed at the importing server is refused.
+      const refused = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [importing.id], groups: watchedByUserGroups },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+      const refusal = await expectJson<{ error: string }>(refused, 400);
+      expect(refusal.error).toContain('"Importing" (its Tracearr history import');
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
     });
 
     it("refuses an unscoped query while ANY server is still importing", async () => {
@@ -1423,7 +1606,9 @@ describe("POST /api/query/actions", () => {
         },
       });
 
-      await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain('"Test Server" (its Tracearr history import has not finished');
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
   });

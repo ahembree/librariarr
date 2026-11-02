@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { getDimensionMeta, supportsTimelineBreakdown } from "@/lib/dashboard/custom-dimensions";
-import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import {
-  computeTimeline,
+  getTimelineCached,
   ALLOWED_DATE_COLUMNS,
   VALID_BINS,
   VALID_MEASURES,
@@ -14,12 +13,7 @@ import {
 // Re-exported for consumers that imported the type from the route (e.g. charts).
 export type { TimelinePoint } from "@/lib/media/timeline";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const dateField = searchParams.get("dateField");
   const bin = searchParams.get("bin") ?? "month";
@@ -56,7 +50,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const scope = await resolveStatsScope(session.userId!, serverId);
+  const scope = await resolveStatsScope(session.userId, serverId);
   if (scope === "server-not-found") {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
@@ -65,20 +59,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ points: [], series: [] });
   }
 
-  const cacheKey = `timeline:${dateField}:${bin}:${measure}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${[...scope.serverIds].sort().join(",")}:${scope.dedupEnabled ? "dedup" : "raw"}`;
-
-  const result = await appCache.getOrSet(cacheKey, async () => {
-    return computeTimeline({
-      dateField,
-      bin,
-      measure,
-      breakdownMeta: breakdownMeta ?? null,
-      serverIds: scope.serverIds,
-      typeFilter,
-      topN,
-      dedupEnabled: scope.dedupEnabled,
-    });
-  }, 60_000);
+  const result = await getTimelineCached({
+    dateField,
+    bin,
+    measure,
+    breakdownMeta: breakdownMeta ?? null,
+    breakdownDim,
+    serverIds: scope.serverIds,
+    typeFilter,
+    topN,
+    dedupEnabled: scope.dedupEnabled,
+  });
 
   return NextResponse.json(result);
-}
+});

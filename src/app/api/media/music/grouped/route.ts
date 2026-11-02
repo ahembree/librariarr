@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import type { ServerPresence } from "@/lib/dedup/deduplicate";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 import { ARTIST_KEY_SQL, audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
@@ -39,12 +43,7 @@ interface ArtistRepresentativeRow {
   summary: string | null;
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // The shared parser, so `offset` (documented for every paged listing, and
   // what an offset-based client pages with) is honoured here too: these routes
@@ -59,7 +58,7 @@ export async function GET(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
     return NextResponse.json({ artists: [], pagination: { page, limit, hasMore: false } });
   }
@@ -82,7 +81,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (startsWith) applyStartsWithFilter(whereClause, "parentTitle", startsWith);
-  applyCommonFilters(whereClause, searchParams);
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(whereClause, searchParams, genreSpellings, resolutionSpellings);
 
   // For multi-server, only fetch canonical items (pre-deduped)
   if (!sf.isSingleServer) {
@@ -99,7 +102,7 @@ export async function GET(request: NextRequest) {
   // runs over those. Without a filter the base predicate below is the whole
   // where, and the id round trip is skipped.
   const narrowing: Prisma.MediaItemWhereInput = {};
-  applyCommonFilters(narrowing, searchParams);
+  applyCommonFilters(narrowing, searchParams, genreSpellings, resolutionSpellings);
   const filtered = !!search || !!startsWith || Object.keys(narrowing).length > 0;
   const matchingIds = filtered
     ? (await prisma.mediaItem.findMany({ where: whereClause, select: { id: true } })).map((r) => r.id)
@@ -127,6 +130,8 @@ export async function GET(request: NextRequest) {
   // are the same on every track, so this keeps that answer and makes it stable.
   const trackOrder = `"albumTitle", "seasonNumber", "episodeNumber", id`;
   const first = (col: string) => firstNonNullSql(col, trackOrder);
+
+  const presenceAfterPaging = !sf.isSingleServer && (limit > 0 || filtered);
 
   // `ORDER BY group_key`: the list is sorted below with a stable sort, so
   // this is the order of ties — artists with equal track counts — and a page
@@ -187,7 +192,10 @@ export async function GET(request: NextRequest) {
       GROUP BY 1, 2`,
       ...params,
     ),
-    sf.isSingleServer ? null : getServerPresenceByGroup("MUSIC", sf.serverIds),
+    // Read beside the aggregate only when every artist is returned; a page or
+    // a filtered listing reads presence after paging, for the artists it
+    // returns (the scan across the whole library was the slowest part).
+    sf.isSingleServer || presenceAfterPaging ? null : getServerPresenceByGroup("MUSIC", sf.serverIds),
   ]);
 
   const repByKey = new Map(representatives.map((r) => [r.group_key, r]));
@@ -204,11 +212,14 @@ export async function GET(request: NextRequest) {
     ? { serverId: sf.serverIds[0], ...sf.serverMap.get(sf.serverIds[0])! }
     : null;
 
+  // Each row's group key, for the presence read after paging: the rows carry
+  // no key of their own, and an extra field would change the response.
+  const groupKeyOf = new Map<object, string>();
   const artistList = groups
     .map((g) => {
       const rep = repByKey.get(g.group_key);
       const mediaItemId = rep?.mediaItemId ?? "";
-      return {
+      const row = {
         // The spelling of the track the group links to, as the fold showed
         // its first track's; MIN would pick " Name" over "Name".
         parentTitle: rep?.parentTitle ?? g.parentTitle,
@@ -220,9 +231,11 @@ export async function GET(request: NextRequest) {
         addedAt: g.addedAt,
         audioCodecCounts: codecsByKey.get(g.group_key) ?? {},
         thumbUrl: rep?.thumbUrl ?? null,
-        servers: singleServer
+        // Filled in after paging when `presenceAfterPaging` — set here so the
+        // key keeps its place in the row.
+        servers: (singleServer
           ? [{ serverId: singleServer.serverId, serverName: singleServer.name, serverType: singleServer.type, mediaItemId }]
-          : groupServerPresence?.get(g.group_key) ?? [],
+          : groupServerPresence?.get(g.group_key) ?? []) as ServerPresence[],
         summary: rep?.summary ?? summaryByKey.get(g.group_key) ?? null,
         genres: g.genres as string[] | null,
         studio: g.studio,
@@ -233,6 +246,8 @@ export async function GET(request: NextRequest) {
         audienceRatingImage: g.audienceRatingImage,
         year: g.year,
       };
+      groupKeyOf.set(row, g.group_key);
+      return row;
     })
     .sort((a, b) => {
       const dir = sortOrder === "desc" ? -1 : 1;
@@ -258,12 +273,37 @@ export async function GET(request: NextRequest) {
       }
     });
 
+  // The presence of just the artists being returned.
+  const withPresence = async <T extends { servers: ServerPresence[] }>(rows: T[]) => {
+    if (!presenceAfterPaging) return rows;
+    const keys = rows.map((row) => groupKeyOf.get(row)!);
+    const presence = await getServerPresenceByGroup(
+      "MUSIC",
+      sf.serverIds,
+      keys.length <= PRESENCE_SCOPE_MAX_KEYS ? { groupKeys: keys } : undefined,
+    );
+    rows.forEach((row, i) => (row.servers = presence.get(keys[i]) ?? []));
+    return rows;
+  };
+
   if (limit > 0) {
     const paged = artistList.slice(skip, skip + limit + 1);
     const hasMore = paged.length > limit;
     if (hasMore) paged.pop();
-    return jsonResponse(request, { artists: paged, pagination: { page, limit, hasMore } });
+    return jsonResponse(request, { artists: await withPresence(paged), pagination: { page, limit, hasMore } });
   }
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { artists: artistList.slice(skip), pagination: { page, limit, hasMore: false } });
-}
+  return jsonResponse(request, { artists: await withPresence(artistList.slice(skip)), pagination: { page, limit, hasMore: false } });
+});
+
+/**
+ * Above this many artists, presence is read for the whole library instead:
+ * past it a scoped scan costs about what the full one does.
+ */
+const PRESENCE_SCOPE_MAX_KEYS = 500;
+
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-music-grouped", listGet);

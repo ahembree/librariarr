@@ -2,10 +2,14 @@
 
 import React, { memo, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useChipColors } from "@/components/chip-color-provider";
-import { getChipBadgeStyle, type ChipColorCategory } from "@/lib/theme/chip-colors";
-import { ColorChip } from "@/components/color-chip";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import {
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  qualityChips,
+  resolutionChipLabel,
+  type QualityChipSpec,
+} from "@/lib/media/quality-chips";
 import {
   Table,
   TableBody,
@@ -30,8 +34,12 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/h
 import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
-import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
+import { toast } from "sonner";
+import { formatFileSize, formatDuration, formatDate, formatDateOnly, formatChannels } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
+import { intentHandlers } from "@/lib/intent-prefetch";
+import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -75,32 +83,9 @@ interface ColumnDef {
   render: (item: MediaListItem) => React.ReactNode;
 }
 
-// Resolution and dynamic range colors now come from ChipColorProvider context
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "-";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
-// getDynamicRangeColor removed — now uses ChipColorProvider
-
-function formatDynamicRange(dr: string | null): string {
-  if (!dr || dr === "SDR") return "SDR";
-  return dr;
-}
-
-const CHANNEL_LABELS: Record<number, string> = {
-  1: "Mono",
-  2: "Stereo",
-  3: "2.1",
-  6: "5.1",
-  8: "7.1",
-};
-
-function formatChannels(ch: number | null): string {
-  if (ch == null) return "-";
-  return CHANNEL_LABELS[ch] ?? `${ch}ch`;
+/** One quality chip in a cell, or "-" when the item has no such value. */
+function chipCell(chip: QualityChipSpec | null) {
+  return chip ? <QualityChip chip={chip} /> : <span className="text-muted-foreground">-</span>;
 }
 
 function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | null {
@@ -111,7 +96,7 @@ function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | nul
   return formatEpisodeCode(item.seasonNumber, item.episodeNumber);
 }
 
-function buildColumns(getHex: (category: ChipColorCategory, value: string) => string): ColumnDef[] {
+function buildColumns(): ColumnDef[] {
   return [
   // Core (always title first, then contextual episode/year)
   {
@@ -143,11 +128,10 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "video",
     defaultVisible: true,
     defaultWidth: 100,
-    render: (item) => (
-      <ColorChip style={getChipBadgeStyle(getHex("resolution", formatResolution(item.resolution)))}>
-        {formatResolution(item.resolution)}
-      </ColorChip>
-    ),
+    render: (item) => {
+      const label = resolutionChipLabel(item.resolution);
+      return chipCell(label ? { category: "resolution", label } : null);
+    },
   },
   {
     id: "dynamicRange",
@@ -157,12 +141,8 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: true,
     defaultWidth: 90,
     render: (item) => {
-      const dr = item.dynamicRange ?? "SDR";
-      return (
-        <ColorChip style={getChipBadgeStyle(getHex("dynamicRange", dr))}>
-          {formatDynamicRange(dr)}
-        </ColorChip>
-      );
+      const label = dynamicRangeChipLabel(item.dynamicRange);
+      return chipCell(label ? { category: "dynamicRange", label } : null);
     },
   },
   {
@@ -183,15 +163,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "audio",
     defaultVisible: true,
     defaultWidth: 130,
-    render: (item) =>
-      item.audioCodec ? (
-        <ColorChip style={getChipBadgeStyle(getHex("audioCodec", item.audioCodec))}>
-          {item.audioCodec.toUpperCase()}
-          {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
-        </ColorChip>
-      ) : (
-        <span className="text-muted-foreground">-</span>
-      ),
+    render: (item) => chipCell(qualityChips(item, "music", { channels: true })[0] ?? null),
   },
   {
     id: "fileSize",
@@ -238,14 +210,10 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "audio",
     defaultVisible: false,
     defaultWidth: 120,
-    render: (item) =>
-      item.audioProfile ? (
-        <ColorChip style={getChipBadgeStyle(getHex("audioProfile", item.audioProfile))}>
-          {item.audioProfile}
-        </ColorChip>
-      ) : (
-        <span className="text-muted-foreground">-</span>
-      ),
+    render: (item) => {
+      const label = audioProfileChipLabel(item.audioProfile);
+      return chipCell(label ? { category: "audioProfile", label } : null);
+    },
   },
   {
     id: "audioChannels",
@@ -255,7 +223,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: false,
     defaultWidth: 90,
     render: (item) => (
-      <span className="text-muted-foreground">{formatChannels(item.audioChannels)}</span>
+      <span className="text-muted-foreground">{item.audioChannels == null ? "-" : formatChannels(item.audioChannels)}</span>
     ),
   },
   {
@@ -367,7 +335,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: false,
     defaultWidth: 100,
     render: (item) => (
-      <span className="text-muted-foreground">{formatDate(item.originallyAvailableAt)}</span>
+      <span className="text-muted-foreground">{formatDateOnly(item.originallyAvailableAt)}</span>
     ),
   },
   {
@@ -412,6 +380,27 @@ function getDefaultVisibility(columns: ColumnDef[]): Record<string, boolean> {
   return vis;
 }
 
+// The key a table's columns are saved under.
+function columnPrefKey(mediaType: string | undefined): string {
+  return mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
+}
+
+// Saved columns are visible, every other column hidden; nothing saved for the
+// type keeps the defaults.
+function visibilityFromPreferences(
+  prefs: Record<string, unknown> | null | undefined,
+  prefKey: string,
+  columns: ColumnDef[],
+): Record<string, boolean> {
+  const saved = prefs?.[prefKey];
+  if (!Array.isArray(saved)) return getDefaultVisibility(columns);
+  const vis: Record<string, boolean> = {};
+  for (const col of columns) {
+    vis[col.id] = saved.includes(col.id);
+  }
+  return vis;
+}
+
 // Column IDs that are video-specific and should be hidden for MUSIC
 const VIDEO_COLUMN_IDS = new Set([
   "resolution",
@@ -424,9 +413,24 @@ const VIDEO_COLUMN_IDS = new Set([
 ]);
 
 function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
-  const { getHex } = useChipColors();
-  const allColumns = useMemo(() => buildColumns(getHex), [getHex]);
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => getDefaultVisibility(allColumns));
+  const allColumns = useMemo(() => buildColumns(), []);
+  // Inside the shell the saved columns are the settings store's: the layout
+  // seeded it, so the table opens with them (fetched after mount, it drew the
+  // default columns first), and a save in another tab or on another device
+  // shows here once the store refreshes. Only outside the shell (or when the
+  // layout could not read them) are they fetched and saved here.
+  const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
+  const prefKey = columnPrefKey(mediaType);
+  const savedColumns = shellSnapshot?.columnPreferences?.[prefKey];
+  const shellVisibility = useMemo(
+    () => (shell ? visibilityFromPreferences({ [prefKey]: savedColumns }, prefKey, allColumns) : null),
+    [shell, savedColumns, prefKey, allColumns],
+  );
+  const [fetchedVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() =>
+    getDefaultVisibility(allColumns),
+  );
+  const columnVisibility = shellVisibility ?? fetchedVisibility;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- Row Virtualization ---
@@ -494,8 +498,9 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     return () => { ref.current = null; };
   }, [scrollToIndexRef, virtualizer]);
 
-  // Load column preferences from DB on mount
+  // Load column preferences from DB on mount, outside the shell
   useEffect(() => {
+    if (shell) return;
     let cancelled = false;
     async function loadPreferences() {
       try {
@@ -503,27 +508,16 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
-        const prefs = data.preferences;
-        // Map media type to preference key
-        const prefKey = mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
-        if (prefs && Array.isArray(prefs[prefKey])) {
-          const savedColumns = prefs[prefKey] as string[];
-          // Build visibility map: columns in savedColumns are visible, others are not
-          const vis: Record<string, boolean> = {};
-          for (const col of allColumns) {
-            vis[col.id] = savedColumns.includes(col.id);
-          }
-          setColumnVisibility(vis);
+        if (Array.isArray(data.preferences?.[prefKey])) {
+          setColumnVisibility(visibilityFromPreferences(data.preferences, prefKey, allColumns));
         }
       } catch {
         // Keep defaults if fetch fails
-      } finally {
-        // Preferences loaded (or failed)
       }
     }
     loadPreferences();
     return () => { cancelled = true; };
-  }, [mediaType, allColumns]);
+  }, [shell, prefKey, allColumns]);
 
   // Save column preferences to DB (debounced)
   const savePreferences = useCallback((visibility: Record<string, boolean>) => {
@@ -532,26 +526,37 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
       const visibleCols = Object.entries(visibility)
         .filter(([, visible]) => visible)
         .map(([id]) => id);
-      const type = mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
       try {
         await fetch("/api/settings/column-preferences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type, columns: visibleCols }),
+          body: JSON.stringify({ type: prefKey, columns: visibleCols }),
         });
       } catch {
         // Silently fail
       }
     }, 500);
-  }, [mediaType]);
+  }, [prefKey]);
 
   const toggleColumn = useCallback((colId: string, checked: boolean) => {
+    if (shell && shellVisibility) {
+      const next = { ...shellVisibility, [colId]: checked };
+      const visibleCols = allColumns.filter((col) => next[col.id]).map((col) => col.id);
+      // Shown at once, sent after a short pause against the store's revision;
+      // a list another tab or device saved since is loaded in its place.
+      void shell.saveColumns(prefKey, visibleCols).then((outcome) => {
+        if (outcome === "conflict") {
+          toast.error("The column selection was changed in another tab or on another device. The current one has been loaded; make the change again.");
+        }
+      });
+      return;
+    }
     setColumnVisibility((prev) => {
       const next = { ...prev, [colId]: checked };
       savePreferences(next);
       return next;
     });
-  }, [savePreferences]);
+  }, [shell, shellVisibility, allColumns, prefKey, savePreferences]);
 
   const isMusic = mediaType === "MUSIC";
 
@@ -758,6 +763,9 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                       <TableRow
                         data-index={virtualRow.index}
                         onClick={() => onItemClick(item)}
+                        // A row opens its item — a detail page or the side
+                        // panel — and both read the item's record by this id.
+                        {...intentHandlers(() => prefetchMediaRecord(item.id))}
                         className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 ${rowClassName?.(item) ?? ""}`}
                       >
                         {/* Title cell - always shown */}

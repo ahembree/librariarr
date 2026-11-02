@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ComponentProps } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, startTransition, type ComponentProps } from "react";
 import {
   Card,
   CardContent,
@@ -25,8 +25,10 @@ import { formatEpisodeCode, formatEpisodeTitle } from "@/lib/media/display-title
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
-import { useRealtime } from "@/hooks/use-realtime";
-import type { MediaHoverData } from "@/components/media-hover-popover";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
+import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
+import { useDashboardSeed } from "@/components/dashboard/dashboard-seed";
+import { RECENTLY_ADDED_LIMIT, recentlyAddedUrl } from "@/lib/dashboard/seed-urls";
 
 interface RecentItem {
   id: string;
@@ -91,7 +93,12 @@ interface RecentlyAddedProps {
 }
 
 /** How many items the shelf fetches (scrolled horizontally, no paging). */
-const SHELF_LIMIT = 24;
+const SHELF_LIMIT = RECENTLY_ADDED_LIMIT;
+
+interface RecentlyAddedBody {
+  items?: RecentItem[];
+  total?: number;
+}
 
 const TYPE_ICONS = { MOVIE: Film, SERIES: Tv, MUSIC: Music } as const;
 
@@ -203,7 +210,45 @@ function ShelfTile({
   );
 }
 
-export function RecentlyAdded({
+/** The item's record for the popover, named the way the tile names it. */
+function shelfHoverData(item: RecentItem, json: unknown): MediaHoverData {
+  const data = hoverDataFromRecord((json as { item: MediaHoverData }).item);
+  return item.type === "MOVIE" ? data : { ...data, title: formatEpisode(item) };
+}
+
+/**
+ * One shelf entry, memoised on its row and the shelf's stable click handler:
+ * the shelf re-renders when its chevrons change and on every refetch, and
+ * each entry used to be rebuilt each time with new handlers and a new popover
+ * placeholder.
+ */
+const ShelfEntry = memo(function ShelfEntry({ item, onOpen }: { item: RecentItem; onOpen: (item: RecentItem) => void }) {
+  const onClick = useCallback(() => onOpen(item), [onOpen, item]);
+  const extractData = useCallback((json: unknown) => shelfHoverData(item, json), [item]);
+  const placeholder = useMemo<MediaHoverData>(
+    () => ({ title: formatEpisode(item), year: item.year, addedAt: item.addedAt }),
+    [item],
+  );
+
+  // A collapsed tile gets no popover: the popover describes ONE media item
+  // (its file size, resolution, codecs), and showing the representative
+  // episode's numbers under a "Season 27 · 27 episodes" heading would
+  // attribute one file's properties to the whole season.
+  if (isGroup(item)) return <ShelfTile item={item} onClick={onClick} />;
+  return (
+    <LazyMediaHoverPopover
+      fetchUrl={`/api/media/${item.id}`}
+      extractData={extractData}
+      placeholder={placeholder}
+      imageUrl={artworkUrl(item)}
+      imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+    >
+      <ShelfTile item={item} onClick={onClick} />
+    </LazyMediaHoverPopover>
+  );
+});
+
+export const RecentlyAdded = memo(function RecentlyAdded({
   filterType,
   lockedFilterType,
   serverId,
@@ -215,9 +260,22 @@ export function RecentlyAdded({
   onSeasonClick,
   onAlbumClick,
 }: RecentlyAddedProps) {
-  const [items, setItems] = useState<RecentItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  // On the dashboard's page load the server render read the shelf (the same
+  // URL): it is shown once the page has hydrated, without a request.
+  const initialUrl = recentlyAddedUrl(filterType, serverId);
+  const seeded = useDashboardSeed<RecentlyAddedBody>(initialUrl);
+  const seededUrl = useRef(seeded === undefined ? null : initialUrl);
+  const [items, setItems] = useState<RecentItem[]>(() => seeded?.items ?? []);
+  const [total, setTotal] = useState(() => seeded?.total ?? 0);
+  const [loading, setLoading] = useState(seeded === undefined);
+  // The tiles' "2h ago" and the count are the browser's to write: shown once
+  // mounted, so the server's HTML (an hour or a time zone away) never has to
+  // match them. In a transition, so 24 tiles are not part of the update that
+  // ends hydration — one long task on a phone.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    startTransition(() => setMounted(true));
+  }, []);
   const [localType, setLocalType] = useState<"MOVIE" | "SERIES" | "MUSIC" | undefined>(filterType);
   const [localServerId, setLocalServerId] = useState<string | undefined>(undefined);
   const shelfRef = useRef<HTMLDivElement>(null);
@@ -245,10 +303,7 @@ export function RecentlyAdded({
   const fetchData = useCallback(async () => {
     const token = ++reqToken.current;
     try {
-      const params = new URLSearchParams({ limit: String(SHELF_LIMIT) });
-      if (effectiveType) params.set("type", effectiveType);
-      if (effectiveServerId) params.set("serverId", effectiveServerId);
-      const res = await fetch(`/api/media/recently-added?${params}`);
+      const res = await fetch(recentlyAddedUrl(effectiveType, effectiveServerId));
       if (!res.ok || token !== reqToken.current) return;
       const data = await res.json();
       if (token !== reqToken.current) return;
@@ -262,23 +317,36 @@ export function RecentlyAdded({
   }, [effectiveType, effectiveServerId]);
 
   useEffect(() => {
+    if (seededUrl.current === recentlyAddedUrl(effectiveType, effectiveServerId)) {
+      seededUrl.current = null;
+      return;
+    }
+    seededUrl.current = null;
     void (async () => { await fetchData(); })();
-  }, [fetchData]);
+  }, [fetchData, effectiveType, effectiveServerId]);
 
   // Refresh when a sync lands new media, so the shelf reflects the library
   // without a page reload. `sync:completed` is emitted by both the full and the
   // incremental sync (the latter within a second of a server reporting an add),
   // and is only emitted when something actually changed — a no-op sync returns
-  // before emitting, so this doesn't refetch on every scan.
-  useRealtime("sync:completed", fetchData);
+  // before emitting, so this doesn't refetch on every scan. A shelf narrowed to
+  // one type or one server skips a sync that touched neither.
+  useLibrarySyncRefetch({ types: effectiveType ?? null, serverId: effectiveServerId }, fetchData);
+
+  // Read through a ref so the handler the tiles hold stays the same across
+  // renders: the dashboard hands new click callbacks on each of its own.
+  const clickHandlers = useRef({ onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick });
+  useEffect(() => {
+    clickHandlers.current = { onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick };
+  });
 
   const updateScroll = useCallback(() => {
     const el = shelfRef.current;
     if (!el) return;
-    setCanScroll({
-      left: el.scrollLeft > 4,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
-    });
+    const left = el.scrollLeft > 4;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+    // Fires on every scroll event: only a chevron that changes re-renders.
+    setCanScroll((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
   }, []);
 
   // Reset to the start only when the USER changed the selection. Doing it on
@@ -291,13 +359,17 @@ export function RecentlyAdded({
   }, [effectiveType, effectiveServerId]);
 
   // Recompute chevron state when content or container size changes (the shelf
-  // can resize without a window resize — e.g. sidebar collapse).
+  // can resize without a window resize — e.g. sidebar collapse). The shelf
+  // itself mounts only once neither skeleton shows: with seeded items those
+  // are in place before `mounted` turns true, so the observer must be attached
+  // then too.
+  const shelfShown = !loading && mounted;
   useEffect(() => {
     updateScroll();
     const observer = new ResizeObserver(updateScroll);
     if (shelfRef.current) observer.observe(shelfRef.current);
     return () => observer.disconnect();
-  }, [items, updateScroll]);
+  }, [items, shelfShown, updateScroll]);
 
   const scrollShelf = (dir: 1 | -1) => {
     const el = shelfRef.current;
@@ -305,7 +377,8 @@ export function RecentlyAdded({
     el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
   };
 
-  const handleClick = (item: RecentItem) => {
+  const handleClick = useCallback((item: RecentItem) => {
+    const { onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick } = clickHandlers.current;
     // A collapsed tile represents a season / an album, so it opens that rather
     // than the one member row that happens to represent it.
     if (item.type === "MOVIE") {
@@ -317,7 +390,7 @@ export function RecentlyAdded({
       if (isGroup(item) && onAlbumClick) onAlbumClick(item.id);
       else onTrackClick?.(item.id);
     }
-  };
+  }, []);
 
   return (
     <Card className="h-full flex flex-col gap-3">
@@ -328,7 +401,7 @@ export function RecentlyAdded({
               <Clock className="h-4 w-4" />
               Recently Added
             </span>
-            {total > 0 && (
+            {mounted && total > 0 && (
               <span className="font-mono text-[11px] font-normal text-faint">
                 {Math.min(items.length, SHELF_LIMIT)} of {total.toLocaleString()}
               </span>
@@ -407,7 +480,7 @@ export function RecentlyAdded({
         </div>
       </CardHeader>
       <CardContent className="flex-1 min-h-0">
-        {loading ? (
+        {loading || !mounted ? (
           <div className="flex gap-3 overflow-hidden">
             {Array.from({ length: 9 }).map((_, i) => (
               <div key={i} className="w-28 shrink-0">
@@ -428,39 +501,12 @@ export function RecentlyAdded({
             onScroll={updateScroll}
             className="flex snap-x gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {items.map((item) =>
-              // A collapsed tile gets no popover: the popover describes ONE
-              // media item (its file size, resolution, codecs), and showing the
-              // representative episode's numbers under a "Season 27 · 27
-              // episodes" heading would attribute one file's properties to the
-              // whole season.
-              isGroup(item) ? (
-                <ShelfTile key={item.groupKey} item={item} onClick={() => handleClick(item)} />
-              ) : (
-                <LazyMediaHoverPopover
-                  key={item.groupKey}
-                  fetchUrl={`/api/media/${item.id}`}
-                  extractData={(json) => {
-                    const data = (json as { item: MediaHoverData }).item;
-                    return item.type === "MOVIE"
-                      ? data
-                      : { ...data, title: formatEpisode(item) };
-                  }}
-                  placeholder={{
-                    title: formatEpisode(item),
-                    year: item.year,
-                    addedAt: item.addedAt,
-                  }}
-                  imageUrl={artworkUrl(item)}
-                  imageAspect={item.type === "MUSIC" ? "square" : "poster"}
-                >
-                  <ShelfTile item={item} onClick={() => handleClick(item)} />
-                </LazyMediaHoverPopover>
-              ),
-            )}
+            {items.map((item) => (
+              <ShelfEntry key={item.groupKey} item={item} onOpen={handleClick} />
+            ))}
           </div>
         )}
       </CardContent>
     </Card>
   );
-}
+});

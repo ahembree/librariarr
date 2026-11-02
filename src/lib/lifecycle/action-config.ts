@@ -6,19 +6,13 @@
  * arrInstanceId pointing at an instance of the wrong family / another
  * record that doesn't exist).
  */
-import { prisma } from "@/lib/db";
-
-export type ArrFamily = "RADARR" | "SONARR" | "LIDARR";
+import { ARR_FAMILY_FOR_TYPE, findArrInstance, type ArrFamily } from "@/lib/arr/instances";
 
 /** The only Arr family whose records correspond to each library type. */
-export const FAMILY_FOR_LIBRARY: Record<"MOVIE" | "SERIES" | "MUSIC", ArrFamily> = {
-  MOVIE: "RADARR",
-  SERIES: "SONARR",
-  MUSIC: "LIDARR",
-};
+const FAMILY_FOR_LIBRARY = ARR_FAMILY_FOR_TYPE;
 
 /** Family encoded in an actionType suffix, or null for DO_NOTHING/null. */
-export function actionFamilyForType(actionType: string | null | undefined): ArrFamily | null {
+function actionFamilyForType(actionType: string | null | undefined): ArrFamily | null {
   if (!actionType || actionType === "DO_NOTHING") return null;
   if (actionType.endsWith("_RADARR")) return "RADARR";
   if (actionType.endsWith("_SONARR")) return "SONARR";
@@ -50,13 +44,7 @@ export async function validateActionConfig(opts: {
   }
 
   if (arrInstanceId) {
-    const where = { id: arrInstanceId, userId };
-    const instance =
-      libraryFamily === "RADARR"
-        ? await prisma.radarrInstance.findFirst({ where, select: { id: true } })
-        : libraryFamily === "SONARR"
-          ? await prisma.sonarrInstance.findFirst({ where, select: { id: true } })
-          : await prisma.lidarrInstance.findFirst({ where, select: { id: true } });
+    const instance = await findArrInstance(libraryFamily, { id: arrInstanceId, userId }, { id: true });
     if (!instance) {
       return `Arr instance not found — ${libraryType.toLowerCase()} rule sets require a ${libraryFamily.toLowerCase()} instance`;
     }

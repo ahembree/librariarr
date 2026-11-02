@@ -45,11 +45,13 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 import { GET } from "@/app/api/seerr/users/[userKey]/requests/route";
 import { appCache } from "@/lib/cache/memory-cache";
 
+// Seerr is TMDB-based: every request's media carries a tmdbId, and a TV
+// request's tvdbId may be null (or 0 when Seerr could not match the show).
 function makeRequest(
   id: number,
   type: "movie" | "tv",
   requestedBy: { id: number; username: string; plexUsername?: string | null; email?: string },
-  media: { tmdbId?: number; tvdbId?: number | null; status?: number; status4k?: number },
+  media: { tmdbId: number; tvdbId?: number | null; status?: number; status4k?: number },
   overrides?: { createdAt?: string; status?: number; is4k?: boolean }
 ) {
   return {
@@ -58,7 +60,7 @@ function makeRequest(
     status: overrides?.status ?? 2,
     media: {
       id,
-      tmdbId: media.tmdbId ?? 0,
+      tmdbId: media.tmdbId,
       tvdbId: media.tvdbId ?? null,
       status: media.status ?? 5,
       status4k: media.status4k ?? 1,
@@ -71,7 +73,7 @@ function makeRequest(
       id: requestedBy.id,
       email: requestedBy.email ?? `${requestedBy.username}@test.com`,
       username: requestedBy.username,
-      plexUsername: requestedBy.plexUsername ?? undefined,
+      plexUsername: requestedBy.plexUsername ?? null,
     },
     modifiedBy: null,
     is4k: overrides?.is4k ?? false,
@@ -118,19 +120,17 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
 
   it("returns 401 without auth", async () => {
     const res = await callRouteWithParams(GET, { userKey: "alice" });
-    expect(res.status).toBe(401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
+    expect(mockGetRequests).not.toHaveBeenCalled();
   });
 
   it("returns empty when user has no Seerr instances", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const body = await expectJson<{ user: unknown; requests: unknown[] }>(
-      await callRouteWithParams(GET, { userKey: "alice" }),
-      200
-    );
-    expect(body.user).toBeNull();
-    expect(body.requests).toEqual([]);
+    const body = await expectJson(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+    expect(body).toEqual({ user: null, partial: false, requests: [] });
+    expect(mockGetRequests).not.toHaveBeenCalled();
   });
 
   it("filters requests to the matching userKey only", async () => {
@@ -143,16 +143,16 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
       results: [
         makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
         makeRequest(2, "movie", { id: 2, username: "bob", plexUsername: "bob" }, { tmdbId: 101 }),
-        makeRequest(3, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 200 }),
+        makeRequest(3, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1396, tvdbId: 81189 }),
       ],
     });
 
     const body = await expectJson<{
-      user: { seerrUsername: string; plexUsername: string };
+      user: { seerrUsername: string; plexUsername: string | null; avatar: string | null };
       requests: { seerrId: number; type: string }[];
     }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
 
-    expect(body.user.seerrUsername).toBe("alice");
+    expect(body.user).toEqual({ seerrUsername: "alice", plexUsername: "alice", avatar: null });
     expect(body.requests).toHaveLength(2);
     expect(body.requests.map((r) => r.seerrId).sort()).toEqual([1, 3]);
   });
@@ -212,6 +212,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
       type: "SERIES",
       title: "Pilot",
       parentTitle: "Breaking Bad",
+      seriesKey: "tvdb:81189",
       seasonNumber: 1,
       episodeNumber: 1,
     });
@@ -219,6 +220,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
       type: "SERIES",
       title: "Cat's in the Bag",
       parentTitle: "Breaking Bad",
+      seriesKey: "tvdb:81189",
       seasonNumber: 1,
       episodeNumber: 2,
     });
@@ -239,13 +241,14 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
       results: [
-        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 81189 }),
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1396, tvdbId: 81189 }),
       ],
     });
 
     const body = await expectJson<{
       requests: {
         title: string;
+        seriesKey: string | null;
         mediaItem: { id: string; route: string } | null;
         posterUrl: string;
         watch: { episodesAvailable: number; episodesWatched: number };
@@ -254,10 +257,17 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
 
     expect(body.requests).toHaveLength(1);
     expect(body.requests[0].title).toBe("Breaking Bad");
+    expect(body.requests[0].seriesKey).toBe("tvdb:81189");
     // Link target is the first canonical episode (sorted by S01E01)
     expect(body.requests[0].mediaItem).toEqual({ id: ep1.id, route: "show" });
     expect(body.requests[0].posterUrl).toBe(`/api/media/${ep1.id}/image?type=parent`);
-    expect(body.requests[0].watch.episodesAvailable).toBe(2);
+    expect(body.requests[0].watch).toEqual({
+      correlatable: true,
+      watched: false,
+      episodesWatched: 0,
+      episodesAvailable: 2,
+    });
+    expect(mockGetTvShow).not.toHaveBeenCalled();
   });
 
   it("falls back to Seerr API when media is not in library", async () => {
@@ -288,8 +298,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].title).toBe("Mystery Movie");
     expect(body.requests[0].year).toBe(2025);
     expect(body.requests[0].mediaItem).toBeNull();
-    expect(body.requests[0].posterUrl).toContain("image.tmdb.org");
-    expect(body.requests[0].posterUrl).toContain("/abc.jpg");
+    expect(body.requests[0].posterUrl).toBe("https://image.tmdb.org/t/p/w154/abc.jpg");
     expect(mockGetMovie).toHaveBeenCalledWith(999);
   });
 
@@ -305,7 +314,12 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     });
     await createTestExternalId(movie.id, "TMDB", "27205");
     await prisma.watchHistory.create({
-      data: { mediaItemId: movie.id, mediaServerId: server.id, serverUsername: "alice" },
+      data: {
+        mediaItemId: movie.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
+      },
     });
 
     await createTestSeerrInstance(user.id);
@@ -324,6 +338,53 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
 
     expect(body.requests[0].watch.correlatable).toBe(true);
     expect(body.requests[0].watch.watched).toBe(true);
+  });
+
+  // Two canonical items can share a TMDB id (two editions with different
+  // dedupKeys). The drill-down checked plays against the FIRST item's dedupKey
+  // only, while `request-stats.ts` — the card it drills into — checks every
+  // item's: a play of the second edition read as watched on the card and
+  // unwatched here.
+  it("counts a play of any edition of the requested movie as watched, like the stats card", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const prisma = getTestPrisma();
+    const editions = [];
+    for (const [title, dedupKey] of [["Blade Runner", "blade-runner-theatrical"], ["Blade Runner (Final Cut)", "blade-runner-final-cut"]]) {
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title });
+      await prisma.mediaItem.update({ where: { id: movie.id }, data: { dedupKey, dedupCanonical: true } });
+      await createTestExternalId(movie.id, "TMDB", "78");
+      editions.push(movie);
+    }
+    // Only the edition stored second was played.
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: editions[1].id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
+      },
+    });
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockGetRequests.mockResolvedValue({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 78 })],
+    });
+
+    const body = await expectJson<{
+      requests: { mediaItem: { id: string } | null; watch: { watched: boolean } }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+    expect(body.requests).toHaveLength(1);
+    expect(editions.map((e) => e.id)).toContain(body.requests[0].mediaItem?.id);
+    expect(body.requests[0].watch.watched).toBe(true);
+
+    // The card this list drills into agrees.
+    const { getSeerrRequestStats } = await import("@/lib/seerr/request-stats");
+    const stats = await getSeerrRequestStats(user.id);
+    expect(stats.users.find((u) => u.userKey === "alice")).toMatchObject({ movieCount: 1, moviesWatched: 1 });
   });
 
   it("does not count an abandoned Tracearr play as watched", async () => {
@@ -349,9 +410,12 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
         mediaItemId: movie.id,
         mediaServerId: server.id,
         serverUsername: "alice",
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
         source: "TRACEARR",
-        sourceEventId: "chain-abandoned",
+        sourceEventId: "5c2e9f1a-3b7d-4e8c-a6f0-9d1b2c3e4f50",
         watched: false,
+        percentComplete: 4,
+        state: "stopped",
       },
     });
 
@@ -416,8 +480,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].year).toBe(2024);
     expect(body.requests[0].tvdbId).toBeNull();
     expect(body.requests[0].tmdbId).toBe(1396);
-    expect(body.requests[0].posterUrl).toContain("image.tmdb.org");
-    expect(body.requests[0].posterUrl).toContain("/show-poster.jpg");
+    expect(body.requests[0].posterUrl).toBe("https://image.tmdb.org/t/p/w154/show-poster.jpg");
     expect(body.requests[0].mediaItem).toBeNull();
   });
 
@@ -433,7 +496,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
           1,
           "tv",
           { id: 1, username: "alice", plexUsername: "alice" },
-          { tmdbId: 5000, tvdbId: 0 as unknown as number }
+          { tmdbId: 5000, tvdbId: 0 }
         ),
       ],
     });
@@ -630,6 +693,8 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
       type: "SERIES",
       title: "Pilot",
       parentTitle: "Some Show",
+      // A show with only a TMDB id is keyed by it (see series-key.ts).
+      seriesKey: "tmdb:12345",
       seasonNumber: 1,
       episodeNumber: 1,
     });

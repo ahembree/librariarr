@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState, useCallback, memo } from "react";
+import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowUpCircle,
@@ -15,7 +15,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate, formatUntil } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { fetchJsonShared } from "@/lib/shared-fetch";
 import type { ScheduleInfo } from "@/components/dashboard/types";
+import { useDashboardSeed, useRenderNow } from "@/components/dashboard/dashboard-seed";
+import { SYNC_STATUS_URL } from "@/lib/dashboard/seed-urls";
 
 type Tone = "ok" | "warn" | "err" | "idle";
 
@@ -47,7 +50,7 @@ function StatusTile({
   loading?: boolean;
 }) {
   return (
-    <Link
+    <DeferredPrefetchLink
       href={href}
       className="group flex items-center gap-3 rounded-[14px] border bg-card px-3 py-3 shadow-[var(--shadow-card)] transition-colors hover:border-border-strong hover:bg-surface-2/40 sm:px-4"
     >
@@ -77,7 +80,7 @@ function StatusTile({
           </span>
         )}
       </span>
-    </Link>
+    </DeferredPrefetchLink>
   );
 }
 
@@ -98,23 +101,41 @@ interface SyncState {
   lastRun: string | null;
 }
 
+/** The sync tile's state from `GET /api/sync/status`'s jobs. */
+function syncStateFrom(data: { jobs?: { status: string; completedAt: string | null }[] } | null): SyncState {
+  const jobs = data?.jobs ?? [];
+  const active = jobs.some((j) => j.status === "RUNNING" || j.status === "PENDING");
+  const lastRun = jobs
+    .filter((j) => j.status === "COMPLETED" && j.completedAt)
+    .map((j) => j.completedAt!)
+    .sort()
+    .pop() ?? null;
+  return { active, lastRun };
+}
+
 /**
  * Operational at-a-glance strip: active streams, sync state, integration
  * health, next scheduled lifecycle runs, and (when present) an available
  * update. Slow data sources (sessions hit the media servers; health hits
  * the Arr instances) load non-blocking behind per-tile skeletons.
  */
-export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
+export const StatusStrip = memo(function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
   // null = loading, "error" = the check itself failed (distinct from clean
   // zero states, which would misreport an outage as "all idle").
   const [sessions, setSessions] = useState<SessionsState | null | "error">(null);
   const [health, setHealth] = useState<HealthState | null | "error">(null);
-  const [sync, setSync] = useState<SyncState | null>(null);
+  // The sync tile's figures come with the server render on a page load.
+  const seededSync = useDashboardSeed<Parameters<typeof syncStateFrom>[0]>(SYNC_STATUS_URL);
+  const [sync, setSync] = useState<SyncState | null>(() =>
+    seededSync === undefined ? null : syncStateFrom(seededSync),
+  );
+  const syncSeeded = useRef(seededSync !== undefined);
+  const now = useRenderNow();
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
   const fetchSessions = useCallback(() => {
-    fetch("/api/tools/sessions")
-      .then((res) => (res.ok ? res.json() : null))
+    // Shared with the sidebar's stream badge, which reads it on the same mount.
+    fetchJsonShared<{ sessions?: unknown[]; unreachableServers?: unknown[] }>("/api/tools/sessions")
       .then((data) => {
         if (!data) return setSessions("error");
         setSessions({
@@ -151,8 +172,8 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetchSessions();
     fetchHealth();
 
-    fetch("/api/system/update-check", { priority: "low" })
-      .then((res) => (res.ok ? res.json() : null))
+    // Shared with the sidebar's update dot, which reads it on the same mount.
+    fetchJsonShared<{ updateAvailable?: boolean; latestVersion?: string }>("/api/system/update-check", { priority: "low" })
       .then((data) => {
         if (data?.updateAvailable && data.latestVersion) {
           setUpdateVersion(data.latestVersion);
@@ -179,20 +200,13 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
 
   const fetchSync = () => {
     fetchSyncStatus()
-      .then((data) => {
-        const jobs = data?.jobs ?? [];
-        const active = jobs.some((j) => j.status === "RUNNING" || j.status === "PENDING");
-        const lastRun = jobs
-          .filter((j) => j.status === "COMPLETED" && j.completedAt)
-          .map((j) => j.completedAt!)
-          .sort()
-          .pop() ?? null;
-        setSync({ active, lastRun });
-      })
+      .then((data) => setSync(syncStateFrom(data)))
       .catch(() => setSync({ active: false, lastRun: null }));
   };
 
-  useEffect(fetchSync, []);
+  useEffect(() => {
+    if (!syncSeeded.current) fetchSync();
+  }, []);
   // All three sync transitions matter: without started/failed the tile
   // can't show "Syncing now" for syncs that begin after mount, and a
   // failed sync would leave it stale.
@@ -251,12 +265,12 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
           sync?.active
             ? "Syncing now"
             : lastSync
-              ? formatRelativeDate(lastSync)
+              ? formatRelativeDate(lastSync, { now })
               : "Never run"
         }
         sub={
           scheduleInfo?.sync.nextRun
-            ? `next ${formatUntil(scheduleInfo.sync.nextRun)}`
+            ? `next ${formatUntil(scheduleInfo.sync.nextRun, now)}`
             : "manual only"
         }
         tone={sync?.active ? "ok" : "idle"}
@@ -301,8 +315,8 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
         icon={CalendarClock}
         label="Next runs"
         loading={scheduleInfo === null}
-        value={`Detection ${formatUntil(nextDetection)}`}
-        sub={`execution ${formatUntil(nextExecution)}`}
+        value={`Detection ${formatUntil(nextDetection, now)}`}
+        sub={`execution ${formatUntil(nextExecution, now)}`}
         tone="idle"
       />
       {updateVersion && (
@@ -317,4 +331,4 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
       )}
     </div>
   );
-}
+});

@@ -8,8 +8,14 @@ import {
   TERMINATION_SOURCE,
 } from "@/lib/media-server/termination-log";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  isBlackoutWindowActive,
+  isPrerollWindowActive,
+  type ScheduleWindow,
+} from "./schedule-activity";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
+import type { MediaServerType } from "@/generated/prisma/client";
 
 let initialized = false;
 let isRunning = false;
@@ -102,81 +108,34 @@ export function sessionMatchesCriteria(
   return false;
 }
 
-/** Exported for direct unit testing. */
-export function isBlackoutActive(schedule: {
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-}): boolean {
-  const now = new Date();
-
-  if (schedule.scheduleType === "one_time") {
-    if (!schedule.startDate || !schedule.endDate) return false;
-    return now >= schedule.startDate && now <= schedule.endDate;
-  }
-
-  if (schedule.scheduleType === "recurring") {
-    const days = schedule.daysOfWeek as number[] | null;
-    if (!days || !schedule.startTime || !schedule.endTime) return false;
-
-    const [startH, startM] = schedule.startTime.split(":").map(Number);
-    const [endH, endM] = schedule.endTime.split(":").map(Number);
-    const currentMin = now.getHours() * 60 + now.getMinutes();
-    const startMin = startH * 60 + startM;
-    const endMin = endH * 60 + endM;
-
-    const today = now.getDay();
-
-    // Overnight spans (e.g. 22:00 to 06:00) run past midnight into the NEXT
-    // calendar day, so the selected day identifies when the window *starts*.
-    // Testing the day against `now` alone both truncated the window at
-    // midnight and made it spuriously active in the small hours of the
-    // start day itself.
-    if (endMin <= startMin) {
-      const yesterday = (today + 6) % 7;
-      return (
-        (days.includes(today) && currentMin >= startMin) ||
-        (days.includes(yesterday) && currentMin <= endMin)
-      );
-    }
-
-    return days.includes(today) && currentMin >= startMin && currentMin <= endMin;
-  }
-
-  return false;
+/**
+ * Exported for direct unit testing. The rules live in `schedule-activity.ts`,
+ * shared with the Preroll page's "Active" badge so the two cannot drift.
+ */
+export function isBlackoutActive(schedule: ScheduleWindow): boolean {
+  return isBlackoutWindowActive(schedule);
 }
 
 // Cache the last-set preroll path per user to avoid redundant Plex API calls
 const lastPrerollPath = new Map<string, string>();
 
-function isPrerollScheduleActive(schedule: {
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-}): boolean {
-  // Seasonal = an annually-recurring date range (compare month/day, ignore
-  // year). Not a blackout schedule type, so handle it here — otherwise
-  // isBlackoutActive falls through to `return false` and seasonal preroll
-  // schedules never activate.
-  if (schedule.scheduleType === "seasonal") {
-    if (!schedule.startDate || !schedule.endDate) return false;
-    const now = new Date();
-    const md = (d: Date) => (d.getMonth() + 1) * 100 + d.getDate();
-    const cur = md(now);
-    const start = md(schedule.startDate);
-    const end = md(schedule.endDate);
-    // Wrap across the year boundary (e.g. Dec 15 → Jan 5).
-    if (end < start) return cur >= start || cur <= end;
-    return cur >= start && cur <= end;
-  }
-  // one_time / recurring share the blackout active check (same structure).
-  return isBlackoutActive(schedule);
+/**
+ * Clear a server's preroll only when it is one the enforcer would have set:
+ * a path it applied (`ownPaths` — the cached one and every schedule's path).
+ * A preroll set by hand in Plex, or by a preset's Apply, is left alone. The
+ * cache is in memory, so after a restart it is empty and the enforcer cannot
+ * know what it set; unconditionally clearing then wiped a manual preroll on
+ * every Plex server the moment no schedule was active.
+ */
+async function clearPrerollIfOurs(
+  client: { getPrerollSetting?(): Promise<string>; clearPreroll?(): Promise<void> },
+  ownPaths: ReadonlySet<string>,
+): Promise<boolean> {
+  if (!client.getPrerollSetting || !client.clearPreroll) return false;
+  const current = await client.getPrerollSetting();
+  if (!current || !ownPaths.has(current)) return false;
+  await client.clearPreroll();
+  return true;
 }
 
 /** Exported for direct testing. */
@@ -201,7 +160,10 @@ export async function processPrerollSchedules() {
       },
     });
 
-    if (schedules.length === 0) return;
+    // No early return when there are no schedules: the cleanup below, which
+    // clears a preroll the enforcer set for a user who has no enabled schedule
+    // left, has to run then too. Returning here skipped it exactly when the last
+    // schedule was deleted or disabled, so its preroll stayed on Plex for good.
 
     // Group by user
     const byUser = new Map<string, { servers: typeof schedules[0]["user"]["mediaServers"]; schedules: typeof schedules }>();
@@ -220,11 +182,15 @@ export async function processPrerollSchedules() {
       processedUserIds.add(userId);
 
       // Find highest-priority active schedule
-      const activeSchedule = userSchedules.find((s) => isPrerollScheduleActive(s));
+      const activeSchedule = userSchedules.find((s) => isPrerollWindowActive(s));
       const desiredPath = activeSchedule?.prerollPath ?? "";
       const cached = lastPrerollPath.get(userId);
 
       if (cached === desiredPath) continue; // No change needed
+
+      // The paths this user's schedules set — the only ones a clear may remove.
+      const ownPaths = new Set(userSchedules.map((s) => s.prerollPath).filter(Boolean));
+      if (cached) ownPaths.add(cached);
 
       const outcomes = await Promise.allSettled(
         servers.map(async (server) => {
@@ -235,8 +201,7 @@ export async function processPrerollSchedules() {
           if (desiredPath) {
             await client.setPrerollPath?.(desiredPath);
             logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
-          } else {
-            await client.clearPreroll?.();
+          } else if (await clearPrerollIfOurs(client, ownPaths)) {
             logger.info("Enforcer", "Preroll: cleared (no active schedule)");
           }
         }),
@@ -282,8 +247,9 @@ export async function processPrerollSchedules() {
                   const client = createMediaServerClient(server.type, server.url, server.accessToken, {
                     skipTlsVerify: server.tlsSkipVerify,
                   });
-                  await client.clearPreroll?.();
-                  logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+                  if (await clearPrerollIfOurs(client, new Set([lastPrerollPath.get(userId)!]))) {
+                    logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+                  }
                 } catch (error) {
                   logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
                 }
@@ -301,10 +267,68 @@ export async function processPrerollSchedules() {
   }
 }
 
+interface EnforcedServer {
+  id: string;
+  type: MediaServerType;
+  url: string;
+  accessToken: string;
+  tlsSkipVerify: boolean;
+}
+
+/**
+ * One tick's view of each server's sessions: fetched once, shared by the
+ * maintenance/transcode loop and every active blackout schedule. Each used to
+ * call `getSessions()` itself, so a server under maintenance with two blackout
+ * windows open was asked three times a tick — and on a session-changed push
+ * the tick runs every couple of seconds.
+ *
+ * A session terminated earlier in the tick is left out of what later loops
+ * see, so a second loop never stops it again (logging a failure, or a second
+ * termination, for a stream that has already gone) and a block_new_only
+ * snapshot taken this tick does not grandfather it.
+ */
+function createTickSessions() {
+  const clients = new Map<string, ReturnType<typeof createMediaServerClient>>();
+  const sessions = new Map<string, Promise<MediaSession[]>>();
+  const terminated = new Set<string>();
+
+  const clientFor = (server: EnforcedServer) => {
+    let client = clients.get(server.id);
+    if (!client) {
+      client = createMediaServerClient(server.type, server.url, server.accessToken, {
+        skipTlsVerify: server.tlsSkipVerify,
+      });
+      clients.set(server.id, client);
+    }
+    return client;
+  };
+
+  return {
+    clientFor,
+    /** The server's sessions this tick, less those already terminated. Rejects if the server could not be asked. */
+    async sessionsFor(server: EnforcedServer): Promise<MediaSession[]> {
+      let pending = sessions.get(server.id);
+      if (!pending) {
+        pending = clientFor(server).getSessions();
+        // Observed here so a rejection no loop reaches is not "unhandled".
+        pending.catch(() => {});
+        sessions.set(server.id, pending);
+      }
+      const all = await pending;
+      return all.filter((session) => !terminated.has(`${server.id}:${session.sessionId}`));
+    },
+    recordTerminated(serverId: string, sessionId: string): void {
+      terminated.add(`${serverId}:${sessionId}`);
+    },
+  };
+}
+
 /** Single enforcement tick — exported for direct testing. */
 export async function runEnforcerTick() {
   if (isRunning) return;
   isRunning = true;
+
+  const tick = createTickSessions();
 
   try {
       const allSettings = await prisma.appSettings.findMany({
@@ -364,10 +388,8 @@ export async function runEnforcerTick() {
 
           await Promise.allSettled(settings.user.mediaServers.map(async (server) => {
             try {
-              const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                skipTlsVerify: server.tlsSkipVerify,
-              });
-              const sessions = await client.getSessions();
+              const client = tick.clientFor(server);
+              const sessions = await tick.sessionsFor(server);
               polledServerIds.add(server.id);
 
               // The 4K criterion needs the SOURCE resolution, which a Plex
@@ -501,6 +523,7 @@ export async function runEnforcerTick() {
                   };
                   try {
                     await client.terminateSession(session.sessionId, message);
+                    tick.recordTerminated(server.id, session.sessionId);
                     logTermination(termination);
                     pendingTerminations.delete(sessionKey);
                   } catch (error) {
@@ -577,16 +600,16 @@ export async function runEnforcerTick() {
 
             await Promise.allSettled(schedule.user.mediaServers.map(async (server) => {
               try {
-                const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                  skipTlsVerify: server.tlsSkipVerify,
-                });
-                const sessions = await client.getSessions();
+                const client = tick.clientFor(server);
+                const sessions = await tick.sessionsFor(server);
                 polledBlackoutServers.add(`${schedule.id}:${server.id}`);
 
                 const blackoutExcluded = schedule.excludedUsers ?? [];
 
                 if (schedule.action === "terminate_immediate") {
                   for (const session of sessions) {
+                    // No id: nothing to terminate (see the maintenance loop).
+                    if (!session.sessionId) continue;
                     if (blackoutExcluded.includes(session.username)) continue;
                     const termination = {
                       serverId: server.id,
@@ -598,6 +621,7 @@ export async function runEnforcerTick() {
                     };
                     try {
                       await client.terminateSession(session.sessionId, blackoutMsg);
+                      tick.recordTerminated(server.id, session.sessionId);
                       logTermination(termination);
                     } catch (error) {
                       logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
@@ -610,6 +634,9 @@ export async function runEnforcerTick() {
                   const blackoutNow = Date.now();
 
                   for (const session of sessions) {
+                    // No id: it would share one pending key with every other
+                    // id-less session, and there is nothing to terminate.
+                    if (!session.sessionId) continue;
                     if (blackoutExcluded.includes(session.username)) continue;
                     const sessionKey = `blackout:${schedule.id}:${schedule.userId}:${server.id}:${session.sessionId}`;
                     activeBlackoutSessionKeys.add(sessionKey);
@@ -648,6 +675,7 @@ export async function runEnforcerTick() {
                       };
                       try {
                         await client.terminateSession(session.sessionId, blackoutMsg);
+                        tick.recordTerminated(server.id, session.sessionId);
                         logTermination(termination);
                         pendingTerminations.delete(sessionKey);
                       } catch (error) {
@@ -674,6 +702,7 @@ export async function runEnforcerTick() {
                     // Blackout already active — terminate any sessions not in the known set
                     const knownIds = knownBlackoutSessions.get(snapshotKey)!;
                     for (const session of sessions) {
+                      if (!session.sessionId) continue;
                       if (blackoutExcluded.includes(session.username)) continue;
                       if (!knownIds.has(blockNewIdentity(session))) {
                         const termination = {
@@ -686,6 +715,7 @@ export async function runEnforcerTick() {
                         };
                         try {
                           await client.terminateSession(session.sessionId, blackoutMsg);
+                          tick.recordTerminated(server.id, session.sessionId);
                           logTermination(termination);
                         } catch (error) {
                           logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {

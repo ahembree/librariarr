@@ -37,8 +37,10 @@ describe("buildRealtimeUrl", () => {
 
 describe("buildRealtimeHeaders", () => {
   it("carries the token in the per-type auth header", () => {
-    expect(buildRealtimeHeaders("PLEX", "t")["X-Plex-Token"]).toBe("t");
-    expect(buildRealtimeHeaders("JELLYFIN", "t").Authorization).toContain('Token="t"');
-    expect(buildRealtimeHeaders("EMBY", "t")["X-Emby-Token"]).toBe("t");
+    expect(buildRealtimeHeaders("PLEX", "t")).toEqual({ "X-Plex-Token": "t", "X-Plex-Client-Identifier": "librariarr" });
+    expect(buildRealtimeHeaders("JELLYFIN", "t")).toEqual({
+      Authorization: 'MediaBrowser Client="Librariarr", Device="Server", DeviceId="librariarr", Version="1.0.0", Token="t"',
+    });
+    expect(buildRealtimeHeaders("EMBY", "t")).toEqual({ "X-Emby-Token": "t" });
   });
 });

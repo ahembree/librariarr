@@ -86,6 +86,23 @@ describe("buildAuthorizationUrl", () => {
     expect(parsed.searchParams.get("state")).toBe("state-123");
     expect(parsed.searchParams.get("code_challenge")).toBe("challenge-abc");
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
+    // A login does not force the IdP to authenticate again.
+    expect(parsed.searchParams.has("prompt")).toBe(false);
+  });
+
+  // The in-place confirmation (`/api/auth/reauth/oidc`) must make the IdP
+  // authenticate again rather than answer from its own session.
+  it("adds prompt=login when asked", () => {
+    const url = buildAuthorizationUrl({
+      discovery: makeDiscovery(),
+      clientId: "my-client",
+      redirectUri: "https://app.example.com/api/auth/sso/oidc/callback",
+      scope: "openid",
+      state: "state-123",
+      codeChallenge: "challenge-abc",
+      prompt: "login",
+    });
+    expect(new URL(url).searchParams.get("prompt")).toBe("login");
   });
 
   it("preserves authorization_endpoint query params when the IdP includes them", () => {
@@ -155,6 +172,8 @@ describe("discoverOidc", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
     // Each test below uses skipCache:true to keep transport assertions clean,
     // but invalidate anyway in case a future test forgets.
     invalidateOidcDiscoveryCache();
@@ -178,7 +197,12 @@ describe("discoverOidc", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://idp.example.com/.well-known/openid-configuration"
     );
-    expect(result.issuer).toBe("https://idp.example.com");
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({ Accept: "application/json" });
+    expect(result).toEqual({
+      issuer: "https://idp.example.com",
+      authorization_endpoint: "https://idp.example.com/auth",
+      token_endpoint: "https://idp.example.com/token",
+    });
   });
 
   // TLS is what authenticates the issuer here (no ID token signature is
@@ -186,25 +210,49 @@ describe("discoverOidc", () => {
   it("refuses an http:// issuer on a network host without fetching", async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof fetch;
-    const original = process.env.OIDC_ALLOW_INSECURE_HTTP;
-    delete process.env.OIDC_ALLOW_INSECURE_HTTP;
-    try {
-      await expect(discoverOidc("http://idp.lan", { skipCache: true })).rejects.toBeInstanceOf(InsecureIssuerError);
-      expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      if (original === undefined) delete process.env.OIDC_ALLOW_INSECURE_HTTP;
-      else process.env.OIDC_ALLOW_INSECURE_HTTP = original;
-    }
+    vi.stubEnv("OIDC_ALLOW_INSECURE_HTTP", "");
+    await expect(discoverOidc("http://idp.lan", { skipCache: true })).rejects.toBeInstanceOf(InsecureIssuerError);
+    await expect(discoverOidc("http://idp.lan", { skipCache: true })).rejects.toThrow(/^Issuer must use https:\/\//);
+    // Whatever the cache holds: the scheme is checked before the cache is read.
+    await expect(discoverOidc("ftp://idp.lan")).rejects.toBeInstanceOf(InsecureIssuerError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("throws when discovery response is missing required endpoints", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ issuer: "x" }), { status: 200 })
-    ) as typeof fetch;
+  it("fetches an http:// issuer on loopback, and anywhere under OIDC_ALLOW_INSECURE_HTTP", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const issuer = url.replace("/.well-known/openid-configuration", "");
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ issuer, authorization_endpoint: `${issuer}/auth`, token_endpoint: `${issuer}/token` }),
+          { status: 200 },
+        ),
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    vi.stubEnv("OIDC_ALLOW_INSECURE_HTTP", "");
+    expect((await discoverOidc("http://localhost:9000", { skipCache: true })).issuer).toBe("http://localhost:9000");
 
-    await expect(discoverOidc("https://x", { skipCache: true })).rejects.toThrow(
-      /missing required/
-    );
+    vi.stubEnv("OIDC_ALLOW_INSECURE_HTTP", "true");
+    expect((await discoverOidc("http://idp.lan", { skipCache: true })).issuer).toBe("http://idp.lan");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:9000/.well-known/openid-configuration",
+      "http://idp.lan/.well-known/openid-configuration",
+    ]);
+  });
+
+  it("throws when discovery response is missing either required endpoint", async () => {
+    for (const doc of [
+      { issuer: "https://idp.example.com", token_endpoint: "https://idp.example.com/token" },
+      { issuer: "https://idp.example.com", authorization_endpoint: "https://idp.example.com/auth" },
+    ]) {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(doc), { status: 200 })
+      ) as typeof fetch;
+
+      await expect(discoverOidc("https://idp.example.com", { skipCache: true })).rejects.toThrow(
+        "OIDC discovery response missing required endpoints"
+      );
+    }
   });
 
   it("throws on non-2xx responses", async () => {
@@ -214,7 +262,9 @@ describe("discoverOidc", () => {
 
     await expect(
       discoverOidc("https://nope.example.com", { skipCache: true })
-    ).rejects.toThrow(/OIDC discovery failed \(404\)/);
+    ).rejects.toThrow(
+      "OIDC discovery failed (404): https://nope.example.com/.well-known/openid-configuration"
+    );
   });
 
   it("rejects when the issuer claim doesn't match the requested URL", async () => {
@@ -231,7 +281,9 @@ describe("discoverOidc", () => {
 
     await expect(
       discoverOidc("https://idp.example.com", { skipCache: true })
-    ).rejects.toThrow(/OIDC issuer mismatch/);
+    ).rejects.toThrow(
+      'OIDC issuer mismatch: discovery advertises "https://different.example.com" but was fetched from "https://idp.example.com"'
+    );
   });
 
   // `issuer` is REQUIRED (Discovery §3); skipping the match when it is absent
@@ -249,7 +301,7 @@ describe("discoverOidc", () => {
 
     await expect(
       discoverOidc("https://idp.example.com", { skipCache: true })
-    ).rejects.toThrow(/has no issuer/);
+    ).rejects.toThrow('OIDC discovery response from "https://idp.example.com" has no issuer');
   });
 
   it("tolerates trailing-slash differences in the issuer claim", async () => {
@@ -264,9 +316,9 @@ describe("discoverOidc", () => {
       )
     ) as typeof fetch;
 
-    await expect(
-      discoverOidc("https://idp.example.com", { skipCache: true })
-    ).resolves.toBeDefined();
+    const result = await discoverOidc("https://idp.example.com", { skipCache: true });
+    expect(result.issuer).toBe("https://idp.example.com/");
+    expect(result.token_endpoint).toBe("https://idp.example.com/token");
   });
 
   // Helper: fresh Response per call (Response bodies can only be read once,
@@ -305,6 +357,59 @@ describe("discoverOidc", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not fill the cache from a skipCache fetch", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://nofill.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await discoverOidc("https://nofill.example.com", { skipCache: true });
+    await discoverOidc("https://nofill.example.com");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one cache entry between an issuer written with and without a trailing slash", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://slash.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await discoverOidc("https://slash.example.com/");
+    await discoverOidc("https://slash.example.com");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // A document refused for advertising another issuer must not be served
+  // from the cache to the next login.
+  it("does not cache a refused discovery document", async () => {
+    const fetchMock = vi.fn().mockImplementation(respond("https://other.example.com"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(discoverOidc("https://refused.example.com")).rejects.toThrow(/OIDC issuer mismatch/);
+    await expect(discoverOidc("https://refused.example.com")).rejects.toThrow(/OIDC issuer mismatch/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up on an IdP that does not answer within 10 seconds", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const pending = discoverOidc("https://slow.example.com", { skipCache: true });
+    let settled = false;
+    pending.catch(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).rejects.toThrow(/aborted/);
+  });
+
   it("invalidateOidcDiscoveryCache drops cached entries", async () => {
     const fetchMock = vi.fn().mockImplementation(respond("https://inv.example.com"));
     globalThis.fetch = fetchMock as typeof fetch;
@@ -336,7 +441,7 @@ describe("exchangeCodeForToken", () => {
   });
 
   it("POSTs form-encoded body with required grant params", async () => {
-    await exchangeCodeForToken({
+    const token = await exchangeCodeForToken({
       discovery: makeDiscovery(),
       clientId: "my-client",
       code: "auth-code",
@@ -348,9 +453,11 @@ describe("exchangeCodeForToken", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://idp.example.com/token");
     expect(init.method).toBe("POST");
-    expect(init.headers["Content-Type"]).toBe(
-      "application/x-www-form-urlencoded"
-    );
+    expect(init.headers).toEqual({
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    });
+    expect(token).toEqual({ access_token: "at_123", token_type: "Bearer" });
 
     const body = new URLSearchParams(init.body);
     expect(body.get("grant_type")).toBe("authorization_code");
@@ -358,25 +465,27 @@ describe("exchangeCodeForToken", () => {
     expect(body.get("redirect_uri")).toBe("https://app/cb");
     expect(body.get("client_id")).toBe("my-client");
     expect(body.get("code_verifier")).toBe("verifier-xyz");
+    expect([...body.keys()].sort()).toEqual(["client_id", "code", "code_verifier", "grant_type", "redirect_uri"]);
   });
 
+  // RFC 6749 §2.3.1: the id and secret are form-urlencoded before they are
+  // joined, so a ':' in the secret cannot shift the split.
   it("sends client_secret_basic Authorization header when secret is provided", async () => {
     await exchangeCodeForToken({
       discovery: makeDiscovery(),
       clientId: "my-client",
-      clientSecret: "s3cret",
+      clientSecret: "s3c:ret/+",
       code: "c",
       redirectUri: "https://app/cb",
       codeVerifier: "v",
     });
 
     const init = fetchMock.mock.calls[0][1];
-    const expected =
-      "Basic " +
-      Buffer.from(
-        `${encodeURIComponent("my-client")}:${encodeURIComponent("s3cret")}`
-      ).toString("base64");
+    const expected = "Basic " + Buffer.from("my-client:s3c%3Aret%2F%2B").toString("base64");
     expect(init.headers.Authorization).toBe(expected);
+    // The secret travels in the header only, never in the form body.
+    expect(new URLSearchParams(init.body).has("client_secret")).toBe(false);
+    expect(String(init.body)).not.toContain("s3c");
   });
 
   it("omits Authorization header for public clients", async () => {
@@ -404,7 +513,7 @@ describe("exchangeCodeForToken", () => {
         redirectUri: "https://app/cb",
         codeVerifier: "v",
       })
-    ).rejects.toThrow(/Token exchange failed \(400\)/);
+    ).rejects.toThrow('Token exchange failed (400): {"error":"invalid_grant"}');
   });
 });
 
@@ -425,18 +534,30 @@ describe("fetchUserInfo", () => {
     globalThis.fetch = fetchMock as typeof fetch;
 
     const info = await fetchUserInfo(makeDiscovery(), "at_123");
-    expect(info.sub).toBe("user-1");
-    expect(info.email).toBe("a@b.com");
+    expect(info).toEqual({ sub: "user-1", email: "a@b.com" });
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://idp.example.com/userinfo");
-    expect(init.headers.Authorization).toBe("Bearer at_123");
+    expect(init.headers).toEqual({ Authorization: "Bearer at_123", Accept: "application/json" });
+  });
+
+  it("throws with the status and body when the userinfo request is refused", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('{"error":"invalid_token"}', { status: 401 })
+    ) as typeof fetch;
+
+    await expect(fetchUserInfo(makeDiscovery(), "expired")).rejects.toThrow(
+      'Userinfo request failed (401): {"error":"invalid_token"}'
+    );
   });
 
   it("throws when the provider lacks a userinfo endpoint", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
     await expect(
       fetchUserInfo(makeDiscovery({ userinfo_endpoint: undefined }), "at")
-    ).rejects.toThrow(/userinfo endpoint/);
+    ).rejects.toThrow("OIDC provider does not expose a userinfo endpoint");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws when the response omits the sub claim", async () => {
@@ -571,8 +692,27 @@ describe("response size guard (MAX_RESPONSE_BYTES)", () => {
       )
     ) as typeof fetch;
 
-    await expect(
-      discoverOidc("https://idp.example.com", { skipCache: true })
-    ).resolves.toBeDefined();
+    const result = await discoverOidc("https://idp.example.com", { skipCache: true });
+    expect(result.token_endpoint).toBe("https://idp.example.com/token");
+  });
+
+  // The same guard sits in front of every IdP answer, not only discovery.
+  it("rejects an oversized userinfo answer", async () => {
+    const oversized = JSON.stringify({ sub: "user-1", padding: "x".repeat(2 * 1024 * 1024) });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(oversized));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    ) as typeof fetch;
+
+    await expect(fetchUserInfo(makeDiscovery(), "at")).rejects.toThrow(
+      "Response from https://idp.example.com/userinfo exceeds 1048576 bytes"
+    );
   });
 });

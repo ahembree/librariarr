@@ -190,7 +190,11 @@ describe("hasCrossSystemRules", () => {
   });
 
   it("returns false for non-cross-system rules", () => {
-    expect(hasCrossSystemRules([makeGroup({ rules: [] })])).toBe(false);
+    expect(hasCrossSystemRules([
+      makeGroup({
+        rules: [{ id: "r1", field: "arrTag", operator: "equals", value: "keep", condition: "AND" }],
+      }),
+    ])).toBe(false);
   });
 });
 
@@ -416,12 +420,16 @@ describe("evaluateQueryArrRule", () => {
   });
 
   describe("arrSizeOnDisk (numeric in MB)", () => {
-    it("greaterThan converts bytes to MB", () => {
-      // 2 GB = 2048 MB
+    it("compares in MB, not bytes", () => {
+      // 2 GiB = 2048 MB: under 3000 MB, though 2,147,483,648 bytes are not.
       expect(evaluateQueryArrRule(
-        { id: "r1", field: "arrSizeOnDisk", operator: "greaterThan", value: "1000", condition: "AND" },
+        { id: "r1", field: "arrSizeOnDisk", operator: "lessThan", value: "3000", condition: "AND" },
         makeArrMeta({ sizeOnDisk: 2 * 1024 * 1024 * 1024 }),
       )).toBe(true);
+      expect(evaluateQueryArrRule(
+        { id: "r1", field: "arrSizeOnDisk", operator: "greaterThan", value: "2048", condition: "AND" },
+        makeArrMeta({ sizeOnDisk: 2 * 1024 * 1024 * 1024 }),
+      )).toBe(false);
     });
 
     it("returns false when sizeOnDisk is null", () => {

@@ -11,6 +11,14 @@ function validateRules(rules: unknown[]) {
   return result;
 }
 
+const STRUCTURE_ERROR = "Each rule must have 'field' and 'operator' string properties";
+
+/** The messages of the issues a failed parse reports on `rules`. */
+function rulesIssues(result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }) {
+  expect(result.success).toBe(false);
+  return result.error!.issues.filter((i) => i.path.join(".") === "rules").map((i) => i.message);
+}
+
 describe("Rule structure validation", () => {
   // ── Valid structures ──
 
@@ -21,7 +29,7 @@ describe("Rule structure validation", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts valid LifecycleRuleGroup format", () => {
+  it("accepts valid rule group format", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -64,33 +72,33 @@ describe("Rule structure validation", () => {
     const result = validateRules([
       { id: "1", operator: "greaterThan", value: 5, condition: "AND" },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
   it("rejects rules without operator property", () => {
     const result = validateRules([
       { id: "1", field: "playCount", value: 5, condition: "AND" },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
   it("rejects rules with non-string field", () => {
     const result = validateRules([
       { id: "1", field: 123, operator: "greaterThan", value: 5, condition: "AND" },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
   it("rejects rules with non-string operator", () => {
     const result = validateRules([
       { id: "1", field: "playCount", operator: true, value: 5, condition: "AND" },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
-  // ── Invalid LifecycleRuleGroup ──
+  // ── Invalid rule groups ──
 
-  it("rejects LifecycleRuleGroup without condition", () => {
+  it("rejects rule group without condition", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -100,10 +108,10 @@ describe("Rule structure validation", () => {
         groups: [],
       },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
-  it("rejects LifecycleRuleGroup with invalid condition", () => {
+  it("rejects rule group with invalid condition", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -114,10 +122,10 @@ describe("Rule structure validation", () => {
         groups: [],
       },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
-  it("rejects LifecycleRuleGroup where rules is not an array", () => {
+  it("rejects rule group where rules is not an array", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -126,10 +134,10 @@ describe("Rule structure validation", () => {
         groups: [],
       },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
-  it("rejects LifecycleRuleGroup with malformed nested rules", () => {
+  it("rejects rule group with malformed nested rules", () => {
     const result = validateRules([
       {
         id: "g1",
@@ -140,7 +148,7 @@ describe("Rule structure validation", () => {
         groups: [],
       },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
   it("rejects invalid nested groups", () => {
@@ -163,14 +171,14 @@ describe("Rule structure validation", () => {
         ],
       },
     ]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual([STRUCTURE_ERROR]);
   });
 
   // ── Empty rules ──
 
   it("rejects empty rules array", () => {
     const result = validateRules([]);
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual(["Rules are required"]);
   });
 
   // ── Schema-specific checks ──
@@ -182,14 +190,14 @@ describe("Rule structure validation", () => {
       rules: [],
       serverIds: ["server-1"],
     });
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual(["Rules are required"]);
   });
 
   it("ruleSetUpdateSchema enforces min(1) rules when provided", () => {
     const result = ruleSetUpdateSchema.safeParse({
       rules: [],
     });
-    expect(result.success).toBe(false);
+    expect(rulesIssues(result)).toEqual(["Rules are required"]);
   });
 
   it("ruleSetUpdateSchema allows omitting rules entirely", () => {

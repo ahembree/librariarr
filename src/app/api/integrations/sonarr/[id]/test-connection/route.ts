@@ -1,39 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
-import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { validateRequest, arrTestConnectionSchema } from "@/lib/validation";
-import { sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
+import { SONARR, instanceTestConnectionRoutes } from "@/lib/integrations/instance-routes";
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await params;
-  const { data, error } = await validateRequest(request, arrTestConnectionSchema);
-  if (error) return error;
-
-  const existing = await prisma.sonarrInstance.findFirst({
-    where: { id, userId: session.userId! },
-  });
-  if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const refused = await refuseStoredKeyToNewUrl(session, existing.url, data.url, data.apiKey, "Sonarr");
-  if (refused) return refused;
-
-  const testUrl = data.url ?? existing.url;
-  const testKey = data.apiKey ?? existing.apiKey;
-  const client = new SonarrClient(testUrl, testKey);
-  const result = await client.testConnection();
-  return NextResponse.json(
-    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
-  );
-}
+// A saved instance's connection test, as every integration type answers it
+// (src/lib/integrations/instance-routes.ts).
+export const { POST } = instanceTestConnectionRoutes(SONARR);

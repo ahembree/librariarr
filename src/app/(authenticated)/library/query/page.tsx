@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useState, useEffect, useCallback, useRef, useMemo, memo, type ReactNode } from "react";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
@@ -43,7 +43,6 @@ import {
   Trash2,
   ChevronDown,
   Search,
-  Loader2,
   Copy,
   LayoutGrid,
   TableProperties,
@@ -66,15 +65,30 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
+import { useLocalStorage } from "@/hooks/use-local-storage";
+import { useStoredSet } from "@/hooks/use-stored-set";
+import { useLibraryTypes } from "@/hooks/use-library-types";
+import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
+import { PageHeader } from "@/components/page-header";
+import { LoadingButton } from "@/components/loading-button";
+import {
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  qualityChips,
+  qualitySegments,
+  resolutionChipLabel,
+} from "@/lib/media/quality-chips";
+import { QualityChip } from "@/components/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatEpisodeTitle, formatMediaItemTitle } from "@/lib/media/display-title";
 import { generateId } from "@/lib/utils";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
@@ -83,9 +97,10 @@ import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dia
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
-import { buildActionBatches, actionMediaType, countActionUnits } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
-import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { readResponseError } from "@/lib/api/error-message";
+import { actionCanScopeToEpisodes, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
 import {
@@ -125,6 +140,7 @@ interface QueryResultItem {
   dynamicRange: string | null;
   videoCodec: string | null;
   audioCodec: string | null;
+  audioChannels?: number | null;
   audioProfile: string | null;
   container: string | null;
   fileSize: string | null;
@@ -141,6 +157,30 @@ interface QueryResultItem {
     mediaServer: { id: string; name: string; type: string };
   } | null;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
+}
+
+interface IntegrationInstanceRow {
+  id: string;
+  name: string;
+  enabled?: boolean;
+}
+
+/** `GET /api/integrations/instances`: each type's instances, as its own route lists them. */
+interface IntegrationInstances {
+  radarr?: IntegrationInstanceRow[];
+  sonarr?: IntegrationInstanceRow[];
+  lidarr?: IntegrationInstanceRow[];
+  seerr?: IntegrationInstanceRow[];
+  /** With `?withMetadata=1`: every requester name across the enabled Seerr instances. */
+  seerrUsers?: string[];
+}
+
+function listedInstances(rows: IntegrationInstanceRow[] | undefined) {
+  return (rows ?? []).map((i) => ({ id: i.id, name: i.name, enabled: i.enabled !== false }));
+}
+
+function enabledSeerr(data: IntegrationInstances) {
+  return (data.seerr ?? []).filter((i) => i.enabled !== false);
 }
 
 const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
@@ -214,26 +254,19 @@ function anyRuleConfigured(groups: QueryGroup[]): boolean {
 
 /**
  * Whether a draft holds anything worth restoring. A pristine builder (no media
- * types, default scope/sort, and the single empty starter rule) is treated as
- * empty so we neither persist nor advertise a restore for it.
+ * types, default scope, and the single empty starter rule) is treated as empty
+ * so we neither persist nor advertise a restore for it. The sort is left out:
+ * clicking a column header is not building a query.
  */
 function queryHasContent(def: QueryDefinition, activeQueryId: string | null): boolean {
   return (
     (def.mediaTypes?.length ?? 0) > 0 ||
     (def.serverIds?.length ?? 0) > 0 ||
     Boolean(def.includeEpisodes) ||
-    def.sortBy !== "title" ||
-    def.sortOrder !== "asc" ||
     Object.values(def.arrServerIds ?? {}).some(Boolean) ||
     Boolean(activeQueryId) ||
     anyRuleConfigured(def.groups)
   );
-}
-
-function formatResolution(res: string | null) {
-  if (!res) return "";
-  const label = normalizeResolutionLabel(res);
-  return label === "Other" ? res : label;
 }
 
 /** Aligned label + control row used inside the Query Scope card. */
@@ -271,6 +304,11 @@ const COLUMN_GROUPS: Record<string, string> = {
   playback: "Playback",
 };
 
+/**
+ * The visible columns, stored as a list; none stored (or an empty list) means
+ * the defaults. Read through `useStoredSet`: the page wrote it with a bare
+ * `localStorage.setItem`, which throws in a private window.
+ */
 const VISIBLE_KEY = "query-visible-columns";
 
 /** Columns pinned to the table's left edge until the user changes them. */
@@ -279,21 +317,99 @@ const QUERY_TABLE_PINNING = {
   defaultPinned: ["type", "title", "year"],
 };
 
-function loadVisibleColumns(): Set<string> {
-  try {
-    const stored = localStorage.getItem(VISIBLE_KEY);
-    if (stored) return new Set(JSON.parse(stored));
-  } catch { /* use defaults */ }
-  return new Set<string>();
+/** The artwork a result shows: a show's or an episode's series poster, else its own. */
+function resultImageUrl(item: QueryResultItem): string {
+  return `/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`;
 }
 
-function saveVisibleColumns(cols: Set<string>) {
-  localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
+/**
+ * A result's popover: a grouped row (a show, an artist) passes its counts —
+ * tracks for an artist, never "episodes" — and an individual one its file.
+ */
+function resultHoverData(item: QueryResultItem) {
+  return hoverDataFromListItem(item, { title: resultTitle(item) });
 }
 
-const GAP = 16;
-const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
+function queryResultTableHover(item: QueryResultItem) {
+  return <MediaHoverPopover imageUrl={resultImageUrl(item)} data={resultHoverData(item)} />;
+}
+
+const resultKey = (item: QueryResultItem) => item.id;
+
+interface QueryResultCardProps {
+  item: QueryResultItem;
+  selected: boolean;
+  priority: boolean;
+  showServers: boolean;
+  getHex: ReturnType<typeof useChipColors>["getHex"];
+  onToggle: (id: string) => void;
+  onOpen: (item: QueryResultItem) => void;
+}
+
+/**
+ * One result in the card grid, with its selection checkbox. Memoised on the
+ * row and its selected state: the grid's `renderItem` changes with every
+ * selection, and only the card whose checkbox moved re-renders for it.
+ */
+const QueryResultCard = memo(function QueryResultCard({
+  item,
+  selected,
+  priority,
+  showServers,
+  getHex,
+  onToggle,
+  onOpen,
+}: QueryResultCardProps) {
+  return (
+    <div
+      className={cn(
+        "relative rounded-lg",
+        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+      )}
+    >
+      <div
+        className="absolute left-2 top-2 z-10 flex rounded bg-background/80 p-0.5 backdrop-blur"
+        onClick={(e) => { e.stopPropagation(); onToggle(item.id); }}
+      >
+        <Checkbox
+          checked={selected}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() => onToggle(item.id)}
+          aria-label={`Select ${resultTitle(item)}`}
+        />
+      </div>
+      <MediaCard
+        priority={priority}
+        imageUrl={resultImageUrl(item)}
+        title={resultTitle(item)}
+        fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
+        onClick={() => onOpen(item)}
+        servers={showServers ? item.servers : undefined}
+        metadata={
+          <MetadataLine stacked>
+            {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
+            {item.matchedEpisodes != null && (
+              <MetadataItem icon={<Layers />}>
+                {item.seasonCount}S / {item.matchedEpisodes}E
+              </MetadataItem>
+            )}
+            {item.matchedEpisodes == null && formatDuration(item.duration) && (
+              <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>
+            )}
+            {formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        badges={
+          <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
+            {mediaTypeLabel(item.type)}
+          </ColorChip>
+        }
+        qualityBar={qualitySegments(qualityChips(item, item.type === "MUSIC" ? "music" : "video"), getHex)}
+        hoverContent={<MediaHoverPopover data={resultHoverData(item)} />}
+      />
+    </div>
+  );
+});
 
 // ── Component ───────────────────────────────────────────────────
 
@@ -302,14 +418,8 @@ export default function QueryPage() {
   // Disabled servers are never queried (the engine scopes to enabled ones), so
   // offering them in the picker would only ever return nothing.
   const queryServers = useMemo(() => servers.filter((s) => s.enabled), [servers]);
-  const { getHex, getBadgeStyle } = useChipColors();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "library-query-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItem, setSelectedItem] = useState<QueryResultItem | null>(null);
+  const { getHex } = useChipColors();
+  const detailPanel = useMediaDetailPanel();
 
   // Result selection (for triggering ad-hoc lifecycle actions)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -339,12 +449,20 @@ export default function QueryPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [includeEpisodes, setIncludeEpisodes] = useState(false);
   const [arrServerIds, setArrServerIds] = useState<{ radarr?: string; sonarr?: string; lidarr?: string }>({});
+  // Media types with an enabled library, from the tab's store (the shell's
+  // copy first, kept current by events) rather than a request of this page's
+  // own; null until known (then every type counts).
+  const libraryTypesData = useLibraryTypes();
+  const libraryTypes = useMemo(
+    () => (libraryTypesData ? new Set<string>(libraryTypesData.types) : null),
+    [libraryTypesData],
+  );
 
   // Arr instances
   const [arrInstances, setArrInstances] = useState<{
-    radarr: Array<{ id: string; name: string }>;
-    sonarr: Array<{ id: string; name: string }>;
-    lidarr: Array<{ id: string; name: string }>;
+    radarr: Array<{ id: string; name: string; enabled: boolean }>;
+    sonarr: Array<{ id: string; name: string; enabled: boolean }>;
+    lidarr: Array<{ id: string; name: string; enabled: boolean }>;
   }>({ radarr: [], sonarr: [], lidarr: [] });
 
   // Seerr integration status
@@ -384,20 +502,14 @@ export default function QueryPage() {
   const [hasRun, setHasRun] = useState(false);
   const { state: queryProgress, handleUpdate: onQueryProgress, reset: resetQueryProgress } = useStreamProgress();
 
-  // View state
-  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  // View state, read from this browser's storage without an effect (the cards
+  // painted first, then switched) and without throwing in a private window.
+  const [storedViewMode, setViewMode] = useLocalStorage<"table" | "cards">("query-view-mode", "table");
+  const viewMode: "table" | "cards" = storedViewMode === "cards" ? "cards" : "table";
   const { size, setSize, columns: cardColumns } = useCardSize();
 
   // Column visibility
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => new Set<string>());
-
-  // Load preferences on mount
-  useEffect(() => {
-    const stored = localStorage.getItem("query-view-mode") as "table" | "cards" | null;
-    if (stored) setViewMode(stored);
-    const cols = loadVisibleColumns();
-    if (cols.size > 0) setVisibleCols(cols);
-  }, []);
+  const [visibleCols, visibleColActions] = useStoredSet(VISIBLE_KEY);
 
   // Saved queries
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
@@ -439,50 +551,49 @@ export default function QueryPage() {
       })
       .catch(() => {});
 
-    // Fetch Arr instances (all 3 types in parallel)
-    Promise.all([
-      fetch("/api/integrations/radarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch("/api/integrations/sonarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch("/api/integrations/lidarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([radarrData, sonarrData, lidarrData]) => {
-      setArrInstances({
-        radarr: (radarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-        sonarr: (sonarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-        lidarr: (lidarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-      });
-    });
-
-    // Fetch Seerr instances to determine connection status
-    fetch("/api/integrations/seerr")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
+    // Every integration's instances in one request (it was one per type), and
+    // the Seerr requester names beside them (`withMetadata`, which replaced
+    // the per-instance metadata chain that waited for the Seerr list). Two
+    // requests, side by side, so a slow or unreachable Seerr instance never
+    // holds back the Arr pickers or the connection warnings.
+    fetch("/api/integrations/instances")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: IntegrationInstances | null) => {
+        if (!data) return;
+        // A disabled instance answers no criteria (the engine leaves its media
+        // type out), so it is listed but marked and never counted as selected.
+        setArrInstances({
+          radarr: listedInstances(data.radarr),
+          sonarr: listedInstances(data.sonarr),
+          lidarr: listedInstances(data.lidarr),
+        });
         // Only enabled instances answer Seerr criteria (the engine merges every
         // enabled one); treating a disabled one as connected hid the
         // "can't be evaluated" warning.
-        const instances = ((data?.instances ?? []) as Array<{ id: string; enabled?: boolean }>)
-          .filter((i) => i.enabled !== false);
-        setSeerrConnected(instances.length > 0);
-        setSeerrInstanceIds(instances.map((i) => i.id));
-        if (instances.length > 0) {
-          Promise.all(
-            instances.map((inst) =>
-              fetch(`/api/integrations/seerr/${inst.id}/metadata`)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((metaData) => (metaData?.users ?? []) as string[])
-                .catch(() => [] as string[]),
-            ),
-          ).then((lists) => {
-            const users = [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b));
-            setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
-          });
-        }
+        const seerr = enabledSeerr(data);
+        setSeerrConnected(seerr.length > 0);
+        setSeerrInstanceIds(seerr.map((i) => i.id));
+      })
+      .catch(() => {});
+
+    fetch("/api/integrations/instances?withMetadata=1")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: IntegrationInstances | null) => {
+        // Set only when an enabled instance exists, as before: with none the
+        // field stays a free-text input rather than an empty dropdown.
+        if (!data || enabledSeerr(data).length === 0) return;
+        const users = Array.isArray(data.seerrUsers) ? data.seerrUsers : [];
+        setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
       })
       .catch(() => {});
   }, []);
 
   // Fetch Arr metadata when selected Arr servers change (for dropdown distinct
-  // values AND the action bar's per-family quality profiles + tags).
+  // values AND the action bar's per-family quality profiles + tags). An answer
+  // for a selection already changed again is dropped: it would show the
+  // previous instance's profiles and tags under the new one.
   useEffect(() => {
+    let cancelled = false;
     const fetchArrMetadata = async () => {
       const meta: Record<ArrFamily, ArrFamilyMeta> = {
         radarr: { qualityProfiles: [], tags: [] },
@@ -518,6 +629,7 @@ export default function QueryPage() {
       if (arrServerIds.sonarr) promises.push(fetchFamily("sonarr", arrServerIds.sonarr));
       if (arrServerIds.lidarr) promises.push(fetchFamily("lidarr", arrServerIds.lidarr));
       await Promise.all(promises);
+      if (cancelled) return;
 
       setArrMeta(meta);
 
@@ -540,23 +652,30 @@ export default function QueryPage() {
     };
 
     if (arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr) {
-      fetchArrMetadata();
+      void fetchArrMetadata();
     } else {
-      setArrMeta({
-        radarr: { qualityProfiles: [], tags: [] },
-        sonarr: { qualityProfiles: [], tags: [] },
-        lidarr: { qualityProfiles: [], tags: [] },
+      // Deferred out of the effect body, like the fetch's own updates.
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setArrMeta({
+          radarr: { qualityProfiles: [], tags: [] },
+          sonarr: { qualityProfiles: [], tags: [] },
+          lidarr: { qualityProfiles: [], tags: [] },
+        });
+        setDistinctValues((prev) => ({
+          ...prev,
+          arrTag: [],
+          arrQualityProfile: [],
+          arrOriginalLanguage: [],
+          arrStatus: [],
+          arrSeriesType: [],
+          arrQualityName: [],
+        }));
       });
-      setDistinctValues((prev) => ({
-        ...prev,
-        arrTag: [],
-        arrQualityProfile: [],
-        arrOriginalLanguage: [],
-        arrStatus: [],
-        arrSeriesType: [],
-        arrQualityName: [],
-      }));
     }
+    return () => {
+      cancelled = true;
+    };
   }, [arrServerIds]);
 
   // ── All column definitions (with chip styles) ──
@@ -615,13 +734,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const label = formatResolution(item.resolution);
-        if (!label) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.resolution,
     },
@@ -643,13 +757,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const dr = item.dynamicRange;
-        if (!dr) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
-            {dr}
-          </ColorChip>
-        );
+        const label = dynamicRangeChipLabel(item.dynamicRange);
+        return label ? <QualityChip chip={{ category: "dynamicRange", label }} /> : "-";
       },
       sortValue: (item) => item.dynamicRange,
     },
@@ -661,13 +770,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const codec = item.audioCodec;
-        if (!codec) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("audioCodec", codec)}>
-            {codec}
-          </ColorChip>
-        );
+        const chip = qualityChips(item, "music", { channels: true })[0];
+        return chip ? <QualityChip chip={chip} /> : "-";
       },
       sortValue: (item) => item.audioCodec,
     },
@@ -679,13 +783,8 @@ export default function QueryPage() {
       defaultVisible: false,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const ap = item.audioProfile as string | null;
-        if (!ap) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("audioProfile", ap)}>
-            {ap}
-          </ColorChip>
-        );
+        const label = audioProfileChipLabel(item.audioProfile);
+        return label ? <QualityChip chip={{ category: "audioProfile", label }} /> : "-";
       },
       sortValue: (item) => item.audioProfile as string | null,
     },
@@ -744,7 +843,7 @@ export default function QueryPage() {
       },
       sortValue: (item) => item.servers?.[0]?.serverName ?? item.library?.mediaServer?.name ?? null,
     },
-  ], [getBadgeStyle]);
+  ], []);
 
   // Criterion columns: every field a query can filter on (beyond the fixed
   // columns above) can be shown, its values loaded on demand for the rows on
@@ -794,6 +893,7 @@ export default function QueryPage() {
 
   const allColumns = useMemo(() => [...baseColumns, ...criterionColumns], [baseColumns, criterionColumns]);
 
+
   const columnGroups = useMemo(() => {
     const groups: Array<[string, string]> = Object.entries(COLUMN_GROUPS);
     const sections = [...new Set(columnFieldDefs.map((f) => f.section))];
@@ -810,22 +910,16 @@ export default function QueryPage() {
   }, [allColumns, visibleCols]);
 
   const toggleColumn = useCallback((colId: string) => {
-    setVisibleCols((prev) => {
-      const next = new Set(prev.size === 0
-        ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
-        : prev,
-      );
-      if (next.has(colId)) {
-        // Don't allow hiding title
-        if (colId === "title") return next;
-        next.delete(colId);
-      } else {
-        next.add(colId);
-      }
-      saveVisibleColumns(next);
-      return next;
-    });
-  }, [allColumns]);
+    // Don't allow hiding title
+    if (colId === "title" && (visibleCols.size === 0 || visibleCols.has("title"))) return;
+    const next = new Set(visibleCols.size === 0
+      ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
+      : visibleCols,
+    );
+    if (next.has(colId)) next.delete(colId);
+    else next.add(colId);
+    visibleColActions.replace(next);
+  }, [allColumns, visibleCols, visibleColActions]);
 
   const effectiveVisible = useMemo(() => {
     if (visibleCols.size === 0) {
@@ -833,6 +927,26 @@ export default function QueryPage() {
     }
     return visibleCols;
   }, [allColumns, visibleCols]);
+
+  // The table's sort is the query's own `sortBy`/`sortOrder`, so a saved query
+  // reopens sorted the way it was saved, and the card view shows the same order.
+  // Sorted here with the column's own sort value (DataTable is controlled).
+  const sortedResults = useMemo(() => {
+    // A criterion column sorts only while shown: its values load only then.
+    const getValue = allColumns.find((c) => c.id === sortBy && effectiveVisible.has(c.id))?.sortValue;
+    if (!getValue) return results;
+    return [...results].sort((a, b) => {
+      const aVal = getValue(a);
+      const bVal = getValue(b);
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      const cmp = typeof aVal === "number" && typeof bVal === "number"
+        ? aVal - bVal
+        : String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+  }, [results, allColumns, effectiveVisible, sortBy, sortOrder]);
 
   const isValid = useMemo(() => {
     return groups.length > 0 && validateAllRules(groups);
@@ -842,7 +956,24 @@ export default function QueryPage() {
 
   const hasAnyArrServer = !!(arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr);
   const hasAnyArrInstanceAvailable = arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0;
-  const orphanArrRules = useMemo(() => hasArrRules(groups) && !hasAnyArrServer, [groups, hasAnyArrServer]);
+  // Media types in scope whose Arr criteria nothing can answer: no Arr server
+  // selected for the type, or a disabled one. The engine leaves those types
+  // out of the results (resolveQueryArrScope); name them here before a run.
+  const unevaluableArrTypes = useMemo(() => {
+    if (!hasArrRules(groups)) return [] as string[];
+    const inScope = mediaTypes.length === 0 ? ["MOVIE", "SERIES", "MUSIC"] : mediaTypes;
+    const family = { MOVIE: "radarr", SERIES: "sonarr", MUSIC: "lidarr" } as const;
+    const label = { MOVIE: "Movies", SERIES: "Series", MUSIC: "Music" } as const;
+    return inScope
+      .filter((t): t is keyof typeof family => t in family)
+      .filter((t) => !libraryTypes || libraryTypes.has(t))
+      .filter((t) => {
+        const id = arrServerIds[family[t]];
+        return !id || !arrInstances[family[t]].some((i) => i.id === id && i.enabled);
+      })
+      .map((t) => label[t]);
+  }, [groups, mediaTypes, arrServerIds, arrInstances, libraryTypes]);
+  const orphanArrRules = unevaluableArrTypes.length > 0;
   const orphanSeerrRules = useMemo(() => hasSeerrRules(groups) && !seerrConnected, [groups, seerrConnected]);
   const seerrWithMusic = useMemo(
     () => hasSeerrRules(groups) && seerrConnected && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC")),
@@ -901,8 +1032,11 @@ export default function QueryPage() {
         // No `resp.ok` pre-check: a refusal is answered as plain JSON before the
         // stream opens, and `consumeProgressStream` reads the server's reason out
         // of it. Throwing a generic "Query failed" here would discard that.
-        const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
+        const data = await consumeProgressStream<{ items?: QueryResultItem[]; warnings?: string[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
+        if (data.warnings?.length) {
+          toast.warning("Part of the query was left out", { description: data.warnings.join(" · ") });
+        }
         setRunScope({
           serverIds: definition.serverIds,
           ...(definition.arrServerIds && { arrServerIds: definition.arrServerIds }),
@@ -938,9 +1072,14 @@ export default function QueryPage() {
           const d = JSON.parse(raw) as Partial<QueryDraft>;
           const def = d?.definition;
           if (def && Array.isArray(def.groups) && def.groups.length > 0) {
-            applyQueryDefinition(def);
-            if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
-            setDraftRestored(true);
+            // Read now, applied just after the effect: the restore's state
+            // updates must not run inside the effect body. The persistence
+            // below then mirrors the restored builder back into the draft.
+            queueMicrotask(() => {
+              applyQueryDefinition(def);
+              if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
+              setDraftRestored(true);
+            });
           }
         }
       } catch {
@@ -1014,28 +1153,26 @@ export default function QueryPage() {
     async (config: QueryActionConfig) => {
       const definition = lastRunDefinitionRef.current ?? buildDefinition();
       const selectedItems = results.filter((r) => selectedIds.has(r.id));
-      const targetType = actionMediaType(config.actionType);
+      // "Do Nothing" (tags only) has no Arr suffix; the bar names its family.
+      const targetType = actionMediaType(config.actionType) ?? config.mediaType;
 
-      // Guard (deletion-safety): a whole-record series action can't safely span a
-      // single show across batches — the server collapses-and-fires it once per
-      // batch, so a show with more than a batch's worth of selected episodes would
-      // double-fire. Refuse and steer the user to the grouped series view, which
-      // acts on the whole show as one unit.
-      if (targetType === "SERIES" && definition.includeEpisodes && !actionHonorsMemberIds(config.actionType)) {
-        const perShow = new Map<string, number>();
-        for (const it of selectedItems) {
-          if (it.type !== "SERIES") continue;
-          // Series identity (falls back to title) so two same-titled shows are
-          // counted separately — mirrors the server's grouping.
-          const key = it.seriesKey ?? `title:${(it.parentTitle ?? it.title ?? "").trim().toLowerCase()}`;
-          perShow.set(key, (perShow.get(key) ?? 0) + 1);
-        }
-        if ([...perShow.values()].some((n) => n > MAX_QUERY_ACTION_ITEMS)) {
-          toast.error("Too many episodes for one series", {
-            description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
-          });
-          return;
-        }
+      // Guard (deletion-safety): in episode view a whole-record series action
+      // can't safely span one show across batches — split, the route would
+      // collapse it per batch. The route also never acts on one Arr record
+      // twice in a run, but steer the user to the grouped series view, which
+      // acts on a whole show as one row. An artist split across batches is
+      // left to that route rule: the Query page has no artist-grouped view to
+      // offer instead.
+      if (
+        !actionHonorsMemberIds(config.actionType) &&
+        !actionCanScopeToEpisodes(config.actionType) &&
+        definition.includeEpisodes &&
+        oversizedActionGroup(selectedItems, targetType) === "SERIES"
+      ) {
+        toast.error("Too many episodes for one series", {
+          description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
+        });
+        return;
       }
 
       // The server caps each request at MAX_QUERY_ACTION_ITEMS ids (a safety
@@ -1113,8 +1250,7 @@ export default function QueryPage() {
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
-            const data = await resp.json().catch(() => null);
-            const reason = data?.error ?? "Unknown error";
+            const reason = await readResponseError(resp, "Unknown error");
             if (didWork()) {
               // Earlier batches did real work (recorded server-side). Stop here
               // (fail-closed), report the partial result, and refresh.
@@ -1253,7 +1389,7 @@ export default function QueryPage() {
           );
           toast.success("Query updated", { description: name });
         } else {
-          toast.error("Couldn't save query");
+          toast.error("Couldn't save query", { description: await readResponseError(resp, "The server refused the save") });
         }
       } else {
         const resp = await fetch("/api/saved-queries", {
@@ -1267,11 +1403,11 @@ export default function QueryPage() {
           setActiveQueryId(data.query.id);
           toast.success("Query saved", { description: name });
         } else {
-          toast.error("Couldn't save query");
+          toast.error("Couldn't save query", { description: await readResponseError(resp, "The server refused the save") });
         }
       }
-    } catch {
-      toast.error("Couldn't save query");
+    } catch (err) {
+      toast.error("Couldn't save query", { description: err instanceof Error ? err.message : undefined });
     }
     setSavePopoverOpen(false);
     setSaveName("");
@@ -1325,95 +1461,59 @@ export default function QueryPage() {
     });
   };
 
+  const { open: openPanel } = detailPanel;
   const navigateToItem = useCallback((item: QueryResultItem) => {
-    setSelectedItem(item);
-  }, []);
-
-  const handleViewModeChange = (mode: "table" | "cards") => {
-    setViewMode(mode);
-    localStorage.setItem("query-view-mode", mode);
-  };
+    void openPanel({
+      id: item.id,
+      mediaType: toDetailPanelMediaType(item.type),
+      seed: item as unknown as MediaItemWithRelations,
+      group: groupOfRow(item),
+    });
+  }, [openPanel]);
 
   const activeQuery = savedQueries.find((q) => q.id === activeQueryId);
 
-  // ── Card grid virtualizer ──
-
-  const [gridNode, setGridNode] = useState<HTMLDivElement | null>(null);
-  const gridContainerRef = useCallback((node: HTMLDivElement | null) => {
-    setGridNode(node);
+  const handleTableSort = useCallback((id: string, order: "asc" | "desc") => {
+    setSortBy(id);
+    setSortOrder(order);
   }, []);
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
 
-  useEffect(() => {
-    if (!gridNode) {
-      scrollElementRef.current = null;
-      setScrollMargin(0);
-      return;
-    }
-    // Walk up the DOM to find the nearest scrollable ancestor
-    let el: HTMLElement | null = gridNode.parentElement;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (style.overflowY === "auto" || style.overflowY === "scroll") {
-        scrollElementRef.current = el;
-        break;
-      }
-      el = el.parentElement;
-    }
-    if (!el) {
-      scrollElementRef.current = document.querySelector<HTMLElement>("main");
-    }
-    setScrollMargin(gridNode.offsetTop);
-  }, [gridNode]);
+  // ── Card grid ──
 
-  const rowCount = useMemo(
-    () => (results.length > 0 ? Math.ceil(results.length / cardColumns) : 0),
-    [results.length, cardColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const containerWidth = gridNode?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
-    const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [cardColumns, gridNode]);
-
-  const gridVirtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan: 3,
-    scrollMargin,
+  // The results sit in the shell's <main>, whose scroll the grid follows.
+  // What is above it moves while it shows — the action's progress bar, the
+  // action bar's hint once something is selected — so it is re-measured then.
+  const grid = useVirtualPosterGrid({
+    count: sortedResults.length,
+    columns: cardColumns,
+    aspect: POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}:${executingAction}:${selectedIds.size > 0}`,
   });
 
-  useEffect(() => {
-    gridVirtualizer.measure();
-  }, [cardColumns, gridVirtualizer]);
-
-  const virtualRows = gridVirtualizer.getVirtualItems();
-
-  const getItemDetailUrl = (item: QueryResultItem): string => {
-    switch (item.type) {
-      case "MOVIE": return `/library/movies/${item.id}`;
-      case "SERIES": return `/library/series/show/${item.id}`;
-      case "MUSIC": return `/library/music/${item.id}`;
-      default: return `/library/movies/${item.id}`;
-    }
-  };
+  const showServerChips = servers.length > 1;
+  // Changes with the selection, which only the cards whose checkbox moved
+  // re-render for (`QueryResultCard` is memoised on its own selected state).
+  const renderResultCard = useCallback(
+    (item: QueryResultItem, { priority }: GridCardContext) => (
+      <QueryResultCard
+        item={item}
+        selected={selectedIds.has(item.id)}
+        priority={priority}
+        showServers={showServerChips}
+        getHex={getHex}
+        onToggle={toggleSelect}
+        onOpen={navigateToItem}
+      />
+    ),
+    [selectedIds, showServerChips, getHex, toggleSelect, navigateToItem],
+  );
 
   return (
     <>
       <div className="space-y-6 p-4 sm:p-6 lg:p-8">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Query Builder</h1>
-          <p className="text-muted-foreground mt-1">
-            Build ad-hoc queries across your media library.
-          </p>
-        </div>
-      </div>
+      <PageHeader title="Query Builder" description="Build ad-hoc queries across your media library." />
 
       {/* Saved queries toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -1629,7 +1729,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Radarr: None</SelectItem>
                         {arrInstances.radarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1645,7 +1745,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Sonarr: None</SelectItem>
                         {arrInstances.sonarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1661,7 +1761,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Lidarr: None</SelectItem>
                         {arrInstances.lidarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1692,10 +1792,9 @@ export default function QueryPage() {
             <p className="font-medium text-amber">Some criteria can&apos;t be evaluated</p>
             {orphanArrRules && (
               <p className="text-muted-foreground">
-                This query uses Arr criteria but no Arr server is{" "}
                 {hasAnyArrInstanceAvailable
-                  ? "selected above for the relevant media type. Pick one to evaluate Arr rules — until then these rules can't reflect real Arr data (negative rules like \u201cFound In Arr = false\u201d would match everything), and actions on the results are blocked."
-                  : "configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and actions on the results are blocked."}
+                  ? `This query uses Arr criteria, but no enabled Arr server is selected above for ${unevaluableArrTypes.join(", ")}. Those media types are left out of the results — without Arr data, negative rules like \u201cFound In Arr = false\u201d would match every item of them. Pick an enabled server for each above — or connect one in Settings → Integrations — to include them.`
+                  : "This query uses Arr criteria but no Arr server is configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and the query returns no results."}
               </p>
             )}
             {orphanSeerrRules && (
@@ -1738,7 +1837,7 @@ export default function QueryPage() {
         {/* View toggle */}
         <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
           <button
-            onClick={() => handleViewModeChange("table")}
+            onClick={() => setViewMode("table")}
             className={cn(
               "rounded-md p-1.5 transition-colors",
               viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1749,7 +1848,7 @@ export default function QueryPage() {
             <TableProperties className="h-4 w-4" />
           </button>
           <button
-            onClick={() => handleViewModeChange("cards")}
+            onClick={() => setViewMode("cards")}
             className={cn(
               "rounded-md p-1.5 transition-colors",
               viewMode === "cards" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1808,14 +1907,9 @@ export default function QueryPage() {
           </DropdownMenu>
         )}
 
-        <Button onClick={runQuery} disabled={loading || !isValid}>
-          {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Play className="mr-2 h-4 w-4" />
-          )}
+        <LoadingButton onClick={runQuery} loading={loading} disabled={!isValid} icon={Play}>
           Run Query
-        </Button>
+        </LoadingButton>
       </div>
 
       {/* Results */}
@@ -1878,165 +1972,18 @@ export default function QueryPage() {
             viewMode === "table" ? (
               <DataTable
                 columns={tableColumns}
-                data={results}
+                data={sortedResults}
                 onRowClick={navigateToItem}
-                keyExtractor={(item) => item.id}
-                defaultSortId="title"
-                defaultSortOrder="asc"
+                keyExtractor={resultKey}
+                defaultSortId={sortBy}
+                defaultSortOrder={sortOrder}
+                onSortChange={handleTableSort}
                 resizeStorageKey="query-results-col-widths"
                 pinning={QUERY_TABLE_PINNING}
-                renderHoverContent={(item) => (
-                  <MediaHoverPopover
-                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
-                    data={{
-                      title: resultTitle(item),
-                      year: item.year,
-                      summary: item.summary,
-                      contentRating: item.contentRating,
-                      rating: item.rating,
-                      audienceRating: item.audienceRating,
-                      ratingImage: item.ratingImage,
-                      audienceRatingImage: item.audienceRatingImage,
-                      duration: item.matchedEpisodes != null ? undefined : item.duration,
-                      resolution: item.matchedEpisodes != null ? undefined : item.resolution,
-                      dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
-                      audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
-                      seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
-                      episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
-                      fileSize: item.fileSize,
-                      genres: item.genres,
-                      studio: item.studio,
-                      playCount: item.playCount,
-                      lastPlayedAt: item.lastPlayedAt,
-                      addedAt: item.addedAt,
-                      servers: item.servers,
-                    }}
-                  />
-                )}
+                renderHoverContent={queryResultTableHover}
               />
             ) : (
-              <div ref={gridContainerRef}>
-                <div
-                  style={{
-                    height: gridVirtualizer.getTotalSize(),
-                    width: "100%",
-                    position: "relative",
-                  }}
-                >
-                  {virtualRows.map((virtualRow) => {
-                    const rowStart = virtualRow.index * cardColumns;
-                    const rowItems = results.slice(rowStart, rowStart + cardColumns);
-                    return (
-                      <div
-                        key={virtualRow.key}
-                        data-index={virtualRow.index}
-                        ref={gridVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          paddingBottom: GAP,
-                          transform: `translateY(${virtualRow.start - gridVirtualizer.options.scrollMargin}px)`,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "grid",
-                            gap: `${GAP}px`,
-                            gridTemplateColumns: `repeat(${cardColumns}, minmax(0, 1fr))`,
-                          }}
-                        >
-                          {rowItems.map((item) => (
-                            <div
-                              key={item.id}
-                              className={cn(
-                                "relative rounded-lg",
-                                selectedIds.has(item.id) && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-                              )}
-                            >
-                              <div
-                                className="absolute left-2 top-2 z-10 flex rounded bg-background/80 p-0.5 backdrop-blur"
-                                onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
-                              >
-                                <Checkbox
-                                  checked={selectedIds.has(item.id)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onCheckedChange={() => toggleSelect(item.id)}
-                                  aria-label={`Select ${resultTitle(item)}`}
-                                />
-                              </div>
-                            <MediaCard
-                              priority={virtualRow.index < PRIORITY_ROWS}
-                              imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
-                              title={resultTitle(item)}
-                              fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
-                              onClick={() => navigateToItem(item)}
-                              servers={servers.length > 1 ? item.servers : undefined}
-                              metadata={
-                                <MetadataLine stacked>
-                                  {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
-                                  {item.matchedEpisodes != null && (
-                                    <MetadataItem icon={<Layers />}>
-                                      {item.seasonCount}S / {item.matchedEpisodes}E
-                                    </MetadataItem>
-                                  )}
-                                  {item.matchedEpisodes == null && formatDuration(item.duration) && (
-                                    <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>
-                                  )}
-                                  {formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
-                                </MetadataLine>
-                              }
-                              badges={
-                                <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
-                                  {mediaTypeLabel(item.type)}
-                                </ColorChip>
-                              }
-                              qualityBar={
-                                item.matchedEpisodes == null
-                                  ? [
-                                      ...(item.resolution ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }] : []),
-                                      ...(item.dynamicRange && item.dynamicRange !== "SDR" ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }] : []),
-                                      ...(item.audioProfile ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }] : []),
-                                    ]
-                                  : undefined
-                              }
-                              hoverContent={
-                                <MediaHoverPopover
-                                  data={{
-                                    title: resultTitle(item),
-                                    year: item.year,
-                                    summary: item.summary,
-                                    contentRating: item.contentRating,
-                                    rating: item.rating,
-                                    audienceRating: item.audienceRating,
-                                    ratingImage: item.ratingImage,
-                                    audienceRatingImage: item.audienceRatingImage,
-                                    duration: item.matchedEpisodes != null ? undefined : item.duration,
-                                    resolution: item.matchedEpisodes != null ? undefined : item.resolution,
-                                    dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
-                                    audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
-                                    seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
-                                    episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
-                                    fileSize: item.fileSize,
-                                    genres: item.genres,
-                                    studio: item.studio,
-                                    playCount: item.playCount,
-                                    lastPlayedAt: item.lastPlayedAt,
-                                    addedAt: item.addedAt,
-                                    servers: item.servers,
-                                  }}
-                                />
-                              }
-                            />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <VirtualCardGrid grid={grid} items={sortedResults} getKey={resultKey} renderItem={renderResultCard} />
             )
           ) : !loading ? (
             <EmptyState
@@ -2049,16 +1996,7 @@ export default function QueryPage() {
       )}
       </div>
 
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem as unknown as MediaItemWithRelations}
-          mediaType={(selectedItem.type as "MOVIE" | "SERIES" | "MUSIC") || "MOVIE"}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          detailUrl={getItemDetailUrl(selectedItem)}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       <ConvertQueryToRuleDialog
         open={convertDialogOpen}
@@ -2072,7 +2010,7 @@ export default function QueryPage() {
           includeEpisodes,
           ...(Object.values(arrServerIds).some(Boolean) && { arrServerIds }),
         }}
-        availableServerIds={servers.map((s) => s.id)}
+        availableServerIds={queryServers.map((s) => s.id)}
         defaultName={activeQuery?.name}
       />
     </>

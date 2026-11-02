@@ -20,16 +20,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   CheckCircle,
   DatabaseBackup,
@@ -51,11 +42,11 @@ import {
   CHIP_CATEGORY_ORDER,
   getChipBadgeStyle,
 } from "@/lib/theme/chip-colors";
-import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry } from "../types";
+import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry, RealtimeServerStatus } from "../types";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 
-export interface GeneralTabProps {
+interface GeneralTabProps {
   // Accent color
   accentColor: string;
   onSaveAccentColor: (name: string) => void;
@@ -74,6 +65,7 @@ export interface GeneralTabProps {
   realtimeSync: boolean;
   savingRealtime: boolean;
   onSaveRealtimeSetting: (checked: boolean) => void;
+  realtimeServers: RealtimeServerStatus[];
 
   // Log retention
   logRetentionDays: number;
@@ -138,6 +130,7 @@ export function GeneralTab({
   realtimeSync,
   savingRealtime,
   onSaveRealtimeSetting,
+  realtimeServers,
   logRetentionDays,
   logRetentionInput,
   savingLogRetention,
@@ -313,6 +306,9 @@ export function GeneralTab({
               disabled={savingRealtime}
             />
           </div>
+          {realtimeSync && realtimeServers.length > 0 && (
+            <RealtimeConnectionList servers={realtimeServers} />
+          )}
 
           {servers.length > 1 && (
             <>
@@ -432,7 +428,7 @@ export function GeneralTab({
                 </Button>
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Completed and failed actions older than this will be automatically deleted. Set to 0 to keep forever.
+                Completed and failed actions that ran more than this long ago are automatically deleted. Set to 0 to keep forever.
               </p>
             </div>
             <div>
@@ -680,7 +676,7 @@ export function GeneralTab({
       </SettingsSection>
 
       {/* Restore confirmation — destructive: wipes all data and logs out. */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!confirmRestore}
         onOpenChange={(open) => {
           if (!open) {
@@ -688,15 +684,22 @@ export function GeneralTab({
             setRestorePassphraseInput("");
           }
         }}
+        title="Restore backup?"
+        description={
+          <>
+            Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and log you out. This
+            cannot be undone.
+          </>
+        }
+        confirmLabel="Restore"
+        confirmIcon={RotateCcw}
+        destructive
+        confirmDisabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
+        onConfirm={() => {
+          if (!confirmRestore) return;
+          onRestoreBackup(confirmRestore.filename, confirmRestore.encrypted ? restorePassphraseInput : undefined);
+        }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Restore backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and
-              log you out. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
           {confirmRestore?.encrypted && (
             <div className="space-y-1.5">
               <Label htmlFor="restore-passphrase">Passphrase</Label>
@@ -713,55 +716,61 @@ export function GeneralTab({
               </p>
             </div>
           )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
-              onClick={() => {
-                if (!confirmRestore) return;
-                onRestoreBackup(
-                  confirmRestore.filename,
-                  confirmRestore.encrypted ? restorePassphraseInput : undefined,
-                );
-                setConfirmRestore(null);
-                setRestorePassphraseInput("");
-              }}
-            >
-              <RotateCcw className="mr-2 h-4 w-4" />
-              Restore
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      </ConfirmDialog>
 
       {/* Delete backup confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!confirmDelete}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              &quot;{confirmDelete}&quot; will be permanently deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (confirmDelete) onDeleteBackup(confirmDelete);
-                setConfirmDelete(null);
-              }}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Delete backup?"
+        description={<>&quot;{confirmDelete}&quot; will be permanently deleted.</>}
+        confirmLabel="Delete"
+        confirmIcon={Trash2}
+        destructive
+        onConfirm={() => {
+          if (confirmDelete) onDeleteBackup(confirmDelete);
+        }}
+      />
+    </div>
+  );
+}
+
+const REALTIME_STATUS_DISPLAY: Record<RealtimeServerStatus["status"], { label: string; dot: string }> = {
+  connected: { label: "Connected", dot: "bg-emerald-500" },
+  connecting: { label: "Connecting…", dot: "bg-amber-500" },
+  disconnected: { label: "Not connected", dot: "bg-red-500" },
+};
+
+/**
+ * One line per enabled server under the real-time toggle. A proxy that drops
+ * the WebSocket upgrade stops real-time updates while every sync still works,
+ * so this is the only place that failure shows.
+ */
+function RealtimeConnectionList({ servers }: { servers: RealtimeServerStatus[] }) {
+  const dupeNames = useMemo(() => getDuplicateServerNames(servers), [servers]);
+  const anyDown = servers.some((s) => s.status === "disconnected");
+  return (
+    <div className="space-y-2" data-testid="realtime-connection-status">
+      <ul className="space-y-1.5" aria-label="Real-time connection per server">
+        {servers.map((server) => {
+          const display = REALTIME_STATUS_DISPLAY[server.status];
+          return (
+            <li key={server.serverId} className="flex min-w-0 items-center gap-2 text-sm">
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", display.dot)} aria-hidden="true" />
+              <span className="min-w-0 truncate">{server.name}</span>
+              {dupeNames.has(server.name) && <ServerTypeChip type={server.type} />}
+              <span className="ml-auto shrink-0 text-muted-foreground">{display.label}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {anyDown && (
+        <p className="text-xs text-muted-foreground">
+          Librariarr keeps retrying, and scheduled syncs still run. If the server is up, check that any
+          reverse proxy in front of it forwards WebSocket upgrades (the <code>Upgrade</code> and{" "}
+          <code>Connection</code> headers).
+        </p>
+      )}
     </div>
   );
 }

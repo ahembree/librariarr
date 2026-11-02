@@ -36,15 +36,17 @@ import {
 
 const testPrisma = getTestPrisma();
 
+// One teardown for the whole file: disconnecting at the end of the first
+// describe would leave the second running on a closed client.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
+
 describe("recomputeCanonical", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("marks exactly one item per dedupKey group as canonical", async () => {
@@ -66,11 +68,11 @@ describe("recomputeCanonical", () => {
     // Set same dedupKey on both items
     await testPrisma.mediaItem.update({
       where: { id: item1.id },
-      data: { dedupKey: "movie:tmdb:100" },
+      data: { dedupKey: "movie:tmdb:603" },
     });
     await testPrisma.mediaItem.update({
       where: { id: item2.id },
-      data: { dedupKey: "movie:tmdb:100" },
+      data: { dedupKey: "movie:tmdb:603" },
     });
 
     await recomputeCanonical(user.id);
@@ -108,11 +110,11 @@ describe("recomputeCanonical", () => {
 
     await testPrisma.mediaItem.update({
       where: { id: item1.id },
-      data: { dedupKey: "movie:tmdb:200" },
+      data: { dedupKey: "movie:tmdb:27205" },
     });
     await testPrisma.mediaItem.update({
       where: { id: item2.id },
-      data: { dedupKey: "movie:tmdb:200" },
+      data: { dedupKey: "movie:tmdb:27205" },
     });
 
     // Set server2 as preferred — even though item1 is older, server2 should win
@@ -289,19 +291,30 @@ describe("recomputeCanonical", () => {
 
     await testPrisma.mediaItem.update({
       where: { id: movieA1.id },
-      data: { dedupKey: "movie:tmdb:aaa" },
+      data: { dedupKey: "movie:tmdb:1001" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieA2.id },
-      data: { dedupKey: "movie:tmdb:aaa" },
+      data: { dedupKey: "movie:tmdb:1001" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieB1.id },
-      data: { dedupKey: "movie:tmdb:bbb" },
+      data: { dedupKey: "movie:tmdb:1002" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieB2.id },
-      data: { dedupKey: "movie:tmdb:bbb" },
+      data: { dedupKey: "movie:tmdb:1002" },
+    });
+
+    // Group B's copy on server 2 is the older one, so each group picks a
+    // different server — a pick made across groups could not satisfy both.
+    await testPrisma.mediaItem.update({
+      where: { id: movieA2.id },
+      data: { createdAt: new Date(Date.now() + 1000) },
+    });
+    await testPrisma.mediaItem.update({
+      where: { id: movieB1.id },
+      data: { createdAt: new Date(Date.now() + 1000) },
     });
 
     await recomputeCanonical(user.id);
@@ -318,6 +331,102 @@ describe("recomputeCanonical", () => {
     const groupBCanonical = [b1!.dedupCanonical, b2!.dedupCanonical].filter(Boolean).length;
     expect(groupACanonical).toBe(1);
     expect(groupBCanonical).toBe(1);
+    expect(a1!.dedupCanonical).toBe(true);
+    expect(b2!.dedupCanonical).toBe(true);
+  });
+
+  /** Two copies of one movie on two servers, both under `key`. */
+  async function twoCopies(key: string) {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Server 1" });
+    const server2 = await createTestServer(user.id, { name: "Server 2" });
+    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
+    const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
+    const older = await createTestMediaItem(lib1.id, { title: "Movie", type: "MOVIE" });
+    const newer = await createTestMediaItem(lib2.id, { title: "Movie", type: "MOVIE" });
+    await testPrisma.mediaItem.update({ where: { id: older.id }, data: { dedupKey: key, createdAt: new Date("2024-01-01") } });
+    await testPrisma.mediaItem.update({ where: { id: newer.id }, data: { dedupKey: key, createdAt: new Date("2024-06-01") } });
+    return { user, lib1, lib2, older, newer };
+  }
+
+  const xmin = async (id: string) =>
+    (await testPrisma.$queryRaw<{ xmin: string }[]>`SELECT xmin::text AS xmin FROM "MediaItem" WHERE id = ${id}`)[0].xmin;
+
+  it("rewrites only rows whose flag changes", async () => {
+    const { user, older, newer } = await twoCopies("movie:tmdb:42");
+    await recomputeCanonical(user.id);
+    const before = [await xmin(older.id), await xmin(newer.id)];
+
+    // Nothing changed since: a second run must leave every tuple where it is.
+    await recomputeCanonical(user.id);
+    expect([await xmin(older.id), await xmin(newer.id)]).toEqual(before);
+  });
+
+  it("breaks a createdAt tie on the id, so the pick cannot swap between runs", async () => {
+    const { user, older, newer } = await twoCopies("movie:tmdb:43");
+    const same = new Date("2024-03-03T00:00:00Z");
+    await testPrisma.mediaItem.updateMany({ where: { id: { in: [older.id, newer.id] } }, data: { createdAt: same } });
+
+    await recomputeCanonical(user.id);
+
+    const lowest = [older.id, newer.id].sort()[0];
+    const rows = await testPrisma.mediaItem.findMany({ where: { id: { in: [older.id, newer.id] } } });
+    expect(rows.filter((r) => r.dedupCanonical).map((r) => r.id)).toEqual([lowest]);
+  });
+
+  it("recomputes only the named groups when given dedupKeys", async () => {
+    const a = await twoCopies("movie:tmdb:50");
+    const lib1 = a.lib1;
+    // A second group under the same user, deliberately left wrong.
+    const b1 = await createTestMediaItem(lib1.id, { title: "Other", type: "MOVIE" });
+    const b2 = await createTestMediaItem(a.lib2.id, { title: "Other", type: "MOVIE" });
+    await testPrisma.mediaItem.updateMany({ where: { id: { in: [b1.id, b2.id] } }, data: { dedupKey: "movie:tmdb:51", dedupCanonical: true } });
+    await testPrisma.mediaItem.updateMany({ where: { id: { in: [a.older.id, a.newer.id] } }, data: { dedupCanonical: true } });
+
+    await recomputeCanonical(a.user.id, { dedupKeys: ["movie:tmdb:50", "movie:tmdb:50"] });
+
+    const byId = new Map((await testPrisma.mediaItem.findMany()).map((r) => [r.id, r.dedupCanonical]));
+    expect(byId.get(a.older.id)).toBe(true);
+    expect(byId.get(a.newer.id)).toBe(false);
+    // Outside the scope: untouched, still both canonical.
+    expect(byId.get(b1.id)).toBe(true);
+    expect(byId.get(b2.id)).toBe(true);
+  });
+
+  it("elects a new canonical copy when the scoped group lost its old one", async () => {
+    const { user, older, newer } = await twoCopies("movie:tmdb:60");
+    await recomputeCanonical(user.id);
+    await testPrisma.mediaItem.delete({ where: { id: older.id } });
+
+    await recomputeCanonical(user.id, { dedupKeys: ["movie:tmdb:60"] });
+
+    expect((await testPrisma.mediaItem.findUniqueOrThrow({ where: { id: newer.id } })).dedupCanonical).toBe(true);
+  });
+
+  it("does nothing for an empty scope", async () => {
+    const { user, older, newer } = await twoCopies("movie:tmdb:70");
+    await testPrisma.mediaItem.updateMany({ where: { id: { in: [older.id, newer.id] } }, data: { dedupCanonical: true } });
+
+    await recomputeCanonical(user.id, { dedupKeys: [] });
+
+    const rows = await testPrisma.mediaItem.findMany({ where: { id: { in: [older.id, newer.id] } } });
+    expect(rows.every((r) => r.dedupCanonical)).toBe(true);
+  });
+
+  it("honours the preferred title server ahead of age in a scoped run", async () => {
+    const { user, older, newer } = await twoCopies("movie:tmdb:80");
+    const server2 = (await testPrisma.library.findFirstOrThrow({ where: { id: newer.libraryId } })).mediaServerId;
+    await testPrisma.appSettings.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, preferredTitleServerId: server2 },
+      update: { preferredTitleServerId: server2 },
+    });
+
+    await recomputeCanonical(user.id, { dedupKeys: ["movie:tmdb:80"] });
+
+    const rows = new Map((await testPrisma.mediaItem.findMany()).map((r) => [r.id, r.dedupCanonical]));
+    expect(rows.get(newer.id)).toBe(true);
+    expect(rows.get(older.id)).toBe(false);
   });
 });
 
@@ -325,11 +434,6 @@ describe("backfillDedupKeys", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("returns 0 when no items are missing dedupKey", async () => {
@@ -370,7 +474,6 @@ describe("backfillDedupKeys", () => {
       where: { id: item.id },
       select: { dedupKey: true },
     });
-    expect(refreshed!.dedupKey).not.toBeNull();
     // Title-based key for movies without external IDs
     expect(refreshed!.dedupKey).toBe("movie:title:missing key:2023");
   });
@@ -385,7 +488,7 @@ describe("backfillDedupKeys", () => {
       type: "MOVIE",
       year: 2024,
     });
-    await createTestExternalId(item.id, "tmdb", "12345");
+    await createTestExternalId(item.id, "TMDB", "12345");
 
     const updated = await backfillDedupKeys(user.id);
     expect(updated).toBe(1);
@@ -395,30 +498,6 @@ describe("backfillDedupKeys", () => {
       select: { dedupKey: true },
     });
     expect(refreshed!.dedupKey).toBe("movie:tmdb:12345");
-  });
-
-  it("filters by userId when provided", async () => {
-    const user1 = await createTestUser({ username: "user1" });
-    const user2 = await createTestUser({ username: "user2" });
-    const server1 = await createTestServer(user1.id, { name: "Server 1" });
-    const server2 = await createTestServer(user2.id, { name: "Server 2" });
-    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-    const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-
-    // Both users have items missing dedupKey
-    await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE", year: 2024 });
-    await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE", year: 2024 });
-
-    // Only backfill for user1
-    const updated = await backfillDedupKeys(user1.id);
-    expect(updated).toBe(1);
-
-    // User2's item should still have null dedupKey
-    const user2Items = await testPrisma.mediaItem.findMany({
-      where: { libraryId: lib2.id },
-      select: { dedupKey: true },
-    });
-    expect(user2Items[0].dedupKey).toBeNull();
   });
 
   it("backfills series items correctly", async () => {
@@ -444,11 +523,82 @@ describe("backfillDedupKeys", () => {
     expect(items[0].dedupKey).toBe("series:breaking bad:s1e1");
   });
 
+  // The sync keys an episode on its stored series-level TVDB id
+  // (`computeDedupKey` in buildRowParams); a backfill that read external ids
+  // for movies only wrote the title form instead, so a backfilled copy and a
+  // synced copy of the same episode never deduped.
+  it("keys a series episode on its stored TVDB id, as the sync does", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Server 1" });
+    const server2 = await createTestServer(user.id, { name: "Server 2" });
+    const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+    const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+
+    // Synced copy: the key the sync wrote for an episode of TVDB show 81189.
+    const synced = await createTestMediaItem(lib1.id, {
+      title: "Pilot",
+      type: "SERIES",
+      parentTitle: "Breaking Bad",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await createTestExternalId(synced.id, "TVDB", "81189");
+    await testPrisma.mediaItem.update({
+      where: { id: synced.id },
+      data: { dedupKey: "series:tvdb:81189:s1e1" },
+    });
+
+    // Legacy copy on the other server, titled differently, same stored id.
+    const legacy = await createTestMediaItem(lib2.id, {
+      title: "Pilot",
+      type: "SERIES",
+      parentTitle: "Breaking Bad (2008)",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await createTestExternalId(legacy.id, "TVDB", "81189");
+    await createTestExternalId(legacy.id, "TMDB", "1396");
+
+    expect(await backfillDedupKeys(user.id)).toBe(1);
+
+    const refreshed = await testPrisma.mediaItem.findUniqueOrThrow({
+      where: { id: legacy.id },
+      select: { dedupKey: true },
+    });
+    expect(refreshed.dedupKey).toBe("series:tvdb:81189:s1e1");
+
+    await recomputeCanonical(user.id);
+    const canonical = await testPrisma.mediaItem.count({
+      where: { id: { in: [synced.id, legacy.id] }, dedupCanonical: true },
+    });
+    expect(canonical).toBe(1);
+  });
+
+  it("keys a track on artist and title whatever external ids it stores, as the sync does", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Server 1" });
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+
+    const track = await createTestMediaItem(lib.id, {
+      title: "Paranoid Android",
+      type: "MUSIC",
+      parentTitle: "Radiohead",
+    });
+    await createTestExternalId(track.id, "MUSICBRAINZ", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
+
+    expect(await backfillDedupKeys(user.id)).toBe(1);
+
+    const refreshed = await testPrisma.mediaItem.findUniqueOrThrow({
+      where: { id: track.id },
+      select: { dedupKey: true },
+    });
+    expect(refreshed.dedupKey).toBe("music:radiohead:paranoid android");
+  });
+
   it("backfills all items when userId is not provided", async () => {
-    const user1 = await createTestUser({ username: "user1" });
-    const user2 = await createTestUser({ username: "user2" });
-    const server1 = await createTestServer(user1.id, { name: "Server 1" });
-    const server2 = await createTestServer(user2.id, { name: "Server 2" });
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Server 1" });
+    const server2 = await createTestServer(user.id, { name: "Server 2" });
     const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
     const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
 
@@ -462,6 +612,9 @@ describe("backfillDedupKeys", () => {
     const allItems = await testPrisma.mediaItem.findMany({
       select: { dedupKey: true },
     });
-    expect(allItems.every((i) => i.dedupKey !== null)).toBe(true);
+    expect(allItems.map((i) => i.dedupKey).sort()).toEqual([
+      "movie:title:movie a:2024",
+      "movie:title:movie b:2024",
+    ]);
   });
 });

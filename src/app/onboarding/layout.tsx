@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
-import { isSessionValid } from "@/lib/auth/session";
+import { getRequestSession } from "@/lib/settings/shell-settings";
 
 export default async function OnboardingLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const valid = await isSessionValid();
-  if (!valid) redirect("/login");
+  // The same per-request read the root layout made for the accent.
+  const session = await getRequestSession();
+  if (!session.isLoggedIn || !session.userId) redirect("/login");
   return <>{children}</>;
 }

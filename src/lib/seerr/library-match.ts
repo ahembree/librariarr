@@ -7,7 +7,7 @@ export interface SeerrShowRef {
   tmdbId: number | null | undefined;
 }
 
-export interface LocalShow {
+interface LocalShow {
   /** `MediaItem.seriesKey` of the matched episodes — one entry per show. */
   seriesKey: string;
   title: string | null;
@@ -16,7 +16,7 @@ export interface LocalShow {
   episodes: { id: string; dedupKey: string | null }[];
 }
 
-export interface LocalShowIndex {
+interface LocalShowIndex {
   shows: Map<string, LocalShow>;
   /** Resolve a Seerr TV request to a library show — TVDB first, then TMDB. */
   resolve(ref: SeerrShowRef): LocalShow | undefined;

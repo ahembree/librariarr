@@ -1,6 +1,7 @@
 import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { eventBus } from "@/lib/events/event-bus";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
@@ -57,16 +58,64 @@ export async function cleanupOldActions(): Promise<void> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - retentionDays);
 
+  // Aged by when the action RAN, not when it was scheduled. The executor
+  // completes an action by updating its PENDING row, so `createdAt` is the
+  // detection run that scheduled it — `actionDelayDays` (up to 365) earlier.
+  // Keyed on it, every action of a rule set whose delay is at least the
+  // retention ("delete 30 days after it matches" against the default 30) was
+  // purged within 15 minutes of running: its history row, the failure the
+  // user should see and retry, the bytes the deletion stats count, and the
+  // completed row that stops a non-destructive action re-firing. Only a row
+  // that never recorded a run time falls back to `createdAt`.
   const deleted = await prisma.lifecycleAction.deleteMany({
     where: {
       status: { not: "PENDING" },
-      createdAt: { lt: cutoff },
+      OR: [
+        { executedAt: { lt: cutoff } },
+        { executedAt: null, createdAt: { lt: cutoff } },
+      ],
     },
   });
 
   if (deleted.count > 0) {
     logger.info("Jobs", `Action cleanup: removed ${deleted.count} entries older than ${retentionDays} days`);
   }
+}
+
+/** Sync jobs always kept per server, however old: the recent history every status surface reads. */
+export const SYNC_JOB_KEEP_PER_SERVER = 50;
+/** Sync jobs younger than this are kept whatever their number. */
+export const SYNC_JOB_RETENTION_DAYS = 30;
+
+/**
+ * Drop finished sync jobs that are both old and beyond each server's newest
+ * `SYNC_JOB_KEEP_PER_SERVER`. Nothing pruned them, so every reader of the
+ * table — `/api/sync/status` sorts the recent finished jobs, the server list
+ * reads each server's newest — worked over a history that only ever grew
+ * (a sync per server per scheduled run, plus one per library change that
+ * fell back, plus every manual one). A PENDING or RUNNING row is never
+ * touched: it is a sync someone is waiting on.
+ */
+export async function pruneSyncJobs(now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - SYNC_JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const removed = await prisma.$executeRawUnsafe(
+    `DELETE FROM "SyncJob" s
+      USING (
+        SELECT "id", "startedAt", "status",
+               ROW_NUMBER() OVER (PARTITION BY "mediaServerId" ORDER BY "startedAt" DESC, "id" DESC) AS "rank"
+          FROM "SyncJob"
+      ) ranked
+      WHERE s."id" = ranked."id"
+        AND ranked."rank" > $1
+        AND ranked."startedAt" < $2
+        AND ranked."status"::text NOT IN ('PENDING', 'RUNNING')`,
+    SYNC_JOB_KEEP_PER_SERVER,
+    cutoff,
+  );
+  if (removed > 0) {
+    logger.info("Jobs", `Sync job cleanup: removed ${removed} finished job(s) older than ${SYNC_JOB_RETENTION_DAYS} days`);
+  }
+  return removed;
 }
 
 /** Create a database backup and prune old ones to the configured retention count. */
@@ -107,6 +156,21 @@ const syncServer: Task = async (payload) => {
       "Jobs",
       `Skipping sync for server ${serverId} (${trigger ?? "trigger not recorded"}) — already running`,
     );
+    // A row the sync route created for this job would otherwise stay PENDING
+    // with nothing left to claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued.
+    if (syncJobId) {
+      const closed = await prisma.syncJob.updateMany({
+        where: { id: syncJobId, status: "PENDING" },
+        data: { status: "FAILED", completedAt: new Date(), error: "Another sync of this server was already running" },
+      });
+      // The pages showing the queued row poll only while pushes are not
+      // arriving, so its end has to be announced like any other sync's.
+      if (closed.count > 0) {
+        const server = await prisma.mediaServer.findUnique({ where: { id: serverId }, select: { userId: true } });
+        if (server) eventBus.emit({ type: "sync:failed", userId: server.userId, meta: { serverId } });
+      }
+    }
     return;
   }
 
@@ -233,7 +297,10 @@ const tracearrBackfill: Task = async (payload) => {
   // anyway, so there is nothing to lose by simply logging it.
   if (!result.backfillPending) {
     try {
-      await recoverHistoryForNewItems(serverId);
+      // The slice that just finished the walk built a join index; reuse it
+      // rather than load every item on the server a second time.
+      if (result.joinIndex) await recoverHistoryForNewItems(serverId, { joinIndex: result.joinIndex });
+      else await recoverHistoryForNewItems(serverId);
     } catch (error) {
       logger.warn(
         "Jobs",
@@ -350,6 +417,13 @@ const archiveLogsTask: Task = async () => {
 
 const cleanupActionsTask: Task = async () => {
   await cleanupOldActions();
+  // Housekeeping of its own: a failure here must not fail (and retry) the
+  // action cleanup above, which already ran.
+  try {
+    await pruneSyncJobs();
+  } catch (error) {
+    logger.warn("Jobs", "Sync job cleanup failed", { error: String(error) });
+  }
 };
 
 const pruneImageCacheTask: Task = async () => {

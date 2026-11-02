@@ -30,7 +30,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "isWatchlisted", label: "Is Watchlisted", type: "boolean", section: "activity", knownValues: ["true", "false"] },
   { value: "lastPlayedAt", label: "Last Played", type: "date", section: "activity", readsPlayActivity: true },
   { value: "addedAt", label: "Date Added", type: "date", section: "activity" },
-  { value: "originallyAvailableAt", label: "Release Date", type: "date", section: "activity" },
+  { value: "originallyAvailableAt", label: "Release Date", type: "date", section: "activity", dateOnly: true },
 
   // ─── Video ──────────────────────────────────────────────────────────────
   { value: "resolution", label: "Resolution", type: "text", section: "video", enumerable: true },
@@ -90,9 +90,9 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "arrRuntime", label: "Runtime (min)", type: "number", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
   { value: "arrSizeOnDisk", label: "Size on Disk (MB)", type: "number", section: "arrMedia", requiresArr: true },
   { value: "arrPath", label: "Path", type: "text", section: "arrMedia", requiresArr: true },
-  { value: "arrReleaseDate", label: "Release Date", type: "date", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
-  { value: "arrInCinemasDate", label: "In Cinemas Date", type: "date", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
-  { value: "arrFirstAired", label: "First Aired", type: "date", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "arrReleaseDate", label: "Release Date", type: "date", section: "arrMedia", dateOnly: true, requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
+  { value: "arrInCinemasDate", label: "In Cinemas Date", type: "date", section: "arrMedia", dateOnly: true, requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
+  { value: "arrFirstAired", label: "First Aired", type: "date", section: "arrMedia", dateOnly: true, requiresArr: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "arrDateAdded", label: "Date Added", type: "date", section: "arrMedia", requiresArr: true },
   { value: "arrDownloadDate", label: "Download Date", type: "date", section: "arrMedia", requiresArr: true, invalidForLibraryType: ["SERIES", "MUSIC"] },
 
@@ -123,8 +123,16 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "watchedEpisodeCount", label: "Watched Episode Count", type: "number", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "watchedEpisodePercentage", label: "Watched Episode %", type: "number", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "lastEpisodeAddedAt", label: "Last Episode Added", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
-  { value: "lastEpisodeAiredAt", label: "Last Episode Aired", type: "date", section: "series", isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "lastEpisodeAiredAt", label: "Last Episode Aired", type: "date", section: "series", dateOnly: true, isSeriesAggregate: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
 ];
+
+/**
+ * Date fields whose value is a calendar day stored as UTC midnight (the
+ * `dateOnly` flag): displayed in UTC wherever they are formatted.
+ */
+export const DATE_ONLY_FIELDS: ReadonlySet<string> = new Set(
+  CONDITION_FIELDS.filter((f) => f.dateOnly).map((f) => f.value),
+);
 
 /** Lookup a field by value. */
 export function getConditionField(value: string): ConditionField | undefined {

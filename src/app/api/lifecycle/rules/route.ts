@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { validateRequest, ruleSetCreateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
+import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const ruleSets = await prisma.ruleSet.findMany({
     where: { userId: session.userId },
     orderBy: { createdAt: "desc" },
@@ -30,14 +26,9 @@ export async function GET() {
   });
 
   return NextResponse.json({ ruleSets });
-}
+});
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleSetCreateSchema);
   if (error) return error;
 
@@ -96,7 +87,7 @@ export async function POST(request: NextRequest) {
   // Action config must target the right Arr family for this library type,
   // and any referenced instance must exist and belong to the user.
   const actionConfigError = await validateActionConfig({
-    userId: session.userId!,
+    userId: session.userId,
     libraryType: type,
     actionType,
     arrInstanceId,
@@ -125,7 +116,7 @@ export async function POST(request: NextRequest) {
 
   const ruleSet = await prisma.ruleSet.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name,
       type,
       rules: rules as unknown as Prisma.InputJsonValue,
@@ -147,6 +138,8 @@ export async function POST(request: NextRequest) {
       serverIds,
     },
   });
+  // "Matched By Rule Set" lists rule set names from the cached dropdowns.
+  invalidateRuleSetNameCaches();
 
   return NextResponse.json({ ruleSet }, { status: 201 });
-}
+});

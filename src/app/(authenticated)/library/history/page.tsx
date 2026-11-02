@@ -2,12 +2,15 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
+import { PageHeader } from "@/components/page-header";
 import { TableRowsSkeleton } from "@/components/skeletons";
 import { ColorChip } from "@/components/color-chip";
+import { Badge } from "@/components/ui/badge";
 import { ServerChips } from "@/components/server-chips";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,16 +40,19 @@ import { consumeProgressStream } from "@/lib/progress/client";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { PaginationControls } from "@/components/pagination-controls";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useChipColors } from "@/components/chip-color-provider";
-import { formatFileSize, formatDuration } from "@/lib/format";
+import { useStoredSet } from "@/hooks/use-stored-set";
+import { useSetState } from "@/hooks/use-set-state";
+import { QualityChip } from "@/components/quality-chips";
+import { formatFileSize, formatDuration, formatWatchedAt } from "@/lib/format";
+import { decisionChipClass, streamDecision } from "@/lib/media/stream-decision";
 import { formatEpisodeCode } from "@/lib/media/display-title";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { dynamicRangeChipLabel, qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
-import type { MediaItemWithRelations } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -128,11 +134,17 @@ const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   year: "year",
   resolution: "resolution",
   dynamicRange: "dynamicRange",
+  videoCodec: "videoCodec",
+  audioCodec: "audioCodec",
   duration: "duration",
   fileSize: "fileSize",
   deviceName: "deviceName",
   platform: "platform",
-  server: "serverUsername",
+  // Its own key: mapping it to `serverUsername` sorted by the User column and,
+  // through the reverse map below, moved User's sort arrow onto this column
+  // (so User could never be sorted descending). Every value here must be
+  // unique for that reverse map to name the column the user clicked.
+  server: "serverName",
   // Tracearr stream facts. `streamResolution` maps to its own API sort key
   // rather than reusing `resolution`, which sorts the FILE's resolution on the
   // MediaItem — the two disagree on any transcoded play.
@@ -142,44 +154,12 @@ const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   streamResolution: "streamResolution",
 };
 
-const VISIBLE_KEY = "history-visible-columns";
-
-function loadVisibleColumns(): Set<string> {
-  try {
-    const stored = localStorage.getItem(VISIBLE_KEY);
-    if (stored) return new Set(JSON.parse(stored));
-  } catch { /* use defaults */ }
-  return new Set<string>();
-}
-
-function saveVisibleColumns(cols: Set<string>) {
-  try {
-    localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
-  } catch { /* private mode / quota — ignore */ }
-}
-
-function formatResolution(res: string | null) {
-  if (!res) return "";
-  const label = normalizeResolutionLabel(res);
-  return label === "Other" ? res : label;
-}
-
 /**
- * Three-way stream decision, mirroring the Stream Manager's `getStreamDecision`
- * (`/tools/streams`) so the same play reads the same in both places: any
- * re-encode is a Transcode, a container-only "copy" is a Direct Stream, and
- * everything else is Direct Play. Tracearr's `is_transcode` already covers an
- * audio-only re-encode, which must not be shown with the greener Direct Stream
- * styling. Returns null for a NATIVE row, which records no decision at all.
+ * The visible columns, stored as a list; none stored (or an empty list) means
+ * the defaults. Read through `useStoredSet`, so a private window falls back
+ * to the defaults and the server render matches the first client one.
  */
-function getStreamDecision(item: WatchHistoryItem): { label: string; direct: boolean } | null {
-  if (item.isTranscode == null) return null;
-  if (item.isTranscode) return { label: "Transcode", direct: false };
-  if (item.videoDecision === "copy" || item.audioDecision === "copy") {
-    return { label: "Direct Stream", direct: true };
-  }
-  return { label: "Direct Play", direct: true };
-}
+const VISIBLE_KEY = "history-visible-columns";
 
 /**
  * Tooltip for the transcode chip: the per-track decisions behind the label plus
@@ -215,24 +195,6 @@ function getCompletionTitle(item: WatchHistoryItem): string | undefined {
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
-function formatWatchedAt(dateStr: string | null): string {
-  if (!dateStr) return "-";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const watchDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((today.getTime() - watchDay.getTime()) / 86400000);
-
-  if (diffDays === 0) {
-    return `Today ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  } else if (diffDays === 1) {
-    return `Yesterday ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  } else if (diffDays < 7) {
-    return `${diffDays}d ago`;
-  }
-  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-}
-
 function getItemTitle(item: WatchHistoryItem): string {
   const mi = item.mediaItem;
   if (mi.type === "SERIES" && mi.parentTitle) {
@@ -245,13 +207,19 @@ function getItemTitle(item: WatchHistoryItem): string {
   return mi.title;
 }
 
-function getItemDetailUrl(item: WatchHistoryItem): string {
-  switch (item.mediaItem.type) {
-    case "MOVIE": return `/library/movies/${item.mediaItem.id}`;
-    case "SERIES": return `/library/series/episode/${item.mediaItem.id}`;
-    case "MUSIC": return `/library/music/track/${item.mediaItem.id}`;
-    default: return `/library/movies/${item.mediaItem.id}`;
-  }
+const historyRowKey = (item: WatchHistoryItem) => item.id;
+
+/** The play's item, with the server the play happened on as its only server. */
+function historyHover(item: WatchHistoryItem) {
+  return (
+    <MediaHoverPopover
+      imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.parentTitle ? "?type=parent" : ""}`}
+      data={hoverDataFromListItem(
+        { ...item.mediaItem, servers: [{ serverId: item.server.id, serverName: item.server.name, serverType: item.server.type }] },
+        { title: getItemTitle(item) },
+      )}
+    />
+  );
 }
 
 // ── Column groups ────────────────────────────────────────────────
@@ -278,13 +246,7 @@ const COLUMN_GROUPS: Record<string, string> = {
 
 export default function HistoryPage() {
   const { servers } = useServers();
-  const { getBadgeStyle } = useChipColors();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "library-history-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Data
   const [items, setItems] = useState<WatchHistoryItem[]>([]);
@@ -316,10 +278,6 @@ export default function HistoryPage() {
   // the start of the archive hasn't been measured, so the note keeps its
   // original wording rather than claiming 0%.
   const [importBackfillPercent, setImportBackfillPercent] = useState<number | null>(null);
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [selectedDetailUrl, setSelectedDetailUrl] = useState<string>("");
-  const [, setLoadingDetail] = useState(false);
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -338,13 +296,13 @@ export default function HistoryPage() {
   // Debounced search value drives fetching so each keystroke doesn't fire a request.
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedServerId, setSelectedServerId] = useState<string>("all");
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [selectedUsernames, setSelectedUsernames] = useState<Set<string>>(new Set());
-  const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
-  const [selectedResolutions] = useState<Set<string>>(new Set());
+  const [selectedTypes, typeSelection] = useSetState<string>();
+  const [selectedUsernames, usernameSelection] = useSetState<string>();
+  const [selectedPlatforms, platformSelection] = useSetState<string>();
+  const [selectedResolutions] = useSetState<string>();
 
   // Column visibility
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => loadVisibleColumns());
+  const [visibleCols, visibleColActions] = useStoredSet(VISIBLE_KEY);
 
   // ── Column definitions ──────────────────────────────────────────
 
@@ -393,7 +351,7 @@ export default function HistoryPage() {
       defaultVisible: true,
       accessor: (item) => (
         <span className="text-muted-foreground" title={item.watchedAt ?? undefined}>
-          {formatWatchedAt(item.watchedAt)}
+          {formatWatchedAt(item.watchedAt, "-")}
         </span>
       ),
       sortValue: (item) => item.watchedAt ? new Date(item.watchedAt).getTime() : 0,
@@ -415,14 +373,8 @@ export default function HistoryPage() {
       group: "video",
       defaultVisible: true,
       accessor: (item) => {
-        const res = item.mediaItem.resolution;
-        if (!res) return "-";
-        const label = formatResolution(res);
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.mediaItem.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.mediaItem.resolution,
     },
@@ -433,13 +385,8 @@ export default function HistoryPage() {
       group: "video",
       defaultVisible: true,
       accessor: (item) => {
-        const dr = item.mediaItem.dynamicRange;
-        if (!dr) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
-            {dr}
-          </ColorChip>
-        );
+        const label = dynamicRangeChipLabel(item.mediaItem.dynamicRange);
+        return label ? <QualityChip chip={{ category: "dynamicRange", label }} /> : "-";
       },
       sortValue: (item) => item.mediaItem.dynamicRange,
     },
@@ -481,11 +428,9 @@ export default function HistoryPage() {
       defaultWidth: 130,
       group: "audio",
       defaultVisible: false,
-      className: "text-muted-foreground",
       accessor: (item) => {
-        const codec = item.mediaItem.audioCodec ?? "";
-        const ch = item.mediaItem.audioChannels;
-        return ch ? `${codec} ${ch}ch` : codec || "-";
+        const chip = qualityChips(item.mediaItem, "music", { channels: true })[0];
+        return chip ? <QualityChip chip={chip} /> : <span className="text-muted-foreground">-</span>;
       },
       sortValue: (item) => item.mediaItem.audioCodec,
     },
@@ -519,17 +464,12 @@ export default function HistoryPage() {
       group: "stream",
       defaultVisible: false,
       accessor: (item) => {
-        const decision = getStreamDecision(item);
+        // The Stream Manager's rule, so a play reads the same live and here:
+        // any re-encode — an audio-only one included — is a Transcode.
+        const decision = streamDecision(item);
         if (!decision) return "-";
         return (
-          <ColorChip
-            title={getStreamDecisionTitle(item)}
-            className={
-              decision.direct
-                ? "bg-green-dim text-green border-green/25"
-                : "bg-amber-dim text-amber border-amber/25"
-            }
-          >
+          <ColorChip title={getStreamDecisionTitle(item)} className={decisionChipClass(decision.kind)}>
             {decision.label}
           </ColorChip>
         );
@@ -575,14 +515,8 @@ export default function HistoryPage() {
       group: "stream",
       defaultVisible: false,
       accessor: (item) => {
-        const res = item.resolution;
-        if (!res) return "-";
-        const label = formatResolution(res);
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.resolution,
     },
@@ -597,7 +531,7 @@ export default function HistoryPage() {
       ),
       sortValue: (item) => item.server.name,
     },
-  ], [getBadgeStyle]);
+  ], []);
 
   // ── Column visibility ──────────────────────────────────────────
 
@@ -609,17 +543,14 @@ export default function HistoryPage() {
   }, [allColumns, visibleCols]);
 
   const toggleColumn = useCallback((colId: string) => {
-    setVisibleCols((prev) => {
-      const next = new Set(prev.size === 0
-        ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
-        : prev,
-      );
-      if (next.has(colId)) next.delete(colId);
-      else next.add(colId);
-      saveVisibleColumns(next);
-      return next;
-    });
-  }, [allColumns]);
+    const next = new Set(visibleCols.size === 0
+      ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
+      : visibleCols,
+    );
+    if (next.has(colId)) next.delete(colId);
+    else next.add(colId);
+    visibleColActions.replace(next);
+  }, [allColumns, visibleCols, visibleColActions]);
 
   const effectiveVisible = useMemo(() => {
     if (visibleCols.size === 0) {
@@ -639,9 +570,6 @@ export default function HistoryPage() {
   // Token guards against a stale slow response landing after a quick
   // filter/page flip and overwriting the current result set.
   const reqToken = useRef(0);
-  // Separate token for the detail panel so rapidly clicking two rows doesn't
-  // let the slower /api/media/:id response win and show the wrong item.
-  const detailReqToken = useRef(0);
 
   const fetchHistory = useCallback(async (fetchPage: number) => {
     const token = ++reqToken.current;
@@ -770,18 +698,6 @@ export default function HistoryPage() {
     void fetchImportBackfillPending();
   });
 
-  // The import is writing the very rows this page lists, so refresh them too.
-  // Previously only the notice above the table refreshed: a backfill could add
-  // tens of thousands of plays (27,046 in one observed session) while the table
-  // below it sat unchanged, which reads as "the import isn't working".
-  //
-  // `watch-history:updated` fires once per backfill slice — about every five
-  // minutes — rather than per page, so this cannot become a refetch storm.
-  useRealtime("watch-history:updated", () => {
-    void fetchImportBackfillPending();
-    void fetchHistory(page);
-  });
-
   // ── Sort handler (server-side) ─────────────────────────────────
 
   const handleSortChange = useCallback((colId: string, order: "asc" | "desc") => {
@@ -816,6 +732,29 @@ export default function HistoryPage() {
     syncAbortRef.current?.abort();
   }, []);
 
+  // The import is writing the very rows this page lists, so refresh them too.
+  // Previously only the notice above the table refreshed: a backfill could add
+  // tens of thousands of plays (27,046 in one observed session) while the table
+  // below it sat unchanged, which reads as "the import isn't working".
+  //
+  // `watch-history:updated` fires once per backfill slice — about every five
+  // minutes — rather than per page, so this cannot become a refetch storm.
+  //
+  // Not while this page's own Refresh runs: that sync emits the event once per
+  // server that gained plays, and `handleSync` re-reads the table and the
+  // import status itself when it ends (on success, failure or Stop alike), so
+  // each event was a second and third read of the same rows. An event from
+  // anything else meanwhile lands before that final read and is covered by it.
+  const eventDuringSyncRef = useRef(false);
+  useRealtime("watch-history:updated", () => {
+    if (syncAbortRef.current) {
+      eventDuringSyncRef.current = true;
+      return;
+    }
+    void fetchImportBackfillPending();
+    void fetchHistory(page);
+  });
+
   // This is the one sync a user waits on in the foreground, and a first Tracearr
   // import pulls a server's whole history (minutes, not seconds), so the route
   // streams NDJSON progress — one phase per server — instead of resolving as a
@@ -825,6 +764,7 @@ export default function HistoryPage() {
     setSyncing(true);
     const controller = new AbortController();
     syncAbortRef.current = controller;
+    eventDuringSyncRef.current = false;
     try {
       const body: Record<string, string> = {};
       if (selectedServerId !== "all") body.serverId = selectedServerId;
@@ -844,6 +784,9 @@ export default function HistoryPage() {
         toast.error("Sync failed", {
           description: data?.error ?? "The watch-history sync could not be started.",
         });
+        // The only exit that does not re-read the table: catch up on an event
+        // the handler above set aside while this request was in flight.
+        if (eventDuringSyncRef.current) void fetchHistory(page);
         return;
       }
 
@@ -917,57 +860,16 @@ export default function HistoryPage() {
     }
   };
 
-  // ── Multi-select toggle helpers ────────────────────────────────
-
-  const toggleType = (type: string) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
-  };
-
-  const toggleUsername = (username: string) => {
-    setSelectedUsernames((prev) => {
-      const next = new Set(prev);
-      if (next.has(username)) next.delete(username);
-      else next.add(username);
-      return next;
-    });
-  };
-
-  const togglePlatform = (platform: string) => {
-    setSelectedPlatforms((prev) => {
-      const next = new Set(prev);
-      if (next.has(platform)) next.delete(platform);
-      else next.add(platform);
-      return next;
-    });
-  };
-
   // ── Detail panel ──────────────────────────────────────────────
 
-  const openDetailPanel = useCallback(async (historyItem: WatchHistoryItem) => {
-    const token = ++detailReqToken.current;
-    const mediaType = historyItem.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
-    setSelectedDetailUrl(getItemDetailUrl(historyItem));
-    setLoadingDetail(true);
-    try {
-      const response = await fetch(`/api/media/${historyItem.mediaItem.id}`);
-      // Ignore a stale response superseded by a newer click.
-      if (token !== detailReqToken.current) return;
-      if (response.ok) {
-        const data = await response.json();
-        setSelectedItem(data.item ?? data);
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    } finally {
-      if (token === detailReqToken.current) setLoadingDetail(false);
-    }
-  }, []);
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((historyItem: WatchHistoryItem) => {
+    void openPanel({
+      id: historyItem.mediaItem.id,
+      mediaType: toDetailPanelMediaType(historyItem.mediaItem.type),
+      label: getItemTitle(historyItem),
+    });
+  }, [openPanel]);
 
   // Map current sortBy back to DataTable column ID for sort indicator
   const activeColumnSortId = useMemo(() => {
@@ -982,36 +884,23 @@ export default function HistoryPage() {
   return (
     <>
       <div className="p-4 sm:p-6 lg:p-8 overflow-x-clip">
-          {/* Header */}
-          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
-                {!loading && totalCount > 0 && (
-                  <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                    {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
-                  </span>
-                )}
-              </div>
-              <p className="text-muted-foreground mt-1">
-                Play events across your connected media servers — filter by user, platform, server, or media type.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSync}
-              disabled={syncing}
-              className="shrink-0"
-            >
-              {syncing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              {syncing ? "Syncing..." : "Refresh"}
-            </Button>
-          </div>
+          <PageHeader
+            className="mb-6"
+            title="Watch History"
+            meta={
+              !loading && totalCount > 0 && (
+                <Badge variant="secondary">
+                  {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
+                </Badge>
+              )
+            }
+            description="Play events across your connected media servers — filter by user, platform, server, or media type."
+            actions={
+              <LoadingButton variant="outline" size="sm" onClick={handleSync} loading={syncing} icon={RefreshCw} className="shrink-0">
+                {syncing ? "Syncing..." : "Refresh"}
+              </LoadingButton>
+            }
+          />
 
           {/* Streamed sync progress — one phase per server — with the Stop
               control that cancels it. Sits directly under the Refresh button
@@ -1113,7 +1002,7 @@ export default function HistoryPage() {
               {(["MOVIE", "SERIES", "MUSIC"] as const).map((t) => (
                 <button
                   key={t}
-                  onClick={() => toggleType(t)}
+                  onClick={() => typeSelection.toggle(t)}
                   className={cn(
                     "rounded-md px-3 h-full text-xs font-medium transition-colors",
                     selectedTypes.has(t)
@@ -1139,7 +1028,7 @@ export default function HistoryPage() {
                     <label key={u} className="flex items-center gap-2 px-2 py-1 cursor-pointer hover:bg-accent rounded text-sm">
                       <Checkbox
                         checked={selectedUsernames.has(u)}
-                        onCheckedChange={() => toggleUsername(u)}
+                        onCheckedChange={() => usernameSelection.toggle(u)}
                       />
                       {u}
                     </label>
@@ -1161,7 +1050,7 @@ export default function HistoryPage() {
                     <label key={p} className="flex items-center gap-2 px-2 py-1 cursor-pointer hover:bg-accent rounded text-sm">
                       <Checkbox
                         checked={selectedPlatforms.has(p)}
-                        onCheckedChange={() => togglePlatform(p)}
+                        onCheckedChange={() => platformSelection.toggle(p)}
                       />
                       {p}
                     </label>
@@ -1215,19 +1104,9 @@ export default function HistoryPage() {
               title="No watch history"
               description="Watch history is synced automatically during server sync. You can also sync now to fetch the latest plays."
               action={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSync}
-                  disabled={syncing}
-                >
-                  {syncing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                  )}
+                <LoadingButton variant="outline" size="sm" onClick={handleSync} loading={syncing} icon={RefreshCw}>
                   {syncing ? "Syncing..." : "Sync Now"}
-                </Button>
+                </LoadingButton>
               }
             />
           ) : (
@@ -1236,37 +1115,12 @@ export default function HistoryPage() {
                 columns={activeColumns}
                 data={items}
                 onRowClick={openDetailPanel}
-                keyExtractor={(item) => item.id}
+                keyExtractor={historyRowKey}
                 defaultSortId={activeColumnSortId}
                 defaultSortOrder={sortOrder}
                 onSortChange={handleSortChange}
                 resizeStorageKey="history-col-widths"
-                renderHoverContent={(item) => (
-                  <MediaHoverPopover
-                    imageUrl={`/api/media/${item.mediaItem.id}/image${item.mediaItem.parentTitle ? "?type=parent" : ""}`}
-                    data={{
-                      title: getItemTitle(item),
-                      year: item.mediaItem.year,
-                      summary: item.mediaItem.summary,
-                      contentRating: item.mediaItem.contentRating,
-                      rating: item.mediaItem.rating,
-                      audienceRating: item.mediaItem.audienceRating,
-                      ratingImage: item.mediaItem.ratingImage,
-                      audienceRatingImage: item.mediaItem.audienceRatingImage,
-                      duration: item.mediaItem.duration,
-                      resolution: item.mediaItem.resolution,
-                      dynamicRange: item.mediaItem.dynamicRange,
-                      audioProfile: item.mediaItem.audioProfile,
-                      fileSize: item.mediaItem.fileSize,
-                      genres: item.mediaItem.genres,
-                      studio: item.mediaItem.studio,
-                      playCount: item.mediaItem.playCount,
-                      lastPlayedAt: item.mediaItem.lastPlayedAt,
-                      addedAt: item.mediaItem.addedAt,
-                      servers: [{ serverId: item.server.id, serverName: item.server.name, serverType: item.server.type }],
-                    }}
-                  />
-                )}
+                renderHoverContent={historyHover}
               />
 
               {/* Pagination */}
@@ -1285,16 +1139,7 @@ export default function HistoryPage() {
         </div>
 
       {/* Detail side panel */}
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          detailUrl={selectedDetailUrl}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
     </>
   );
 }

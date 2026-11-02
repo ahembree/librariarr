@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FadeImage } from "@/components/ui/fade-image";
+import { posterPlaceholderFor } from "@/lib/loaded-images";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -156,6 +157,9 @@ export function MediaDetailHero({
     setPosterFailed(false);
   }
   const hasPlayServers = !!playServers && playServers.length > 0;
+  // The grid card's smaller copy of this poster, when this tab has already
+  // loaded it: painted at once under the full-size one, which fades in over it.
+  const posterPlaceholder = posterPlaceholderFor(imageUrl);
 
   const artUrl = artUrlProp ?? `/api/media/${itemId}/image?type=art`;
   const posterArtFallback = useParentArt
@@ -257,10 +261,19 @@ export function MediaDetailHero({
                       "0 25px 50px -12px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08)",
                   }}
                 >
+                  {posterPlaceholder && (
+                    // eslint-disable-next-line @next/next/no-img-element -- a cached grid variant shown under the full poster
+                    <img
+                      src={posterPlaceholder}
+                      alt=""
+                      aria-hidden
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  )}
                   <FadeImage
                     src={imageUrl}
                     alt={title}
-                    className="block h-auto w-full"
+                    className="relative block h-auto w-full"
                     style={{ aspectRatio: posterAspectRatio, objectFit: "cover" }}
                     onError={() => setPosterFailed(true)}
                   />

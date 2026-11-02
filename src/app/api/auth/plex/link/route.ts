@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkPlexPin, getPlexUser } from "@/lib/plex/auth";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexLinkSchema } from "@/lib/validation";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   // Verify user still exists (handles stale sessions after DB reset)
   const currentUser = await prisma.user.findUnique({
     where: { id: session.userId },
@@ -83,10 +79,22 @@ export async function POST(request: NextRequest) {
     await session.save();
 
     apiLogger.info("Auth", `Plex account linked for user "${session.userId}"`);
+    // The user chip names the sign-in method.
+    announceDisplaySettingsChanged(session.userId);
+
+    // Whether Plex sign-in is on, so the page can offer to turn it on: linking
+    // never changes it, and a setup done with a password leaves it off — the
+    // admin who just linked Plex would otherwise find the Plex button missing
+    // from the login page with nothing saying why.
+    const settings = await prisma.appSettings.findFirst({
+      where: { userId: session.userId },
+      select: { plexLoginEnabled: true },
+    });
 
     return NextResponse.json({
       linked: true,
       plexUsername: plexUser.username,
+      plexLoginEnabled: settings?.plexLoginEnabled ?? true,
     });
   } catch (error) {
     apiLogger.error("Auth", "Plex link failed", { error: String(error) });
@@ -95,4 +103,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

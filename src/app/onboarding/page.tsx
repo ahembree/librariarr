@@ -14,11 +14,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
+import { Server, Loader2, Check, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { ConnectionTestResult } from "@/components/connection-test-result";
+import { InlineError } from "@/components/inline-error";
+import { LoadingButton } from "@/components/loading-button";
+import { useSetState } from "@/hooks/use-set-state";
+import { MediaServerConnectionFields } from "@/app/(authenticated)/settings/media-server-connection-fields";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
+import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
@@ -69,7 +75,7 @@ function getDefaultUrl(connections: PlexConnection[]): string {
   return (remote || connections[0])?.uri ?? "";
 }
 
-function OnboardingContent() {
+function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
   const router = useRouter();
 
   // Mode & detection
@@ -81,7 +87,7 @@ function OnboardingContent() {
   // Plex-specific state
   const [plexServers, setPlexServers] = useState<PlexServer[]>([]);
   const [addingServer, setAddingServer] = useState<string | null>(null);
-  const [addedServers, setAddedServers] = useState<Set<string>>(new Set());
+  const [addedServers, addedServerActions] = useSetState<string>();
   const [editingServer, setEditingServer] = useState<string | null>(null);
   const [customUrls, setCustomUrls] = useState<Record<string, string>>({});
   const [tlsSkipVerify, setTlsSkipVerify] = useState<Record<string, boolean>>({});
@@ -109,13 +115,14 @@ function OnboardingContent() {
 
   // ─── Plex OAuth (for users without a Plex token) ───
 
-  const fetchPlexServers = useCallback(async () => {
+  /** Lists the account's Plex servers; true when there was a Plex token to list them with. */
+  const fetchPlexServers = useCallback(async (): Promise<boolean> => {
     try {
       const [plexRes, existingRes] = await Promise.all([
         fetch("/api/auth/plex/servers"),
         fetch("/api/servers"),
       ]);
-      if (!plexRes.ok) return;
+      if (!plexRes.ok) return false;
       setHasPlexToken(true);
       const plexData = await plexRes.json();
       const existingData = await existingRes.json();
@@ -133,13 +140,15 @@ function OnboardingContent() {
       for (const s of fetched) {
         if (existingMachineIds.has(s.clientIdentifier)) alreadyAdded.add(s.clientIdentifier);
       }
-      if (alreadyAdded.size > 0) setAddedServers(alreadyAdded);
+      if (alreadyAdded.size > 0) addedServerActions.replace(alreadyAdded);
 
       setMode("plex");
+      return true;
     } catch {
       // Network error
+      return false;
     }
-  }, []);
+  }, [addedServerActions]);
 
   const { startAuth: startPlexAuth, isLoading: plexAuthLoading, error: plexAuthError, authUrl: plexAuthUrl } = usePlexOAuth({
     onSuccess: async (authToken) => {
@@ -152,6 +161,8 @@ function OnboardingContent() {
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Failed to link Plex account");
       if (!result.linked) throw new Error(result.message || "Plex authentication not completed");
+      // Linking leaves Plex login as it was — off after a password setup — so ask.
+      if (result.plexLoginEnabled === false) onAskPlexLogin();
       // Now fetch Plex servers with the new token
       await fetchPlexServers();
     },
@@ -162,10 +173,12 @@ function OnboardingContent() {
   useEffect(() => {
     async function detect() {
       try {
-        await fetchPlexServers();
-        // If fetchPlexServers succeeded, it set mode to "plex"
-        // Mark as auto-detected so we don't show a back button
-        setAutoDetectedPlex(true);
+        // Marked only when a token was actually found, so the Plex view hides
+        // its back button for a Plex sign-in alone. It used to be set
+        // unconditionally — `fetchPlexServers` swallows a missing token — so a
+        // local account that linked Plex later lost the way back to Jellyfin
+        // and Emby.
+        if (await fetchPlexServers()) setAutoDetectedPlex(true);
       } catch {
         // No Plex token or network error → stay on "choose"
       } finally {
@@ -215,7 +228,7 @@ function OnboardingContent() {
       }
 
       if (data.updated) {
-        setAddedServers((prev) => new Set(prev).add(server.clientIdentifier));
+        addedServerActions.add(server.clientIdentifier);
         setEditingServer(null);
         return;
       }
@@ -233,7 +246,7 @@ function OnboardingContent() {
         setLibrarySelections((prev) => ({ ...prev, [server.clientIdentifier]: selections }));
         setSelectingLibraries(server.clientIdentifier);
       } catch {
-        setAddedServers((prev) => new Set(prev).add(server.clientIdentifier));
+        addedServerActions.add(server.clientIdentifier);
         await fetch(`/api/servers/${data.server.id}/sync`, { method: "POST" });
       }
 
@@ -263,7 +276,7 @@ function OnboardingContent() {
         }),
       });
       await fetch(`/api/servers/${serverId}/sync`, { method: "POST" });
-      setAddedServers((prev) => new Set(prev).add(clientIdentifier));
+      addedServerActions.add(clientIdentifier);
       setSelectingLibraries(null);
     } catch (error) {
       console.error("Failed to save library selection:", error);
@@ -281,15 +294,19 @@ function OnboardingContent() {
 
   // ─── Manual server handlers (Jellyfin/Emby) ───
 
+  // Connect only TESTS the connection; the server is created on "Select
+  // Libraries". Connect used to create it, and the form stays editable after a
+  // successful connect — any edit (a typo in the name) brought Connect back,
+  // and pressing it again created a second server, since a Jellyfin/Emby
+  // server has no machine id to deduplicate on.
   const testManualConnection = useCallback(async () => {
     setManualTesting(true);
     setManualTestResult(null);
     try {
-      const response = await fetch("/api/servers", {
+      const response = await fetch("/api/servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: manualForm.name || `${manualType === "JELLYFIN" ? "Jellyfin" : "Emby"} Server`,
           url: manualForm.url,
           accessToken: manualForm.apiKey,
           type: manualType,
@@ -297,12 +314,10 @@ function OnboardingContent() {
         }),
       });
       const data = await response.json();
-      if (!response.ok) {
+      if (!response.ok || !data.ok) {
         setManualTestResult({ ok: false, error: data.detail || data.error });
       } else {
         setManualTestResult({ ok: true });
-        // Server was created — store its ID for library selection
-        setManualServerId(data.server?.id || null);
       }
     } catch {
       setManualTestResult({ ok: false, error: "Network error — could not reach Librariarr API" });
@@ -312,11 +327,38 @@ function OnboardingContent() {
   }, [manualForm, manualType]);
 
   const proceedToManualLibraries = useCallback(async () => {
-    if (!manualServerId) return;
     setManualAdding(true);
     setManualError(null);
+    let serverId = manualServerId;
+    if (!serverId) {
+      try {
+        const response = await fetch("/api/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: manualForm.name || `${manualType === "JELLYFIN" ? "Jellyfin" : "Emby"} Server`,
+            url: manualForm.url,
+            accessToken: manualForm.apiKey,
+            type: manualType,
+            tlsSkipVerify: manualForm.tlsSkipVerify,
+          }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.server?.id) {
+          setManualError(data?.detail || data?.error || "Failed to add server");
+          setManualAdding(false);
+          return;
+        }
+        serverId = data.server.id as string;
+        setManualServerId(serverId);
+      } catch {
+        setManualError("Network error — could not reach Librariarr API");
+        setManualAdding(false);
+        return;
+      }
+    }
     try {
-      const libRes = await fetch(`/api/servers/${manualServerId}/libraries`);
+      const libRes = await fetch(`/api/servers/${serverId}/libraries`);
       const libData = await libRes.json();
       const libs: DiscoveredLibrary[] = libData.libraries || [];
       setManualLibraries(libs);
@@ -326,12 +368,12 @@ function OnboardingContent() {
       setManualSelectingLibs(true);
     } catch {
       // If library fetch fails, just sync all
-      await fetch(`/api/servers/${manualServerId}/sync`, { method: "POST" });
+      await fetch(`/api/servers/${serverId}/sync`, { method: "POST" });
       setManualAdded(true);
     } finally {
       setManualAdding(false);
     }
-  }, [manualServerId]);
+  }, [manualServerId, manualForm, manualType]);
 
   const confirmManualLibraries = useCallback(async () => {
     if (!manualServerId) return;
@@ -445,10 +487,9 @@ function OnboardingContent() {
           </div>
 
           {plexAuthError && (
-            <div className="mx-auto max-w-md flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <InlineError className="mx-auto max-w-md rounded-lg">
               <p>{plexAuthError}</p>
-            </div>
+            </InlineError>
           )}
 
           {plexAuthUrl && plexAuthLoading && (
@@ -598,10 +639,9 @@ function OnboardingContent() {
                       )}
 
                       {error && (
-                        <div className="flex gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                          <p>{error}</p>
-                        </div>
+                        <InlineError multiline className="rounded-lg">
+                          {error}
+                        </InlineError>
                       )}
 
                       {isSelectingLibs && (
@@ -747,87 +787,42 @@ function OnboardingContent() {
             ) : (
               /* Entry form */
               <>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-name">Server Name (optional)</Label>
-                  <Input
-                    id="manual-name"
-                    placeholder={`My ${typeLabel} Server`}
-                    value={manualForm.name}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, name: e.target.value })); setManualTestResult(null); }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-url">URL</Label>
-                  <Input
-                    id="manual-url"
-                    placeholder={`http://your-server:${manualType === "JELLYFIN" ? "8096" : "8096"}`}
-                    value={manualForm.url}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, url: e.target.value })); setManualTestResult(null); }}
-                  />
-                  <p className="text-xs text-muted-foreground">Must include http:// or https://</p>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-apikey">API Key</Label>
-                  <Input
-                    id="manual-apikey"
-                    placeholder="API key from dashboard"
-                    value={manualForm.apiKey}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, apiKey: e.target.value })); setManualTestResult(null); }}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="manual-tls"
-                    checked={manualForm.tlsSkipVerify}
-                    onCheckedChange={(checked) => { setManualForm((f) => ({ ...f, tlsSkipVerify: checked })); setManualTestResult(null); }}
-                  />
-                  <Label htmlFor="manual-tls" className="text-sm">Skip TLS verification</Label>
-                </div>
+                <MediaServerConnectionFields
+                  idPrefix="manual"
+                  value={manualForm}
+                  namePlaceholder={`My ${typeLabel} Server`}
+                  onChange={(next) => {
+                    // Any edit, the name included, needs a new Connect: the
+                    // server is created from what Connect tested.
+                    setManualForm(next);
+                    setManualTestResult(null);
+                  }}
+                />
 
-                {manualTestResult && (
-                  <div className={`flex items-center gap-2 rounded-md p-3 text-sm ${
-                    manualTestResult.ok ? "bg-green-500/10 text-green-500" : "bg-destructive/10 text-destructive"
-                  }`}>
-                    {manualTestResult.ok ? (
-                      <>
-                        <CheckCircle className="h-4 w-4 shrink-0" />
-                        Connection successful — server added
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="h-4 w-4 shrink-0" />
-                        Connection failed{manualTestResult.error ? ` — ${manualTestResult.error}` : ""}
-                      </>
-                    )}
-                  </div>
-                )}
+                {manualTestResult && <ConnectionTestResult result={manualTestResult} />}
 
-                {manualError && (
-                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    {manualError}
-                  </div>
-                )}
+                {manualError && <InlineError>{manualError}</InlineError>}
 
                 <div className="flex gap-2">
                   {!manualTestResult?.ok ? (
-                    <Button
+                    <LoadingButton
+                      icon={Plug}
+                      loading={manualTesting}
                       onClick={testManualConnection}
-                      disabled={manualTesting || !manualForm.url || !manualForm.apiKey}
+                      disabled={!manualForm.url || !manualForm.apiKey}
                       className={`flex-1 ${colors.btn} ${colors.btnHover} ${colors.btnText}`}
                     >
-                      {manualTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plug className="mr-2 h-4 w-4" />}
                       Connect
-                    </Button>
+                    </LoadingButton>
                   ) : (
-                    <Button
+                    <LoadingButton
+                      icon={Check}
+                      loading={manualAdding}
                       onClick={proceedToManualLibraries}
-                      disabled={manualAdding}
                       className={`flex-1 ${colors.btn} ${colors.btnHover} ${colors.btnText}`}
                     >
-                      {manualAdding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
                       Select Libraries
-                    </Button>
+                    </LoadingButton>
                   )}
                 </div>
               </>
@@ -854,9 +849,11 @@ function OnboardingContent() {
 }
 
 export default function OnboardingPage() {
+  const [plexLoginPromptOpen, setPlexLoginPromptOpen] = useState(false);
   return (
     <>
-      <OnboardingContent />
+      <OnboardingContent onAskPlexLogin={() => setPlexLoginPromptOpen(true)} />
+      <PlexLoginPrompt open={plexLoginPromptOpen} onDone={() => setPlexLoginPromptOpen(false)} />
       {/* Onboarding sits outside the authenticated shell, so it hosts its own
           "Confirm it's you" prompt for the Plex link above. */}
       <ReauthDialogHost />

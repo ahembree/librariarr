@@ -109,7 +109,10 @@ describe("Lifecycle Collections CRUD", () => {
         method: "POST",
         body: { type: "MOVIE" },
       });
-      await expectJson(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details.some((d) => d.startsWith("name:"))).toBe(true);
+      expect(await getTestPrisma().collection.count()).toBe(0);
     });
 
     it("creates a collection", async () => {
@@ -139,6 +142,7 @@ describe("Lifecycle Collections CRUD", () => {
         body: { name: "Leaving Soon", type: "MOVIE" },
       });
       await expectJson(response, 409);
+      expect(await getTestPrisma().collection.count({ where: { userId: user.id } })).toBe(1);
     });
 
     it("allows the same name across different types", async () => {
@@ -150,7 +154,9 @@ describe("Lifecycle Collections CRUD", () => {
         method: "POST",
         body: { name: "Leaving Soon", type: "SERIES" },
       });
-      await expectJson(response, 201);
+      const body = await expectJson<{ collection: { name: string; type: string } }>(response, 201);
+      expect(body.collection).toMatchObject({ name: "Leaving Soon", type: "SERIES" });
+      expect(await getTestPrisma().collection.count({ where: { userId: user.id } })).toBe(2);
     });
   });
 
@@ -189,6 +195,8 @@ describe("Lifecycle Collections CRUD", () => {
       const body = await expectJson<{ collection: { sort: string; recommended: boolean } }>(response, 200);
       expect(body.collection.sort).toBe("ACTION_DATE");
       expect(body.collection.recommended).toBe(true);
+      const inDb = await getTestPrisma().collection.findUniqueOrThrow({ where: { id: collection.id } });
+      expect(inDb).toMatchObject({ sort: "ACTION_DATE", recommended: true, name: collection.name });
       expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
       expect(mockRenameCollectionInPlex).not.toHaveBeenCalled();
     });
@@ -205,6 +213,8 @@ describe("Lifecycle Collections CRUD", () => {
       });
       await expectJson(response, 200);
       expect(mockRenameCollectionInPlex).toHaveBeenCalledWith(user.id, "MOVIE", "Old", "New");
+      expect((await getTestPrisma().collection.findUniqueOrThrow({ where: { id: collection.id } })).name).toBe("New");
+      expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
     });
 
     it("returns 409 when renaming to an existing name", async () => {
@@ -219,6 +229,8 @@ describe("Lifecycle Collections CRUD", () => {
         body: { name: "Taken" },
       });
       await expectJson(response, 409);
+      expect((await getTestPrisma().collection.findUniqueOrThrow({ where: { id: collection.id } })).name).toBe("Mine");
+      expect(mockRenameCollectionInPlex).not.toHaveBeenCalled();
     });
   });
 

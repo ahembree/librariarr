@@ -37,7 +37,7 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   LidarrClient: function () { return mockLidarrClient; },
 }));
 
-import { fetchArrDataForQuery } from "@/lib/query/fetch-arr-data";
+import { fetchArrDataForQuery, resolveQueryArrScope } from "@/lib/query/fetch-arr-data";
 
 describe("fetchArrDataForQuery", () => {
   beforeEach(() => {
@@ -97,10 +97,12 @@ describe("fetchArrDataForQuery", () => {
     const fractions: number[] = [];
     await fetchArrDataForQuery("u1", { radarr: "r1", sonarr: "n1" }, ["MOVIE", "SERIES"], (f) => fractions.push(f));
 
-    expect(fractions.length).toBeGreaterThan(0);
     expect(fractions[fractions.length - 1]).toBe(1);
-    // Combined across two fetches, so intermediate values never exceed 1.
-    expect(Math.max(...fractions)).toBeLessThanOrEqual(1);
+    // Averaged across the two fetches: the first one to finish does not
+    // complete the bar, so 1 is reported only once, at the very end, and the
+    // combined value never goes backwards.
+    expect(fractions.filter((f) => f === 1)).toHaveLength(1);
+    expect(fractions).toEqual([...fractions].sort((a, b) => a - b));
   });
 
   it("scopes the Radarr lookup to the user and selected instance", async () => {
@@ -114,7 +116,46 @@ describe("fetchArrDataForQuery", () => {
     await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"]);
 
     expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
+      where: { id: "r1", userId: "u1", enabled: true },
+    });
+  });
+});
+
+describe("resolveQueryArrScope", () => {
+  beforeEach(() => {
+    mockPrisma.radarrInstance.findFirst.mockReset();
+    mockPrisma.sonarrInstance.findFirst.mockReset();
+    mockPrisma.lidarrInstance.findFirst.mockReset();
+  });
+
+  it("keeps a type whose selected instance exists and is enabled", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ name: "Radarr", enabled: true });
+    expect(await resolveQueryArrScope("u1", { radarr: "r1" }, ["MOVIE"])).toEqual({ evaluable: ["MOVIE"], unevaluable: [] });
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
       where: { id: "r1", userId: "u1" },
+      select: { name: true, enabled: true },
+    });
+  });
+
+  it("leaves out a type with no instance selected, a deleted one, or a disabled one", async () => {
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({ name: "Old Lidarr", enabled: false });
+    const scope = await resolveQueryArrScope("u1", { sonarr: "gone", lidarr: "l1" }, []);
+    expect(scope.evaluable).toEqual([]);
+    expect(scope.unevaluable.map((u) => u.type)).toEqual(["MOVIE", "SERIES", "MUSIC"]);
+    expect(scope.unevaluable[0].reason).toContain("no Radarr server is selected");
+    expect(scope.unevaluable[1].reason).toContain("no longer exists");
+    expect(scope.unevaluable[2].reason).toContain('"Old Lidarr" is disabled');
+  });
+});
+
+describe("fetchArrDataForQuery — disabled instances", () => {
+  it("reads nothing from a disabled instance", async () => {
+    // The lookup filters on enabled, so a disabled instance is never found.
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    expect(await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"])).toEqual({});
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
+      where: { id: "r1", userId: "u1", enabled: true },
     });
   });
 });

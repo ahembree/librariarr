@@ -124,8 +124,8 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
 
     mockTestConnection.mockResolvedValue({ ok: true, serverName: "Home" });
     // Plex's `/myplex/account` answers with the owner's plex.tv token.
-    mockFetchImage.mockImplementation(async (path: string) =>
-      path === "/myplex/account"
+    mockFetchImage.mockImplementation(async (requestPath: string) =>
+      requestPath === "/myplex/account"
         ? { data: Buffer.from(`<MyPlex authToken="${ACCOUNT_TOKEN}"/>`), contentType: "text/xml" }
         : { data: Buffer.from([0x89, 0x50]), contentType: "image/png" },
     );
@@ -249,7 +249,8 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
       400,
     );
     expect(account.error).toBe("Invalid path");
-    expect(mockFetchImage).not.toHaveBeenCalledWith("/myplex/account");
+    // Only the artwork was ever asked of the server.
+    expect(mockFetchImage.mock.calls.map((call) => call[0])).toEqual(["/library/metadata/1234/thumb/1"]);
 
     // 5. The stored token is not sent to a URL of the cookie holder's choosing,
     //    by editing the server or by adding it again under a new address.

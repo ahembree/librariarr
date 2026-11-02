@@ -24,7 +24,7 @@ import {
  * holds for Plex sign-in (`turnsPlexSignInOn`), which is turned off where a
  * household shares the Plex account.
  */
-export interface PasswordSignInState {
+interface PasswordSignInState {
   localAuthEnabled: boolean | null | undefined;
   sso: SsoSettings | null;
 }

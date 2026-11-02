@@ -26,12 +26,13 @@ describe("SeerrDataMapBuilder", () => {
     const b = new SeerrDataMapBuilder("MOVIE");
     [1, 2, 3, 4, 5].forEach((status) => b.add(r({ tmdbId: status, status })));
     const map = b.build();
-    expect(map["TMDB:1"].approvalDate).toBeNull();
-    expect(map["TMDB:2"].approvalDate).not.toBeNull();
-    expect(map["TMDB:3"].approvalDate).toBeNull();
-    expect(map["TMDB:3"].declineDate).not.toBeNull();
-    expect(map["TMDB:4"].approvalDate).not.toBeNull();
-    expect(map["TMDB:5"].approvalDate).not.toBeNull();
+    // updatedAt is the only approval (or decline) timestamp Seerr exposes.
+    const updatedAt = "2024-01-02T00:00:00.000Z";
+    expect(map["TMDB:1"]).toMatchObject({ approvalDate: null, declineDate: null });
+    expect(map["TMDB:2"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
+    expect(map["TMDB:3"]).toMatchObject({ approvalDate: null, declineDate: updatedAt });
+    expect(map["TMDB:4"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
+    expect(map["TMDB:5"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
   });
 
   it("keeps the most recent request, approval and decline dates", () => {
@@ -39,10 +40,16 @@ describe("SeerrDataMapBuilder", () => {
     b.add(r({ tmdbId: 9, status: 5, createdAt: "2021-01-01T00:00:00.000Z", updatedAt: "2021-01-05T00:00:00.000Z" }));
     b.add(r({ tmdbId: 9, status: 5, createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z" }));
     b.add(r({ tmdbId: 9, status: 2, createdAt: "2023-01-01T00:00:00.000Z", updatedAt: "2023-01-02T00:00:00.000Z" }));
+    b.add(r({ tmdbId: 9, status: 3, createdAt: "2022-01-01T00:00:00.000Z", updatedAt: "2022-01-03T00:00:00.000Z" }));
     const m = b.build()["TMDB:9"];
-    expect(m.requestCount).toBe(3);
-    expect(m.requestDate).toBe("2026-09-01T00:00:00.000Z");
-    expect(m.approvalDate).toBe("2026-09-02T00:00:00.000Z");
+    expect(m).toEqual({
+      requested: true,
+      requestCount: 4,
+      requestedBy: ["u"],
+      requestDate: "2026-09-01T00:00:00.000Z",
+      approvalDate: "2026-09-02T00:00:00.000Z",
+      declineDate: "2022-01-03T00:00:00.000Z",
+    });
   });
 
   it("ignores tvdbId for movies and keys TV by TMDB with a TVDB alias", () => {
@@ -70,6 +77,44 @@ describe("SeerrDataMapBuilder", () => {
     const b = new SeerrDataMapBuilder("MOVIE");
     b.add(r({ tmdbId: null }));
     expect(b.build()).toEqual({});
+  });
+
+  it("absorbs another builder exactly as if its requests had been added after", () => {
+    // Deterministic pseudo-random requests over a few ids and dates, some with
+    // an unparseable date, split between two "instances".
+    let seed = 7;
+    const rand = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) % n);
+    const dates = ["2021-01-01T00:00:00.000Z", "2024-06-01T00:00:00.000Z", "garbage", "2023-03-03T00:00:00.000Z"];
+    const make = () =>
+      r({
+        tmdbId: rand(3) === 0 ? null : rand(4),
+        tvdbId: rand(2) === 0 ? null : 50 + rand(3),
+        status: 1 + rand(5),
+        createdAt: dates[rand(4)],
+        updatedAt: dates[rand(4)],
+        by: ["a", "b", "c"][rand(3)],
+      });
+    for (let trial = 0; trial < 25; trial++) {
+      const first = Array.from({ length: 1 + rand(8) }, make);
+      const second = Array.from({ length: 1 + rand(8) }, make);
+
+      const sequential = new SeerrDataMapBuilder("SERIES");
+      for (const req of [...first, ...second]) sequential.add(req);
+
+      const one = new SeerrDataMapBuilder("SERIES");
+      const two = new SeerrDataMapBuilder("SERIES");
+      first.forEach((req) => one.add(req));
+      second.forEach((req) => two.add(req));
+      const folded = new SeerrDataMapBuilder("SERIES");
+      folded.absorb(one);
+      folded.absorb(two);
+
+      expect(folded.build()).toEqual(sequential.build());
+      // Absorbing copies: the source builders are left as they were.
+      const oneAlone = new SeerrDataMapBuilder("SERIES");
+      first.forEach((req) => oneAlone.add(req));
+      expect(one.build()).toEqual(oneAlone.build());
+    }
   });
 });
 

@@ -265,6 +265,7 @@ describe("rotateSession", () => {
     mockGetIronSession.mockResolvedValueOnce(previous).mockResolvedValueOnce(fresh);
 
     const { rotateSession } = await load();
+    const before = Date.now();
     const returned = await rotateSession();
 
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -272,6 +273,10 @@ describe("rotateSession", () => {
     // refuses to save a destroyed session that has been written back into.
     expect(returned).toBe(fresh);
     expect(mockGetIronSession).toHaveBeenCalledTimes(2);
+    // Every login is stamped with its time, for the recent-sign-in checks.
+    expect(returned.authenticatedAt).toBeGreaterThanOrEqual(before);
+    expect(returned.authenticatedAt).toBeLessThanOrEqual(Date.now());
+    expect(fresh.destroy).not.toHaveBeenCalled();
   });
 
   it("reads both sessions from the same cookie store with the same options", async () => {

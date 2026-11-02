@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
+import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip, parsePage } from "@/lib/api/pagination";
@@ -16,12 +17,7 @@ const SPLIT_MAX_REACH = 10_000;
 /** Upper bound for the cached filter dropdown values (see below). */
 const FILTER_VALUES_TTL_MS = 10 * 60_000;
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const page = parsePage(searchParams);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
@@ -135,13 +131,6 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
-    const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-      "4K": ["4k", "2160", "2160p"],
-      "1080P": ["1080", "1080p"],
-      "720P": ["720", "720p"],
-      "480P": ["480", "480p"],
-      "SD": ["sd", "360", "360p"],
-    };
     const vals = resolution.split("|").filter(Boolean);
     // Expand display labels to all matching DB values
     const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);
@@ -205,6 +194,14 @@ export async function GET(request: NextRequest) {
     type: 'mi."type"',
     year: 'mi."year"',
     resolution: 'mi."resolution"',
+    // The History page's HDR, codec and Server columns. All are sortable
+    // headers, and without a key here they silently fell back to `watchedAt`
+    // (HDR kept its own sort arrow while doing so), and Server sent
+    // `serverUsername` — the User column.
+    dynamicRange: 'mi."dynamicRange"',
+    videoCodec: 'mi."videoCodec"',
+    audioCodec: 'mi."audioCodec"',
+    serverName: 'ms."name"',
     duration: 'mi."duration"',
     fileSize: 'mi."fileSize"',
     // Tracearr-sourced play columns. `streamResolution` is deliberately a
@@ -485,4 +482,4 @@ export async function GET(request: NextRequest) {
     pagination: { page, limit, hasMore, totalCount },
     ...filterValues,
   });
-}
+});

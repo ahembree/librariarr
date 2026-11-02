@@ -74,7 +74,7 @@ describe("getExternalBaseUrl", () => {
   });
 
   describe("defensive validation against header poisoning", () => {
-    it("rejects a non-http(s) X-Forwarded-Proto and falls back to request URL", () => {
+    it("rejects a non-http(s) X-Forwarded-Proto and falls back to the request's own scheme", () => {
       expect(
         getExternalBaseUrl(
           makeRequest({
@@ -86,7 +86,7 @@ describe("getExternalBaseUrl", () => {
       ).toBe("http://app.example.com");
     });
 
-    it("rejects file: protocol", () => {
+    it("rejects a file: X-Forwarded-Proto, keeping the request's https scheme", () => {
       expect(
         getExternalBaseUrl(
           makeRequest({
@@ -243,6 +243,45 @@ describe("isSameOriginRequest", () => {
           url: "http://librariarr:3000/",
           host: "app.example.com",
           referer: "not a url at all",
+        })
+      )
+    ).toBe(false);
+  });
+
+  // Sandboxed iframes and cross-origin redirect chains send the literal
+  // `Origin: null`. It is present, so it must be judged — and it names no
+  // origin, so it can never be ours.
+  it("rejects Origin: null, even with a same-origin Referer", () => {
+    expect(
+      isSameOriginRequest(
+        makeRequest({
+          url: "http://librariarr:3000/",
+          host: "app.example.com",
+          origin: "null",
+          referer: "http://app.example.com/settings",
+        })
+      )
+    ).toBe(false);
+  });
+
+  // An exact origin comparison, not a prefix match: a host that merely
+  // starts with ours is another site.
+  it("rejects a Referer on a host that only starts with the app's host", () => {
+    expect(
+      isSameOriginRequest(
+        makeRequest({
+          url: "http://librariarr:3000/",
+          host: "app.example.com",
+          referer: "http://app.example.com.attacker.example/settings",
+        })
+      )
+    ).toBe(false);
+    expect(
+      isSameOriginRequest(
+        makeRequest({
+          url: "http://librariarr:3000/",
+          host: "app.example.com",
+          origin: "http://app.example.com.attacker.example",
         })
       )
     ).toBe(false);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, authSettingsSchema } from "@/lib/validation";
 import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
@@ -12,12 +12,7 @@ import {
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
     select: {
@@ -58,14 +53,9 @@ export async function GET() {
     }),
     displayName: user.username,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, authSettingsSchema);
   if (error) return error;
 
@@ -179,4 +169,4 @@ export async function PUT(request: NextRequest) {
     localAuthEnabled: outcome.local,
     plexLoginEnabled: outcome.plex,
   });
-}
+});

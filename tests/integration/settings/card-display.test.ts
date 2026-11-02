@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import {
   cleanDatabase,
   disconnectTestDb,
+  getTestPrisma,
 } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
@@ -22,6 +23,10 @@ import {
   GET as getCardDisplay,
   PUT as putCardDisplay,
 } from "@/app/api/settings/card-display-preferences/route";
+
+const prisma = getTestPrisma();
+const storedPreferences = async (userId: string) =>
+  (await prisma.appSettings.findUnique({ where: { userId } }))?.cardDisplayPreferences;
 
 describe("GET /api/settings/card-display-preferences", () => {
   beforeEach(async () => {
@@ -94,6 +99,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
     });
     const body = await expectJson<{ success: boolean }>(res);
     expect(body.success).toBe(true);
+    expect(await storedPreferences(user.id)).toEqual(preferences);
   });
 
   it("GET after PUT returns updated preferences", async () => {
@@ -113,10 +119,10 @@ describe("PUT /api/settings/card-display-preferences", () => {
       },
     };
 
-    await callRoute(putCardDisplay, {
+    await expectJson(await callRoute(putCardDisplay, {
       method: "PUT",
       body: { preferences },
-    });
+    }));
 
     const res = await callRoute(getCardDisplay);
     const body = await expectJson<{ preferences: typeof preferences }>(res);
@@ -131,8 +137,11 @@ describe("PUT /api/settings/card-display-preferences", () => {
       method: "PUT",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^preferences: /);
+    expect(await storedPreferences(user.id)).toBeUndefined();
   });
 
   it("rejects non-object preferences", async () => {
@@ -143,7 +152,10 @@ describe("PUT /api/settings/card-display-preferences", () => {
       method: "PUT",
       body: { preferences: "not-an-object" },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^preferences: /);
+    expect(await storedPreferences(user.id)).toBeUndefined();
   });
 
   it("rejects preferences with invalid inner structure (missing servers)", async () => {
@@ -162,7 +174,10 @@ describe("PUT /api/settings/card-display-preferences", () => {
         },
       },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^preferences\.MOVIE\.servers: /);
+    expect(await storedPreferences(user.id)).toBeUndefined();
   });
 
   it("overwrites previous preferences on second PUT", async () => {
@@ -177,10 +192,10 @@ describe("PUT /api/settings/card-display-preferences", () => {
       },
     };
 
-    await callRoute(putCardDisplay, {
+    await expectJson(await callRoute(putCardDisplay, {
       method: "PUT",
       body: { preferences: first },
-    });
+    }));
 
     const second = {
       SERIES: {
@@ -190,10 +205,10 @@ describe("PUT /api/settings/card-display-preferences", () => {
       },
     };
 
-    await callRoute(putCardDisplay, {
+    await expectJson(await callRoute(putCardDisplay, {
       method: "PUT",
       body: { preferences: second },
-    });
+    }));
 
     const res = await callRoute(getCardDisplay);
     const body = await expectJson<{ preferences: typeof second }>(res);

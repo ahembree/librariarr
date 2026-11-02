@@ -36,7 +36,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -139,7 +145,7 @@ describe("GET /api/media/history — Tracearr columns", () => {
       isTranscode: true,
       videoDecision: "transcode",
       audioDecision: "copy",
-      player: "Plex Web",
+      player: "Living Room",
       product: "Plex for Apple TV",
       resolution: "1080p",
       bitrate: 8500,
@@ -161,7 +167,7 @@ describe("GET /api/media/history — Tracearr columns", () => {
     expect(row.isTranscode).toBe(true);
     expect(row.videoDecision).toBe("transcode");
     expect(row.audioDecision).toBe("copy");
-    expect(row.player).toBe("Plex Web");
+    expect(row.player).toBe("Living Room");
     expect(row.product).toBe("Plex for Apple TV");
     expect(row.bitrate).toBe(8500);
     expect(row.segmentCount).toBe(3);
@@ -210,6 +216,7 @@ describe("GET /api/media/history — Tracearr columns", () => {
       serverUsername: "alice",
       source: "TRACEARR",
       sourceEventId: "chain-alice",
+      watched: false,
       percentComplete: 41.2,
     });
     // A NATIVE row alongside it — sourceEventId stays null, which the unique
@@ -233,7 +240,7 @@ describe("GET /api/media/history — Tracearr columns", () => {
         searchParams: { type: "MOVIE" },
       }),
     );
-    expect(byType.items).toHaveLength(2);
+    expect(byType.items.map((i) => i.mediaItem.title).sort()).toEqual(["Blade Runner", "Dune"]);
 
     const bySearch = await expectJson<HistoryResponse>(
       await callRoute(GET, {
@@ -246,19 +253,23 @@ describe("GET /api/media/history — Tracearr columns", () => {
   });
 
   it("accepts sorting by a new Tracearr column", async () => {
-    const low = await createTestMediaItem(libraryId, { title: "Low" });
-    const high = await createTestMediaItem(libraryId, { title: "High" });
+    // The files' resolutions sort the opposite way to the streams', so a
+    // stream-resolution sort that read the file column would come back reversed.
+    const low = await createTestMediaItem(libraryId, { title: "Low", resolution: "1080" });
+    const high = await createTestMediaItem(libraryId, { title: "High", resolution: "4k" });
     await addWatch(low.id, {
       source: "TRACEARR",
       sourceEventId: "low",
+      watched: false,
       percentComplete: 12,
-      resolution: "1080p",
+      resolution: "720p",
     });
     await addWatch(high.id, {
       source: "TRACEARR",
       sourceEventId: "high",
+      watched: true,
       percentComplete: 88,
-      resolution: "4K",
+      resolution: "1080p",
     });
 
     const desc = await expectJson<HistoryResponse>(
@@ -284,7 +295,15 @@ describe("GET /api/media/history — Tracearr columns", () => {
         searchParams: { sortBy: "streamResolution", sortOrder: "asc" },
       }),
     );
-    expect(byStreamRes.items).toHaveLength(2);
+    expect(byStreamRes.items.map((i) => i.resolution)).toEqual(["1080p", "720p"]);
+    expect(byStreamRes.items.map((i) => i.mediaItem.title)).toEqual(["High", "Low"]);
+    const byFileRes = await expectJson<HistoryResponse>(
+      await callRoute(GET, {
+        url: "/api/media/history",
+        searchParams: { sortBy: "resolution", sortOrder: "asc" },
+      }),
+    );
+    expect(byFileRes.items.map((i) => i.mediaItem.title)).toEqual(["Low", "High"]);
   });
 
   it("ignores an unknown sortBy instead of interpolating it into the SQL", async () => {

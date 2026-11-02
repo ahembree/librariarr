@@ -5,13 +5,13 @@ describe("getRatingLabel", () => {
   describe("Plex ratingImage parsing", () => {
     it("parses rottentomatoes image as RT with critics suffix for rating field", () => {
       expect(
-        getRatingLabel("rottentomatoes://image.rt.fresh", "PLEX", "rating", "fallback"),
+        getRatingLabel("rottentomatoes://image.rating.ripe", "PLEX", "rating", "fallback"),
       ).toBe("RT Critics");
     });
 
     it("parses rottentomatoes image as RT with audience suffix for audienceRating field", () => {
       expect(
-        getRatingLabel("rottentomatoes://image.rt.upright", "PLEX", "audienceRating", "fallback"),
+        getRatingLabel("rottentomatoes://image.rating.upright", "PLEX", "audienceRating", "fallback"),
       ).toBe("RT Audience");
     });
 

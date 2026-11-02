@@ -12,10 +12,11 @@ import {
 
 describe("scope registry", () => {
   it("a read-only key gets every read scope and no write scope", () => {
-    expect(READ_ONLY_SCOPES.length).toBeGreaterThan(0);
+    expect(READ_ONLY_SCOPES).toEqual(["media:read", "servers:read", "lifecycle:read", "streams:read", "system:read"]);
     for (const scope of READ_ONLY_SCOPES) expect(API_SCOPE_INFO[scope].access).toBe("read");
-    const reads = API_SCOPES.filter((s) => API_SCOPE_INFO[s].access === "read");
-    expect([...READ_ONLY_SCOPES].sort()).toEqual([...reads].sort());
+    const writes = API_SCOPES.filter((s) => !READ_ONLY_SCOPES.includes(s));
+    expect(writes).toEqual(["sync:write", "lifecycle:write", "lifecycle:execute", "streams:write"]);
+    for (const scope of writes) expect(API_SCOPE_INFO[scope].access).toBe("write");
   });
 
   it("names scopes resource:action, with read scopes ending :read", () => {

@@ -17,7 +17,7 @@ interface CountFilter {
  * Within a type they combine by its logic parameter, as every other condition
  * filter does; the two types are always ANDed.
  */
-export interface StreamCountFilters {
+interface StreamCountFilters {
   audio: CountFilter;
   subtitle: CountFilter;
 }

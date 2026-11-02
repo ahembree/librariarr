@@ -10,7 +10,7 @@
  * matches a DIFFERENT set depending on an unrelated rule beside it — and on a
  * DELETE rule set, a different set of files.
  *
- * Three disagreements are pinned here, each found by fuzzing this families:
+ * Three disagreements are pinned here, each found by fuzzing these families:
  *
  *  1. Language fields under `negate` — Phase 1 wrapped the clause in `NOT`
  *     without the "has a known language of this type" conjunct, so
@@ -24,8 +24,8 @@
  *  3. JSON-array fields and a stored empty array — Phase 1 tested only
  *     `Prisma.DbNull`, so `[]` read as "not empty" in SQL and "empty" in memory.
  */
-import { describe, it, expect, beforeAll, vi } from "vitest";
-import { cleanDatabase, getTestPrisma } from "../../setup/test-db";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 vi.mock("@/lib/db", async () => {
@@ -158,6 +158,10 @@ describe("phase agreement: stream-relation and JSON-array fields", () => {
     expect(allItems).toHaveLength(8);
   }, 60_000);
 
+  afterAll(async () => {
+    await disconnectTestDb();
+  });
+
   describe("stream language fields", () => {
     for (const field of LANG_FIELDS) {
       for (const operator of VALUE_OPS) {
@@ -182,11 +186,8 @@ describe("phase agreement: stream-relation and JSON-array fields", () => {
       const matched = await expectAgreement(
         group([rule("audioLanguage", "equals", "German", true)]),
       );
-      expect(matched).not.toContain("NoStream");
-      expect(matched).not.toContain("UnknownLang");
-      expect(matched).not.toContain("EmptyLang");
-      expect(matched).not.toContain("NullLang");
-      expect(matched).toContain("English");
+      // Only the items with a KNOWN, non-German audio language.
+      expect(matched).toEqual(["English", "TagsEmptyArray", "TagsNull"]);
     });
 
     it("a group-level NOT around a language rule agrees too", async () => {
@@ -202,7 +203,7 @@ describe("phase agreement: stream-relation and JSON-array fields", () => {
           groups: [],
         } as unknown as LifecycleRuleGroup,
       ];
-      await expectAgreement(groups);
+      expect(await expectAgreement(groups)).toEqual(["English", "TagsEmptyArray", "TagsNull"]);
     });
 
     it("codec fields keep the plain semantics (no placeholder set)", async () => {
@@ -236,26 +237,24 @@ describe("phase agreement: stream-relation and JSON-array fields", () => {
       const lower = await expectAgreement(group([rule("genre", "equals", "action")]));
       const exact = await expectAgreement(group([rule("genre", "equals", "Action")]));
       expect(lower).toEqual(exact);
-      expect(lower).toContain("English");
+      expect(lower).toEqual(["EmptyLang", "English", "NoStream", "NullLang", "UnknownLang"]);
     });
 
     it("notContains does not sweep the library", async () => {
       // The dangerous direction: SQL's case-sensitive array_contains made
       // `NOT contains "action"` true for every row, including the Action ones.
       const matched = await expectAgreement(group([rule("genre", "notContains", "action")]));
-      expect(matched).not.toContain("English");
-      expect(matched).toContain("German");
+      expect(matched).toEqual(["German", "TagsEmptyArray", "TagsNull"]);
     });
 
     it("isNull counts a stored empty array as empty", async () => {
       const matched = await expectAgreement(group([rule("genre", "isNull")]));
-      expect(matched).toEqual(expect.arrayContaining(["TagsEmptyArray", "TagsNull"]));
+      expect(matched).toEqual(["TagsEmptyArray", "TagsNull"]);
     });
 
     it("isNotNull does not count a stored empty array", async () => {
       const matched = await expectAgreement(group([rule("genre", "isNotNull")]));
-      expect(matched).not.toContain("TagsEmptyArray");
-      expect(matched).not.toContain("TagsNull");
+      expect(matched).toEqual(["EmptyLang", "English", "German", "NoStream", "NullLang", "UnknownLang"]);
     });
   });
 });

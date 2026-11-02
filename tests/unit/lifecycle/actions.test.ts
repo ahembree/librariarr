@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
-  radarrInstance: { findUnique: vi.fn() },
-  sonarrInstance: { findUnique: vi.fn() },
-  lidarrInstance: { findUnique: vi.fn() },
-  mediaItem: { findMany: vi.fn() },
+  radarrInstance: { findFirst: vi.fn() },
+  sonarrInstance: { findFirst: vi.fn() },
+  lidarrInstance: { findFirst: vi.fn() },
+  mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
+  mediaItemExternalId: { findMany: vi.fn() },
 }));
 
 const mockRadarrClient = vi.hoisted(() => ({
   getMovieByTmdbId: vi.fn(),
   deleteMovie: vi.fn(),
   updateMovie: vi.fn(),
-  addExclusion: vi.fn(),
   deleteMovieFile: vi.fn(),
   triggerMovieSearch: vi.fn(),
   getTags: vi.fn(),
@@ -19,14 +19,13 @@ const mockRadarrClient = vi.hoisted(() => ({
   deleteTag: vi.fn(),
   getMovies: vi.fn(),
   getQualityProfiles: vi.fn(),
+  removeTagsFromMovies: vi.fn(),
 }));
 
 const mockSonarrClient = vi.hoisted(() => ({
   getSeriesByTvdbId: vi.fn(),
   deleteSeries: vi.fn(),
   updateSeries: vi.fn(),
-  addExclusion: vi.fn(),
-  getEpisodeFiles: vi.fn(),
   deleteEpisodeFiles: vi.fn(),
   getEpisodes: vi.fn(),
   triggerSeriesSearch: vi.fn(),
@@ -43,8 +42,6 @@ const mockLidarrClient = vi.hoisted(() => ({
   getArtistByMusicBrainzId: vi.fn(),
   deleteArtist: vi.fn(),
   updateArtist: vi.fn(),
-  addExclusion: vi.fn(),
-  getTrackFiles: vi.fn(),
   getTracks: vi.fn(),
   getAlbums: vi.fn(),
   deleteTrackFiles: vi.fn(),
@@ -102,6 +99,10 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
 }
 
 describe("extractActionError", () => {
+  beforeEach(() => {
+    vi.mocked(axios.isAxiosError).mockReturnValue(false);
+  });
+
   it("returns message from Error instance", () => {
     expect(extractActionError(new Error("something broke"))).toBe("something broke");
   });
@@ -166,19 +167,20 @@ describe("extractActionError", () => {
 
 describe("executeAction", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(axios.isAxiosError).mockReturnValue(false);
   });
 
   it("handles DO_NOTHING action type without calling any client", async () => {
     const action = makeAction({ actionType: "DO_NOTHING", addArrTags: [], removeArrTags: [] });
-    await executeAction(action);
+    await expect(executeAction(action)).resolves.toEqual({});
+    expect(mockPrisma.radarrInstance.findFirst).not.toHaveBeenCalled();
     expect(mockRadarrClient.deleteMovie).not.toHaveBeenCalled();
     expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
   });
 
   it("executes SEARCH_RADARR — triggers a movie search without other changes", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -194,7 +196,7 @@ describe("executeAction", () => {
   });
 
   it("executes SEARCH_SONARR — triggers a series search", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -215,7 +217,7 @@ describe("executeAction", () => {
   });
 
   it("executes SEARCH_LIDARR — triggers an artist search", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -241,7 +243,7 @@ describe("executeAction", () => {
   });
 
   it("executes DELETE_RADARR action", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -260,7 +262,7 @@ describe("executeAction", () => {
   });
 
   it("executes DELETE_SONARR action", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://sonarr",
       apiKey: "key",
@@ -290,7 +292,7 @@ describe("executeAction", () => {
   });
 
   it("logs the item by the title its caller named it, never the episode it is stored against", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({ id: 2, title: "Breaking Bad", tvdbId: 81189, tags: [] });
@@ -317,7 +319,7 @@ describe("executeAction", () => {
     // because the symmetric year guard compared the episode air year (2019) to
     // the series premiere year (2017). The series titles match, so the deletion
     // must proceed.
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -341,7 +343,7 @@ describe("executeAction", () => {
   it("DELETE_SONARR still aborts when the resolved series premiered well after our episode", async () => {
     // Wrong external id pointing at a newer same-named reboot: our episode aired
     // 2010 but Sonarr resolved a series that premiered 2020 — refuse to delete.
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -362,8 +364,8 @@ describe("executeAction", () => {
     expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
   });
 
-  it("executes UNMONITOR_RADARR with import exclusion", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+  it("executes UNMONITOR_RADARR", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -376,14 +378,13 @@ describe("executeAction", () => {
       tags: [],
     });
 
-    await executeAction(makeAction({ actionType: "UNMONITOR_RADARR", addImportExclusion: true }));
+    await executeAction(makeAction({ actionType: "UNMONITOR_RADARR" }));
 
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false });
-    expect(mockRadarrClient.addExclusion).toHaveBeenCalledWith(12345, "Test Movie", 2024);
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false }, expect.objectContaining({ id: 1 }));
   });
 
   it("executes UNMONITOR_DELETE_FILES_RADARR with search after delete", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -403,13 +404,13 @@ describe("executeAction", () => {
       searchAfterAction: true,
     }));
 
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false });
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false }, expect.objectContaining({ id: 1 }));
     expect(mockRadarrClient.deleteMovieFile).toHaveBeenCalledWith(99);
     expect(mockRadarrClient.triggerMovieSearch).toHaveBeenCalledWith(1);
   });
 
   it("executes DELETE_LIDARR action", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://lidarr",
       apiKey: "key",
@@ -438,18 +439,76 @@ describe("executeAction", () => {
     expect(mockLidarrClient.deleteArtist).toHaveBeenCalledWith(5, true, false);
   });
 
+  describe("DELETE_LIDARR when the library holds the artist title under other MusicBrainz ids", () => {
+    const lidarrArtist = { id: 5, artistName: "Nirvana", foreignArtistId: "mb-a", tags: [] };
+    const deleteAction = () =>
+      makeAction({
+        actionType: "DELETE_LIDARR",
+        mediaItem: {
+          id: "item1",
+          title: "Nirvana",
+          parentTitle: "Nirvana",
+          year: null,
+          externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-a" }],
+        },
+      });
+
+    beforeEach(() => {
+      mockPrisma.lidarrInstance.findFirst.mockResolvedValue({ id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true });
+      mockPrisma.mediaItem.findUnique.mockResolvedValue({ libraryId: "lib1", parentTitle: "Nirvana" });
+      mockLidarrClient.deleteArtist.mockClear();
+    });
+
+    it("refuses when another id resolves to the same Lidarr artist (one artist, two ids)", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([{ externalId: "mb-old" }]);
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async () => lidarrArtist);
+
+      await expect(executeAction(deleteAction())).rejects.toThrow(/same artist/);
+      expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaItemExternalId.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            source: "MUSICBRAINZ",
+            externalId: { not: "mb-a" },
+            mediaItem: { libraryId: "lib1", type: "MUSIC", parentTitle: "Nirvana" },
+          },
+        }),
+      );
+    });
+
+    it("deletes when the other id is a different artist", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([{ externalId: "mb-b" }]);
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async (id: string) =>
+        id === "mb-b" ? { ...lidarrArtist, id: 9, foreignArtistId: "mb-b" } : lidarrArtist,
+      );
+
+      await executeAction(deleteAction());
+      expect(mockLidarrClient.deleteArtist).toHaveBeenCalledWith(5, true, false);
+    });
+
+    it("refuses when the title carries more ids than it checks", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue(
+        Array.from({ length: 11 }, (_, i) => ({ externalId: `mb-${i}` })),
+      );
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async () => lidarrArtist);
+
+      await expect(executeAction(deleteAction())).rejects.toThrow(/more than 10/);
+      expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+    });
+  });
+
   it("throws when arr instance is not configured", async () => {
     const action = makeAction({ arrInstanceId: null });
     await expect(executeAction(action)).rejects.toThrow("No Arr instance configured");
   });
 
   it("throws when arr instance is not found", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
     await expect(executeAction(makeAction())).rejects.toThrow("Radarr instance not found");
   });
 
   it("throws when arr instance is disabled", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -459,7 +518,7 @@ describe("executeAction", () => {
   });
 
   it("throws when external ID is missing", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -472,7 +531,7 @@ describe("executeAction", () => {
   });
 
   it("executes tag operations before main action", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
       apiKey: "key",
@@ -487,19 +546,24 @@ describe("executeAction", () => {
     mockRadarrClient.getTags.mockResolvedValue([{ id: 1, label: "existing" }]);
     mockRadarrClient.createTag.mockResolvedValue({ id: 2, label: "new-tag" });
     mockRadarrClient.updateMovie.mockResolvedValue({});
+    mockRadarrClient.deleteMovie.mockResolvedValue(undefined);
 
     await executeAction(makeAction({
-      actionType: "DO_NOTHING",
+      actionType: "DELETE_RADARR",
       addArrTags: ["new-tag"],
       removeArrTags: ["existing"],
     }));
 
     expect(mockRadarrClient.createTag).toHaveBeenCalledWith("new-tag");
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { tags: [2] });
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { tags: [2] }, expect.objectContaining({ id: 1 }));
+    expect(mockRadarrClient.deleteMovie).toHaveBeenCalledWith(1, true, false);
+    expect(mockRadarrClient.updateMovie.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRadarrClient.deleteMovie.mock.invocationCallOrder[0],
+    );
   });
 
   it("executes MONITOR_DELETE_FILES_RADARR — re-monitors then deletes files", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -509,12 +573,12 @@ describe("executeAction", () => {
 
     await executeAction(makeAction({ actionType: "MONITOR_DELETE_FILES_RADARR" }));
 
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: true });
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: true }, expect.objectContaining({ id: 1 }));
     expect(mockRadarrClient.deleteMovieFile).toHaveBeenCalledWith(99);
   });
 
   it("executes DELETE_FILES_RADARR — only deletes files, no monitor change", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -530,7 +594,7 @@ describe("executeAction", () => {
   });
 
   it("executes UNMONITOR_DELETE_FILES_SONARR with matched episode IDs", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -557,10 +621,12 @@ describe("executeAction", () => {
       },
     });
 
-    await executeAction(action);
+    const outcome = await executeAction(action);
 
-    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
+    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false }, expect.objectContaining({ id: 2 }));
     expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+    // E03 (file 12) did not match and is left alone.
+    expect(outcome).toEqual({ deletedMemberIds: ["ep1", "ep2"] });
   });
 
   describe("Sonarr episode-file correlation", () => {
@@ -576,7 +642,7 @@ describe("executeAction", () => {
       });
 
     beforeEach(() => {
-      mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
         id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
       });
       mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -630,9 +696,10 @@ describe("executeAction", () => {
         { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 2, airDate: "2019-01-08" },
       ]);
 
-      await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep30", "ep2"]));
+      const outcome = await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep30", "ep2"]));
 
       expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([2]);
+      expect(outcome.deletedMemberIds).toEqual(["ep2"]);
     });
 
     it("fails rather than reporting success when no matched episode exists in Sonarr", async () => {
@@ -663,7 +730,7 @@ describe("executeAction", () => {
 
       await executeAction(sonarrAction("MONITOR_DELETE_FILES_SONARR", ["ep1"], { searchAfterAction: true }));
 
-      expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: true });
+      expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: true }, expect.objectContaining({ id: 2 }));
       expect(mockSonarrClient.setEpisodesMonitored).toHaveBeenCalledWith([501], true);
       expect(order).toEqual(["delete", "monitor"]);
       expect(mockSonarrClient.triggerEpisodeSearch).toHaveBeenCalledWith([501]);
@@ -686,7 +753,7 @@ describe("executeAction", () => {
   });
 
   it("executes CHANGE_QUALITY_PROFILE_RADARR when current profile differs", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -698,12 +765,12 @@ describe("executeAction", () => {
       targetQualityProfileId: 7,
     }));
 
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 });
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 }, expect.objectContaining({ id: 1 }));
     expect(mockRadarrClient.triggerMovieSearch).not.toHaveBeenCalled();
   });
 
   it("triggers a Radarr search after CHANGE_QUALITY_PROFILE_RADARR when searchAfterAction is true", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -716,12 +783,12 @@ describe("executeAction", () => {
       searchAfterAction: true,
     }));
 
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 });
+    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { qualityProfileId: 7 }, expect.objectContaining({ id: 1 }));
     expect(mockRadarrClient.triggerMovieSearch).toHaveBeenCalledWith(1);
   });
 
   it("does NOT trigger a Radarr search when CHANGE_QUALITY_PROFILE_RADARR is skipped as no-op", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -739,7 +806,7 @@ describe("executeAction", () => {
   });
 
   it("skips CHANGE_QUALITY_PROFILE_RADARR when item already on target profile", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -761,7 +828,7 @@ describe("executeAction", () => {
     // silently succeeding). The persistence of targetQualityProfileId on
     // the FAILED row is covered at the route level — here we just verify
     // the executor surfaces the underlying Arr error verbatim.
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -784,7 +851,7 @@ describe("executeAction", () => {
   });
 
   it("throws on CHANGE_QUALITY_PROFILE_RADARR without target profile", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     await expect(executeAction(makeAction({
@@ -794,7 +861,7 @@ describe("executeAction", () => {
   });
 
   it("executes CHANGE_QUALITY_PROFILE_SONARR when current profile differs", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -812,12 +879,12 @@ describe("executeAction", () => {
 
     await executeAction(action);
 
-    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 });
+    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 }, expect.objectContaining({ id: 2 }));
     expect(mockSonarrClient.triggerSeriesSearch).not.toHaveBeenCalled();
   });
 
   it("triggers a Sonarr search after CHANGE_QUALITY_PROFILE_SONARR when searchAfterAction is true", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -834,12 +901,12 @@ describe("executeAction", () => {
       },
     }));
 
-    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 });
+    expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 }, expect.objectContaining({ id: 2 }));
     expect(mockSonarrClient.triggerSeriesSearch).toHaveBeenCalledWith(2);
   });
 
   it("skips CHANGE_QUALITY_PROFILE_SONARR when item already on target profile", async () => {
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
     });
     mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
@@ -861,7 +928,7 @@ describe("executeAction", () => {
   });
 
   it("executes CHANGE_QUALITY_PROFILE_LIDARR when current profile differs", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -879,12 +946,12 @@ describe("executeAction", () => {
 
     await executeAction(action);
 
-    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 });
+    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 }, expect.objectContaining({ id: 5 }));
     expect(mockLidarrClient.triggerArtistSearch).not.toHaveBeenCalled();
   });
 
   it("triggers a Lidarr search after CHANGE_QUALITY_PROFILE_LIDARR when searchAfterAction is true", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -901,12 +968,12 @@ describe("executeAction", () => {
       },
     }));
 
-    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 });
+    expect(mockLidarrClient.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 6 }, expect.objectContaining({ id: 5 }));
     expect(mockLidarrClient.triggerArtistSearch).toHaveBeenCalledWith(5);
   });
 
   it("skips CHANGE_QUALITY_PROFILE_LIDARR when item already on target profile", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -928,7 +995,7 @@ describe("executeAction", () => {
   });
 
   it("DELETE_FILES_LIDARR deletes ONLY the matched track's file, not the whole artist", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -949,7 +1016,7 @@ describe("executeAction", () => {
       { id: 3, albumId: 11, trackFileId: 103, title: "Song One", hasFile: true },
     ]);
 
-    await executeAction(makeAction({
+    const outcome = await executeAction(makeAction({
       actionType: "DELETE_FILES_LIDARR",
       matchedMediaItemIds: ["track-1"],
       mediaItem: {
@@ -958,9 +1025,9 @@ describe("executeAction", () => {
       },
     }));
 
-    // Only the matched track's file is deleted; the whole-artist getTrackFiles
-    // path is never used and deleteArtist is never called.
+    // Only the matched track's file is deleted; deleteArtist is never called.
     expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
+    expect(outcome.deletedMemberIds).toEqual(["track-1"]);
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
 
@@ -979,7 +1046,7 @@ describe("executeAction", () => {
     });
 
     beforeEach(() => {
-      mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+      mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
         id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
       });
       mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -1060,7 +1127,7 @@ describe("executeAction", () => {
   // --- onStep sub-step reporting (drives the query-page action progress bar) ---
 
   it("reports 'Updating tags' then the main-action label (with → search) to onStep", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -1086,7 +1153,7 @@ describe("executeAction", () => {
   });
 
   it("reports only the main-action label to onStep when there are no tag ops", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -1101,11 +1168,11 @@ describe("executeAction", () => {
   });
 
   it("reports only 'Updating tags' for a DO_NOTHING tag-only action (no main step)", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
       id: 1, title: "Test Movie", tmdbId: 12345, tags: [],
     });
@@ -1122,7 +1189,7 @@ describe("executeAction", () => {
   });
 
   it("does not append '→ search' for a dedicated SEARCH action", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://radarr", apiKey: "key", enabled: true,
     });
     mockRadarrClient.getMovieByTmdbId.mockResolvedValue({
@@ -1135,8 +1202,8 @@ describe("executeAction", () => {
     expect(steps).toEqual(["Search for New Copy (Radarr)"]);
   });
 
-  it("DELETE_FILES_LIDARR refuses to delete when no matched track correlates to a Lidarr file", async () => {
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+  it("DELETE_FILES_LIDARR deletes nothing when its track no longer exists", async () => {
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
     mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
@@ -1147,7 +1214,7 @@ describe("executeAction", () => {
     mockLidarrClient.getAlbums.mockResolvedValue([]);
     mockLidarrClient.getTracks.mockResolvedValue([]);
 
-    await executeAction(makeAction({
+    const outcome = await executeAction(makeAction({
       actionType: "DELETE_FILES_LIDARR",
       matchedMediaItemIds: [],
       mediaItem: {
@@ -1156,7 +1223,13 @@ describe("executeAction", () => {
       },
     }));
 
+    // A track-scope action names no members: its own item is the track.
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["item1"] }, type: "MUSIC" } }),
+    );
     // Conservative: skip rather than wipe the whole artist.
+    expect(outcome.deletedMemberIds).toEqual([]);
+    expect(mockLidarrClient.getTracks).not.toHaveBeenCalled();
     expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
@@ -1164,21 +1237,21 @@ describe("executeAction", () => {
 
 describe("cleanupArrTags", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("does nothing when tagLabels is empty", async () => {
     await cleanupArrTags("arr1", "MOVIE", []);
-    expect(mockPrisma.radarrInstance.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.radarrInstance.findFirst).not.toHaveBeenCalled();
   });
 
   it("removes tags from Radarr movies and deletes the tag", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue({
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({
       url: "http://radarr",
       apiKey: "key",
     });
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
     mockRadarrClient.getTags.mockResolvedValue([
       { id: 1, label: "lifecycle" },
       { id: 2, label: "other" },
@@ -1187,21 +1260,21 @@ describe("cleanupArrTags", () => {
       { id: 10, tags: [1, 2] },
       { id: 11, tags: [2] },
     ]);
-    mockRadarrClient.updateMovie.mockResolvedValue({});
+    mockRadarrClient.removeTagsFromMovies.mockResolvedValue(undefined);
     mockRadarrClient.deleteTag.mockResolvedValue(undefined);
 
     await cleanupArrTags("arr1", "MOVIE", ["lifecycle"]);
 
-    // Movie 10 has tag 1 removed, movie 11 unaffected
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(10, { tags: [2] });
-    expect(mockRadarrClient.updateMovie).toHaveBeenCalledTimes(1);
+    // Movie 10 has tag 1 removed through the bulk editor; movie 11 is not sent.
+    expect(mockRadarrClient.removeTagsFromMovies).toHaveBeenCalledWith([10], [1]);
+    expect(mockRadarrClient.updateMovie).not.toHaveBeenCalled();
     expect(mockRadarrClient.deleteTag).toHaveBeenCalledWith(1);
   });
 
   it("throws when arr instance is not found", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
 
     await expect(cleanupArrTags("arr1", "MOVIE", ["tag"])).rejects.toThrow(
       "Arr instance not found",

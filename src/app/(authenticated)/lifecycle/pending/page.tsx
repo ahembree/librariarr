@@ -1,73 +1,55 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
-import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Film,
   Inbox,
   LayoutGrid,
   Loader2,
-  Music,
   Play,
   RotateCcw,
   ShieldOff,
   TableProperties,
   Trash2,
-  Tv,
   XCircle,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useChipColors } from "@/components/chip-color-provider";
+import { type ChipColorCategory } from "@/lib/theme/chip-colors";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
+import { useCardSize } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
 import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { MetadataLine } from "@/components/metadata-line";
-import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { TabNav } from "@/components/tab-nav";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import type { MediaItemWithRelations } from "@/lib/types";
-import { useRealtime } from "@/hooks/use-realtime";
+import { PageHeader } from "@/components/page-header";
+import { LoadingButton } from "@/components/loading-button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
+import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
+import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
+import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
+import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
+import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
+import { useSetState } from "@/hooks/use-set-state";
 
 interface ActionItem {
   id: string;
@@ -98,6 +80,7 @@ interface ActionItem {
     resolution?: string | null;
     dynamicRange?: string | null;
     audioProfile?: string | null;
+    audioCodec?: string | null;
     fileSize?: string | null;
     genres?: string[] | null;
     studio?: string | null;
@@ -143,6 +126,24 @@ const STATUS_COLORS: Record<string, string> = {
   FAILED: "bg-red/20 text-red border-red/30",
 };
 
+type ActionMediaItem = ActionItem["mediaItem"];
+
+/** How a row names its item: the show or artist with the member's own title. */
+function actionItemTitle(mi: ActionMediaItem): string {
+  return mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title;
+}
+
+/** The hover popover's fields, the same in the table and the card view. */
+function actionHoverContent(mi: ActionMediaItem, withImage: boolean) {
+  return (
+    <MediaHoverPopover
+      imageUrl={withImage ? `/api/media/${mi.id}/image${mi.type !== "MOVIE" ? "?type=parent" : ""}` : undefined}
+      imageAspect={mi.type === "MUSIC" ? "square" : "poster"}
+      data={hoverDataFromListItem(mi, { title: actionItemTitle(mi) })}
+    />
+  );
+}
+
 /* ---------- Virtualized action table for a single group ---------- */
 
 function VirtualizedActionTable({
@@ -163,10 +164,10 @@ function VirtualizedActionTable({
   items: ActionItem[];
   ruleSetId: string;
   isPending: boolean;
-  executingItems: Set<string>;
-  retryingItems: Set<string>;
-  excludingItems: Set<string>;
-  exceptedItemIds: Set<string>;
+  executingItems: ReadonlySet<string>;
+  retryingItems: ReadonlySet<string>;
+  excludingItems: ReadonlySet<string>;
+  exceptedItemIds: ReadonlySet<string>;
   onExecuteItem: (ruleSetId: string, mediaItemId: string) => void;
   onRemoveAction: (id: string) => void;
   onRetryAction: (action: ActionItem) => void;
@@ -175,7 +176,7 @@ function VirtualizedActionTable({
   isDeletedRuleSet?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [expandedErrors, { toggle: toggleError }] = useSetState<string>();
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -231,14 +232,12 @@ function VirtualizedActionTable({
                     <div>
                       <p className="font-medium inline-flex items-center gap-1.5">
                         {hasMediaItem && exceptedItemIds.has(action.mediaItem.id!) && (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
-                              </TooltipTrigger>
-                              <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                            </TooltipTrigger>
+                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                          </Tooltip>
                         )}
                         {action.mediaItem.title}
                       </p>
@@ -258,9 +257,7 @@ function VirtualizedActionTable({
                         {formatActionTypeLabel(action.actionType, action.targetQualityProfileId)}
                       </p>
                       {action.addImportExclusion && (
-                        <Badge variant="outline" className="text-[10px]">
-                          + List exclusion
-                        </Badge>
+                        <ColorChip className="bg-muted/40 text-muted-foreground">+ List exclusion</ColorChip>
                       )}
                       {action.addArrTags?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -318,15 +315,7 @@ function VirtualizedActionTable({
                             className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setExpandedErrors((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(action.id)) {
-                                  next.delete(action.id);
-                                } else {
-                                  next.add(action.id);
-                                }
-                                return next;
-                              });
+                              toggleError(action.id);
                             }}
                           >
                             {expandedErrors.has(action.id) ? "Show less" : "Show more"}
@@ -407,35 +396,7 @@ function VirtualizedActionTable({
                     {tableRow}
                   </HoverCardTrigger>
                   <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-72 p-0 duration-200">
-                    <MediaHoverPopover
-                      imageUrl={`/api/media/${action.mediaItem.id}/image${action.mediaItem.type !== "MOVIE" ? "?type=parent" : ""}`}
-                      imageAspect={action.mediaItem.type === "MUSIC" ? "square" : "poster"}
-                      data={{
-                        title: action.mediaItem.parentTitle
-                          ? `${action.mediaItem.parentTitle} — ${action.mediaItem.title}`
-                          : action.mediaItem.title,
-                        year: action.mediaItem.year,
-                        summary: action.mediaItem.summary,
-                        contentRating: action.mediaItem.contentRating,
-                        rating: action.mediaItem.rating,
-                        audienceRating: action.mediaItem.audienceRating,
-                        ratingImage: action.mediaItem.ratingImage,
-                        audienceRatingImage: action.mediaItem.audienceRatingImage,
-                        duration: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.duration,
-                        resolution: action.mediaItem.resolution,
-                        dynamicRange: action.mediaItem.dynamicRange,
-                        audioProfile: action.mediaItem.audioProfile,
-                        fileSize: action.mediaItem.fileSize,
-                        genres: action.mediaItem.genres,
-                        studio: action.mediaItem.studio,
-                        playCount: action.mediaItem.playCount,
-                        lastPlayedAt: action.mediaItem.lastPlayedAt,
-                        addedAt: action.mediaItem.addedAt,
-                        episodeCount: action.mediaItem.type === "SERIES" ? action.mediaItem.matchedEpisodes ?? undefined : undefined,
-                        trackCount: action.mediaItem.type === "MUSIC" ? action.mediaItem.matchedEpisodes ?? undefined : undefined,
-                        servers: action.mediaItem.servers,
-                      }}
-                    />
+                    {actionHoverContent(action.mediaItem, true)}
                   </HoverCardContent>
                 </HoverCard>
               );
@@ -452,8 +413,74 @@ function VirtualizedActionTable({
 
 /* ---------- Card grid for a single group ---------- */
 
-const CARD_GAP = 16;
-const CARD_CONTENT_HEIGHT = 128;
+const actionKey = (action: ActionItem) => action.id;
+
+interface PendingActionCardProps {
+  action: ActionItem;
+  isMusic: boolean;
+  isMovie: boolean;
+  priority: boolean;
+  excepted: boolean;
+  onItemClick: (action: ActionItem) => void;
+  getHex: (category: ChipColorCategory, value: string) => string;
+}
+
+/**
+ * One action's card, memoised on what it shows: the grid re-renders on every
+ * virtualizer range change, and the card's metadata and hover content are
+ * new elements each time.
+ */
+const PendingActionCard = memo(function PendingActionCard({
+  action,
+  isMusic,
+  isMovie,
+  priority,
+  excepted,
+  onItemClick,
+  getHex,
+}: PendingActionCardProps) {
+  const mi = action.mediaItem;
+  return (
+    <div className="relative">
+      {excepted && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+        </Tooltip>
+      )}
+      <MediaCard
+        imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
+        title={actionItemTitle(mi)}
+        fallbackIcon={isMovie ? "movie" : isMusic ? "music" : "series"}
+        aspectRatio={isMusic ? "square" : "poster"}
+        priority={priority}
+        prefetchMediaId={mi.id ?? undefined}
+        onClick={() => onItemClick(action)}
+        hoverContent={actionHoverContent(mi, false)}
+        metadata={
+          <MetadataLine>
+            {mi.year && <span>{mi.year}</span>}
+            {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
+            {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
+          </MetadataLine>
+        }
+        qualityBar={
+          // A grouped row's own values are one episode's or track's.
+          mi.matchedEpisodes ? undefined : qualitySegments(qualityChips(mi, isMusic ? "music" : "video"), getHex)
+        }
+        badges={
+          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+            {STATUS_LABELS[action.status] ?? action.status}
+          </ColorChip>
+        }
+      />
+    </div>
+  );
+});
 
 function PendingActionCardGrid({
   items,
@@ -463,176 +490,72 @@ function PendingActionCardGrid({
 }: {
   items: ActionItem[];
   ruleSetType: string;
+  /** Stable: the cards are memoised on it. */
   onItemClick: (action: ActionItem) => void;
-  exceptedItemIds: Set<string>;
+  exceptedItemIds: ReadonlySet<string>;
 }) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { columns: actualColumns } = useCardSize();
+  const { columns } = useCardSize();
+  const { getHex } = useChipColors();
   const isMusic = ruleSetType === "MUSIC";
   const isMovie = ruleSetType === "MOVIE";
-  const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
-  const aspectRatio = isMusic ? "square" as const : "poster" as const;
 
   const filteredItems = useMemo(
     () => items.filter((a) => a.mediaItem.id !== null),
     [items],
   );
 
-  const rowCount = useMemo(
-    () => (filteredItems.length > 0 ? Math.ceil(filteredItems.length / actualColumns) : 0),
-    [filteredItems.length, actualColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const container = scrollContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * (isMusic ? 1 : 1.5);
-    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + CARD_GAP);
-  }, [actualColumns, isMusic]);
-
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize,
+  const grid = useVirtualPosterGrid({
+    count: filteredItems.length,
+    columns,
+    aspect: isMusic ? SQUARE_ASPECT : POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "own",
     overscan: 5,
   });
 
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const virtualRows = virtualizer.getVirtualItems();
+  const renderCard = useCallback(
+    (action: ActionItem, { priority }: GridCardContext) => (
+      <PendingActionCard
+        action={action}
+        isMusic={isMusic}
+        isMovie={isMovie}
+        priority={priority}
+        excepted={exceptedItemIds.has(action.mediaItem.id!)}
+        onItemClick={onItemClick}
+        getHex={getHex}
+      />
+    ),
+    [isMusic, isMovie, exceptedItemIds, onItemClick, getHex],
+  );
 
   return (
-    <div ref={scrollContainerRef} className="md:max-h-[60dvh] overflow-y-auto">
-      <div
-        style={{
-          height: virtualizer.getTotalSize(),
-          width: "100%",
-          position: "relative",
-        }}
-      >
-        {virtualRows.map((virtualRow) => {
-          const rowStart = virtualRow.index * actualColumns;
-          const rowItems = filteredItems.slice(rowStart, rowStart + actualColumns);
-          return (
-            <div
-              key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                paddingBottom: CARD_GAP,
-                transform: `translateY(${virtualRow.start}px)`,
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gap: `${CARD_GAP}px`,
-                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                }}
-              >
-                {rowItems.map((action) => {
-                  const mi = action.mediaItem;
-                  return (
-                    <div key={action.id} className="relative">
-                      {exceptedItemIds.has(mi.id!) && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-                                <ShieldOff className="h-3.5 w-3.5 text-white" />
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <MediaCard
-                        imageUrl={`/api/media/${mi.id}/image${!isMovie ? "?type=parent" : ""}`}
-                        title={mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title}
-                        fallbackIcon={fallbackIcon}
-                        aspectRatio={aspectRatio}
-                        onClick={() => onItemClick(action)}
-                        hoverContent={
-                          <MediaHoverPopover
-                            imageAspect={aspectRatio}
-                            data={{
-                              title: mi.parentTitle ? `${mi.parentTitle} — ${mi.title}` : mi.title,
-                              year: mi.year,
-                              summary: mi.summary,
-                              contentRating: mi.contentRating,
-                              rating: mi.rating,
-                              audienceRating: mi.audienceRating,
-                              ratingImage: mi.ratingImage,
-                              audienceRatingImage: mi.audienceRatingImage,
-                              duration: mi.matchedEpisodes ? undefined : mi.duration,
-                              resolution: mi.resolution,
-                              dynamicRange: mi.dynamicRange,
-                              audioProfile: mi.audioProfile,
-                              fileSize: mi.fileSize,
-                              genres: mi.genres,
-                              studio: mi.studio,
-                              playCount: mi.playCount,
-                              lastPlayedAt: mi.lastPlayedAt,
-                              addedAt: mi.addedAt,
-                              episodeCount: mi.type === "SERIES" ? mi.matchedEpisodes ?? undefined : undefined,
-                              trackCount: mi.type === "MUSIC" ? mi.matchedEpisodes ?? undefined : undefined,
-                              servers: mi.servers,
-                            }}
-                          />
-                        }
-                        metadata={
-                          <MetadataLine>
-                            {mi.year && <span>{mi.year}</span>}
-                            {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
-                            {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
-                          </MetadataLine>
-                        }
-                        badges={
-                          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
-                            {STATUS_LABELS[action.status] ?? action.status}
-                          </ColorChip>
-                        }
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <VirtualCardGrid
+      grid={grid}
+      items={filteredItems}
+      getKey={actionKey}
+      renderItem={renderCard}
+      className="md:max-h-[60dvh] overflow-y-auto"
+    />
   );
 }
 
 /* ---------- Main page ---------- */
 
-type MediaTypeTab = "all" | "movies" | "series" | "music";
+const ruleSetOfGroup = (g: RuleSetGroup) => g.ruleSet;
 
-const MEDIA_TYPE_TABS: TabNavItem<MediaTypeTab>[] = [
-  { value: "all", label: "All" },
-  { value: "movies", label: "Movies", icon: Film },
-  { value: "series", label: "Series", icon: Tv },
-  { value: "music", label: "Music", icon: Music },
-];
+// Detection is what CREATES pending actions, and an execute removes them and
+// moves the deletion stats: the listing and the stats card above it re-read
+// on both, so the two halves of this page never disagree.
+const PENDING_EVENTS = ["lifecycle:action-executed", "lifecycle:detection-completed"] as const;
 
-const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
-  all: null,
-  movies: "MOVIE",
-  series: "SERIES",
-  music: "MUSIC",
-};
+/** The execute route's announcement of the run this page asked for. */
+const isOwnExecute = (result: { executed?: unknown; failed?: unknown }) => (data: Record<string, unknown>) =>
+  data.manual === true && data.executed === result.executed && data.failed === result.failed;
 
 export default function PendingActionsPage() {
-  const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
   const [groups, setGroups] = useState<RuleSetGroup[]>([]);
+  const { tab: mediaTypeTab, setTab: setMediaTypeTab, filtered: filteredGroups } =
+    useRuleSetTypeFilter(groups, ruleSetOfGroup);
   const [loading, setLoading] = useState(true);
   const { health: integrationsHealth } = useIntegrationsHealth();
   const arrInstanceIds = useMemo<readonly string[]>(
@@ -646,25 +569,13 @@ export default function PendingActionsPage() {
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const { size: cardSize, setSize: setCardSize } = useCardSize();
-  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
-  const [executingRules, setExecutingRules] = useState<Set<string>>(new Set());
-  const [executingItems, setExecutingItems] = useState<Set<string>>(new Set());
+  const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
+  const [executingRules, executingRuleActions] = useSetState<string>();
+  const [executingItems, executingItemActions] = useSetState<string>();
   const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
-  // Media detail panel state
-  const [selected, setSelected] = useState<{
-    item: MediaItemWithRelations;
-    type: "MOVIE" | "SERIES" | "MUSIC";
-    title?: string;
-  } | null>(null);
-  const [, setLoadingDetail] = useState(false);
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-pending-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Deletion stats
   const [deletionStats, setDeletionStats] = useState<{
@@ -703,10 +614,6 @@ export default function PendingActionsPage() {
     fetchDeletionStats();
   }, [fetchDeletionStats]);
 
-  // Refresh stats when actions are executed or detection runs (pending changes)
-  useRealtime("lifecycle:action-executed", fetchDeletionStats);
-  useRealtime("lifecycle:detection-completed", fetchDeletionStats);
-
   const handleResetStats = async () => {
     setResettingStats(true);
     try {
@@ -725,12 +632,6 @@ export default function PendingActionsPage() {
     }
   };
 
-  const filteredGroups = useMemo(() => {
-    const typeFilter = TAB_TO_TYPE[mediaTypeTab];
-    if (!typeFilter) return groups;
-    return groups.filter((g) => g.ruleSet.type === typeFilter);
-  }, [groups, mediaTypeTab]);
-
   // Per-rule-set stats lookup
   const ruleSetStatsMap = useMemo(() => {
     const map = new Map<string, { deletedBytes: string; deletedCount: number; pendingBytes: string; pendingCount: number }>();
@@ -743,41 +644,36 @@ export default function PendingActionsPage() {
     return map;
   }, [deletionStats?.byRuleSet]);
 
+  // Only the latest request may write. The Pending listing is the slow one
+  // (it estimates rows for matches without an action), so switching to
+  // Completed while it loaded let it land second and fill the Completed tab
+  // with pending rows — without their Execute buttons, which follow the tab.
+  const actionsReqToken = useRef(0);
   const fetchActions = useCallback(async () => {
+    const token = ++actionsReqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({ status: statusFilter });
       const response = await fetch(`/api/lifecycle/actions?${params}`);
       const data = await response.json();
+      if (token !== actionsReqToken.current) return;
       setGroups(data.groups || []);
     } catch (error) {
       console.error("Failed to fetch actions:", error);
     } finally {
-      setLoading(false);
+      if (token === actionsReqToken.current) setLoading(false);
     }
   }, [statusFilter]);
 
-  useRealtime("lifecycle:action-executed", fetchActions);
-  // Detection is what CREATES pending actions. Without this the stats card
-  // above the table refreshed on a detection run and the table itself did not,
-  // so the two halves of this page disagreed.
-  useRealtime("lifecycle:detection-completed", fetchActions);
+  const refreshPage = useCallback(
+    () => Promise.all([fetchActions(), fetchDeletionStats()]),
+    [fetchActions, fetchDeletionStats],
+  );
+  const pageRefetch = useRealtimeRefetch(PENDING_EVENTS, refreshPage);
 
   useEffect(() => {
     fetchActions();
   }, [fetchActions]);
-
-  const toggleExpand = (ruleSetId: string) => {
-    setExpandedRules((prev) => {
-      const next = new Set(prev);
-      if (next.has(ruleSetId)) {
-        next.delete(ruleSetId);
-      } else {
-        next.add(ruleSetId);
-      }
-      return next;
-    });
-  };
 
   const removeAction = async (id: string) => {
     try {
@@ -809,7 +705,7 @@ export default function PendingActionsPage() {
     if (!action) return;
     setConfirmRetryAction(null);
 
-    setRetryingItems((prev) => new Set(prev).add(action.id));
+    retryingActions.add(action.id);
     try {
       const params = retrySkipTitle ? "?skipTitleValidation=true" : "";
       const response = await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
@@ -827,22 +723,23 @@ export default function PendingActionsPage() {
       console.error("Failed to retry action:", error);
       toast.error("Retry failed");
     } finally {
-      setRetryingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(action.id);
-        return next;
-      });
+      retryingActions.remove(action.id);
     }
   };
 
+  // Execute All and a row's Execute re-read the listing and the stats when
+  // they answer. The route announces a run that executed or failed anything
+  // with `lifecycle:action-executed`, whose re-read is the one kept when it
+  // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
   const executeAll = async (ruleSetId: string) => {
     setConfirmExecuteRuleSetId(null);
-    setExecutingRules((prev) => new Set(prev).add(ruleSetId));
+    executingRuleActions.add(ruleSetId);
     setExecuteResults((prev) => {
       const next = { ...prev };
       delete next[ruleSetId];
       return next;
     });
+    const ticket = pageRefetch.begin();
     try {
       const response = await fetch("/api/lifecycle/actions/execute", {
         method: "POST",
@@ -869,25 +766,25 @@ export default function PendingActionsPage() {
         }));
         toast.error(data.error || "Failed to execute actions");
       }
-      await fetchActions();
-      void fetchDeletionStats();
+      await ticket.settle({
+        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
+        isOwn: isOwnExecute(data),
+      });
     } catch (error) {
       setExecuteResults((prev) => ({
         ...prev,
         [ruleSetId]: { executed: 0, failed: 0, errors: [String(error)] },
       }));
     } finally {
-      setExecutingRules((prev) => {
-        const next = new Set(prev);
-        next.delete(ruleSetId);
-        return next;
-      });
+      ticket.cancel();
+      executingRuleActions.remove(ruleSetId);
     }
   };
 
   const executeItem = async (ruleSetId: string, mediaItemId: string) => {
     const key = `${ruleSetId}:${mediaItemId}`;
-    setExecutingItems((prev) => new Set(prev).add(key));
+    executingItemActions.add(key);
+    const ticket = pageRefetch.begin();
     try {
       const response = await fetch("/api/lifecycle/actions/execute", {
         method: "POST",
@@ -904,123 +801,68 @@ export default function PendingActionsPage() {
       } else {
         toast.success("Action executed");
       }
-      await fetchActions();
-      void fetchDeletionStats();
+      await ticket.settle({
+        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
+        isOwn: isOwnExecute(data),
+      });
     } catch (error) {
       console.error("Failed to execute item:", error);
       toast.error("Failed to execute action");
     } finally {
-      setExecutingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
+      ticket.cancel();
+      executingItemActions.remove(key);
     }
   };
 
-  // Track which items have lifecycle exceptions
-  const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
-
-  const fetchExceptions = useCallback(async () => {
-    try {
-      const response = await fetch("/api/lifecycle/exceptions");
-      if (response.ok) {
-        const data = await response.json();
-        setExceptedItemIds(new Set((data.exceptions || []).map((e: { mediaItem: { id: string } }) => e.mediaItem.id)));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchExceptions();
-  }, [fetchExceptions]);
-
-  const [retryingItems, setRetryingItems] = useState<Set<string>>(new Set());
-  const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());
+  // Which items have lifecycle exceptions, and filing new ones.
+  const { exceptedIds: exceptedItemIds, excludingIds: excludingItems, exclude } =
+    useLifecycleExceptions({ announce: true });
+  const [retryingItems, retryingActions] = useSetState<string>();
   const [excludePromptAction, setExcludePromptAction] = useState<ActionItem | null>(null);
-  const [excludeReason, setExcludeReason] = useState("");
 
   const confirmExclude = async (action: ActionItem, reason: string) => {
     if (!action.mediaItem.id) return;
-    const mediaItemId = action.mediaItem.id;
-    setExcludingItems((prev) => new Set(prev).add(mediaItemId));
-    try {
-      const response = await fetch("/api/lifecycle/exceptions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaItemId, reason: reason || undefined }),
-      });
-      if (response.ok) {
-        setExceptedItemIds((prev) => new Set(prev).add(mediaItemId));
-        await fetchActions();
-        void fetchDeletionStats();
-        toast.success("Excluded from lifecycle actions", { description: action.mediaItem.title });
-      } else {
-        const data = await response.json().catch(() => ({}));
-        toast.error("Couldn't exclude item", { description: data.error });
-      }
-    } catch (error) {
-      console.error("Failed to exclude item:", error);
-      toast.error("Couldn't exclude item");
-    } finally {
-      setExcludingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(mediaItemId);
-        return next;
-      });
-    }
+    // Filing an exception emits no event, so the page re-reads by itself.
+    if (!(await exclude(action.mediaItem.id, { reason, label: action.mediaItem.title }))) return;
+    await fetchActions();
+    void fetchDeletionStats();
   };
 
   const excludeItem = (action: ActionItem) => {
-    setExcludeReason("");
     setExcludePromptAction(action);
   };
 
-  const openDetailPanel = async (action: ActionItem) => {
-    const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((action: ActionItem) => {
     if (!action.mediaItem.id) return;
-    setLoadingDetail(true);
-    try {
-      const response = await fetch(`/api/media/${action.mediaItem.id}`);
-      if (response.ok) {
-        const data = await response.json();
-        const item = data.item ?? data;
-        // For series/music with aggregated data, overlay series-level values
-        // so the detail panel shows totals instead of single-episode data
-        if (action.mediaItem.matchedEpisodes) {
-          item.fileSize = action.mediaItem.fileSize ? BigInt(action.mediaItem.fileSize) : item.fileSize;
-          item.playCount = action.mediaItem.playCount ?? item.playCount;
-          item.lastPlayedAt = action.mediaItem.lastPlayedAt ?? item.lastPlayedAt;
-          item.matchedEpisodes = action.mediaItem.matchedEpisodes;
-          // Use series title instead of episode title
-          if (item.parentTitle) {
-            item.title = item.parentTitle;
-            item.parentTitle = null;
-          }
-        }
-        // A series action is named as its row names it — the show, or
-        // "<Show> SxxExx" for an action on one episode — not by the episode it
-        // is stored against.
-        setSelected({ item, type: mediaType, title: mediaType === "SERIES" ? action.mediaItem.title : undefined });
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    } finally {
-      setLoadingDetail(false);
-    }
-  };
+    const mediaType = toDetailPanelMediaType(action.mediaItem.type);
+    void openPanel({
+      id: action.mediaItem.id,
+      mediaType,
+      group: groupOfRow(action.mediaItem),
+      // A series action is named as its row names it — the show, or
+      // "<Show> SxxExx" for an action on one episode — not by the episode it
+      // is stored against.
+      title: mediaType === "SERIES" ? action.mediaItem.title : undefined,
+      label: action.mediaItem.parentTitle
+        ? `${action.mediaItem.parentTitle} - ${action.mediaItem.title}`
+        : action.mediaItem.title,
+    });
+  }, [openPanel]);
 
   const isPending = statusFilter === "PENDING";
+  const confirmExecuteGroup = confirmExecuteRuleSetId
+    ? groups.find((g) => g.ruleSet.id === confirmExecuteRuleSetId)
+    : undefined;
 
   return (
-    <>
+    <TooltipProvider>
       <div className="p-4 sm:p-6 lg:p-8 overflow-auto h-full">
-        <div className="mb-6">
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Pending Actions</h1>
-          <p className="text-muted-foreground mt-1">Scheduled lifecycle actions awaiting execution, grouped by rule set.</p>
-        </div>
+        <PageHeader
+          className="mb-6"
+          title="Pending Actions"
+          description="Scheduled lifecycle actions awaiting execution, grouped by rule set."
+        />
 
         {/* Integration connectivity warning — pending actions that depend on Arr will fail until reachable */}
         <div className="mb-6">
@@ -1077,27 +919,25 @@ export default function PendingActionsPage() {
               )}
             </div>
             <div className="ml-auto">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={(e) => { e.stopPropagation(); setConfirmResetStats(true); }}
-                      disabled={resettingStats}
-                    >
-                      <RotateCcw className={`h-3.5 w-3.5 ${resettingStats ? "animate-spin" : ""}`} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Reset deletion stats</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => { e.stopPropagation(); setConfirmResetStats(true); }}
+                    disabled={resettingStats}
+                  >
+                    <RotateCcw className={`h-3.5 w-3.5 ${resettingStats ? "animate-spin" : ""}`} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reset deletion stats</TooltipContent>
+              </Tooltip>
             </div>
           </div>
         )}
 
-        <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
+        <TabNav tabs={LIFECYCLE_MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
         {/* Status filter + view toggle */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -1155,307 +995,179 @@ export default function PendingActionsPage() {
               const isExecuting = executingRules.has(group.ruleSet.id);
               const result = executeResults[group.ruleSet.id];
 
+              // Per-rule deletion stats — contextual to active tab
+              const rs = ruleSetStatsMap.get(group.ruleSet.id);
+              const showPending = statusFilter === "PENDING" || statusFilter === "ALL";
+              const showDeleted = statusFilter !== "PENDING";
+              const stats =
+                rs && ((showPending && rs.pendingCount > 0) || (showDeleted && rs.deletedCount > 0)) ? (
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    {showPending && rs.pendingCount > 0 && (
+                      <span>
+                        <span className="text-amber">{formatFileSize(rs.pendingBytes)}</span> pending
+                      </span>
+                    )}
+                    {showDeleted && rs.deletedCount > 0 && (
+                      <span>
+                        {formatFileSize(rs.deletedBytes)} deleted ({rs.deletedCount})
+                      </span>
+                    )}
+                  </div>
+                ) : null;
+
               return (
-                <Card key={group.ruleSet.id}>
-                  <CardHeader
-                    className="cursor-pointer"
-                    onClick={() => toggleExpand(group.ruleSet.id)}
-                  >
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex min-w-0 items-center gap-3">
-                        {isExpanded ? (
-                          <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
-                        )}
-                        <div className="min-w-0">
-                          <CardTitle className="text-lg">
-                            {group.ruleSet.name}
-                            {group.ruleSet.deleted && (
-                              <span className="ml-2 text-sm font-normal text-muted-foreground">(Deleted)</span>
-                            )}
-                          </CardTitle>
-                          <div className="flex flex-wrap items-center gap-2 mt-1">
-                            <ColorChip className={MEDIA_TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
-                              {mediaTypeLabel(group.ruleSet.type)}
-                            </ColorChip>
-                            <Badge variant="secondary">
-                              {group.count} item{group.count !== 1 && "s"}
-                            </Badge>
-                            {group.ruleSet.actionType && (
-                              <span className="text-xs text-muted-foreground">
-                                Action: {formatActionTypeLabel(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}
+                <RuleSetGroupCard
+                  key={group.ruleSet.id}
+                  ruleSet={group.ruleSet}
+                  countLabel={`${group.count} item${group.count !== 1 ? "s" : ""}`}
+                  expanded={isExpanded}
+                  onToggle={() => toggleExpand(group.ruleSet.id)}
+                  meta={stats}
+                  actions={
+                    // Execute All button (only for PENDING filter, not for deleted rule sets)
+                    isPending && group.count > 0 && !group.ruleSet.deleted ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {result && (
+                          <span className="text-xs">
+                            {result.failed === 0 ? (
+                              <span className="text-green flex items-center gap-1">
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                {result.executed} executed
+                              </span>
+                            ) : (
+                              <span className="text-yellow-500 flex items-center gap-1">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                {result.executed} ok, {result.failed} failed
                               </span>
                             )}
-                            {(group.ruleSet.addArrTags?.length > 0 || group.ruleSet.removeArrTags?.length > 0) && (
-                              <div className="flex flex-wrap gap-1">
-                                {group.ruleSet.addArrTags?.map((tag) => (
-                                  <ColorChip
-                                    key={`add-${tag}`}
-                                    className="bg-green/20 text-green border-green/30"
-                                  >
-                                    +{tag}
-                                  </ColorChip>
-                                ))}
-                                {group.ruleSet.removeArrTags?.map((tag) => (
-                                  <ColorChip
-                                    key={`rm-${tag}`}
-                                    className="bg-red/20 text-red border-red/30"
-                                  >
-                                    -{tag}
-                                  </ColorChip>
-                                ))}
-                              </div>
-                            )}
-                            {/* Per-rule deletion stats — contextual to active tab */}
-                            {(() => {
-                              const rs = ruleSetStatsMap.get(group.ruleSet.id);
-                              if (!rs || (rs.deletedCount === 0 && rs.pendingCount === 0)) return null;
-                              const showPending = statusFilter === "PENDING" || statusFilter === "ALL";
-                              const showDeleted = statusFilter !== "PENDING";
-                              if ((!showPending || rs.pendingCount === 0) && (!showDeleted || rs.deletedCount === 0)) return null;
-                              return (
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  {showPending && rs.pendingCount > 0 && (
-                                    <span>
-                                      <span className="text-amber">{formatFileSize(rs.pendingBytes)}</span> pending
-                                    </span>
-                                  )}
-                                  {showDeleted && rs.deletedCount > 0 && (
-                                    <span>
-                                      {formatFileSize(rs.deletedBytes)} deleted ({rs.deletedCount})
-                                    </span>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Execute All button (only for PENDING filter, not for deleted rule sets) */}
-                      {isPending && group.count > 0 && !group.ruleSet.deleted && (
-                        <div
-                          className="flex shrink-0 flex-wrap items-center gap-2 pl-8 sm:pl-0"
-                          onClick={(e) => e.stopPropagation()}
+                          </span>
+                        )}
+                        <LoadingButton
+                          size="sm"
+                          variant="default"
+                          onClick={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
+                          loading={isExecuting}
+                          icon={Play}
+                          iconClassName="h-4 w-4 mr-1"
                         >
-                          {result && (
-                            <span className="text-xs">
-                              {result.failed === 0 ? (
-                                <span className="text-green flex items-center gap-1">
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                  {result.executed} executed
-                                </span>
-                              ) : (
-                                <span className="text-yellow-500 flex items-center gap-1">
-                                  <AlertTriangle className="h-3.5 w-3.5" />
-                                  {result.executed} ok, {result.failed} failed
-                                </span>
-                              )}
-                            </span>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
-                            disabled={isExecuting}
-                          >
-                            {isExecuting ? (
-                              <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                            ) : (
-                              <Play className="h-4 w-4 mr-1" />
-                            )}
-                            {isExecuting ? "Executing..." : "Execute All"}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </CardHeader>
-
-                  {isExpanded && group.items.length > 0 && (
-                    <CardContent>
-                      {viewMode === "table" ? (
-                        <VirtualizedActionTable
-                          items={group.items}
-                          ruleSetId={group.ruleSet.id}
-                          isPending={isPending}
-                          executingItems={executingItems}
-                          retryingItems={retryingItems}
-                          excludingItems={excludingItems}
-                          exceptedItemIds={exceptedItemIds}
-                          onExecuteItem={executeItem}
-                          onRemoveAction={removeAction}
-                          onRetryAction={(action) => retryAction(action)}
-                          onExclude={excludeItem}
-                          onItemClick={openDetailPanel}
-                          isDeletedRuleSet={group.ruleSet.deleted}
-                        />
-                      ) : (
-                        <PendingActionCardGrid
-                          items={group.items}
-                          ruleSetType={group.ruleSet.type}
-                          onItemClick={openDetailPanel}
-                          exceptedItemIds={exceptedItemIds}
-                        />
-                      )}
-                    </CardContent>
+                          {isExecuting ? "Executing..." : "Execute All"}
+                        </LoadingButton>
+                      </div>
+                    ) : undefined
+                  }
+                >
+                  {group.items.length > 0 ? (
+                    viewMode === "table" ? (
+                      <VirtualizedActionTable
+                        items={group.items}
+                        ruleSetId={group.ruleSet.id}
+                        isPending={isPending}
+                        executingItems={executingItems}
+                        retryingItems={retryingItems}
+                        excludingItems={excludingItems}
+                        exceptedItemIds={exceptedItemIds}
+                        onExecuteItem={executeItem}
+                        onRemoveAction={removeAction}
+                        onRetryAction={(action) => retryAction(action)}
+                        onExclude={excludeItem}
+                        onItemClick={openDetailPanel}
+                        isDeletedRuleSet={group.ruleSet.deleted}
+                      />
+                    ) : (
+                      <PendingActionCardGrid
+                        items={group.items}
+                        ruleSetType={group.ruleSet.type}
+                        onItemClick={openDetailPanel}
+                        exceptedItemIds={exceptedItemIds}
+                      />
+                    )
+                  ) : (
+                    <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                      <Inbox className="h-4 w-4" />
+                      No items in this group.
+                    </p>
                   )}
-
-                  {isExpanded && group.items.length === 0 && (
-                    <CardContent>
-                      <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
-                        <Inbox className="h-4 w-4" />
-                        No items in this group.
-                      </p>
-                    </CardContent>
-                  )}
-                </Card>
+                </RuleSetGroupCard>
               );
             })}
           </div>
         )}
 
         {/* Execute All confirmation dialog */}
-        <AlertDialog
+        <ConfirmDialog
           open={!!confirmExecuteRuleSetId}
           onOpenChange={(open) => { if (!open) setConfirmExecuteRuleSetId(null); }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Execute All Actions</AlertDialogTitle>
-              <AlertDialogDescription>
-                {(() => {
-                  const group = groups.find((g) => g.ruleSet.id === confirmExecuteRuleSetId);
-                  if (!group) return "Are you sure?";
-                  return `This will immediately execute ${formatActionTypeLabel(group.ruleSet.actionType ?? "DO_NOTHING", group.ruleSet.targetQualityProfileId)} on ${group.count} item${group.count !== 1 ? "s" : ""} for "${group.ruleSet.name}". This action cannot be undone.`;
-                })()}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  if (confirmExecuteRuleSetId) executeAll(confirmExecuteRuleSetId);
-                }}
-              >
-                Execute
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          title="Execute All Actions"
+          description={
+            confirmExecuteGroup
+              ? `This will immediately execute ${formatActionTypeLabel(confirmExecuteGroup.ruleSet.actionType ?? "DO_NOTHING", confirmExecuteGroup.ruleSet.targetQualityProfileId)} on ${confirmExecuteGroup.count} item${confirmExecuteGroup.count !== 1 ? "s" : ""} for "${confirmExecuteGroup.ruleSet.name}". This action cannot be undone.`
+              : "Are you sure?"
+          }
+          confirmLabel="Execute"
+          onConfirm={() => {
+            if (confirmExecuteRuleSetId) void executeAll(confirmExecuteRuleSetId);
+          }}
+        />
 
         {/* Reset deletion stats confirmation */}
-        <AlertDialog open={confirmResetStats} onOpenChange={setConfirmResetStats}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Reset Deletion Stats</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will reset the deletion stats counter. Historical action records will not be affected — only the stats display will start counting from now.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={handleResetStats} disabled={resettingStats}>
-                {resettingStats ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Reset
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ConfirmDialog
+          open={confirmResetStats}
+          onOpenChange={setConfirmResetStats}
+          title="Reset Deletion Stats"
+          description="This will reset the deletion stats counter. Historical action records will not be affected — only the stats display will start counting from now."
+          confirmLabel="Reset"
+          pending={resettingStats}
+          onConfirm={handleResetStats}
+        />
 
         {/* Force retry confirmation dialog */}
-        <AlertDialog
+        <ConfirmDialog
           open={!!confirmRetryAction}
           onOpenChange={(open) => { if (!open) setConfirmRetryAction(null); }}
+          title="Force Retry Action"
+          description={
+            <>
+              Retry {formatActionTypeLabel(confirmRetryAction?.actionType ?? "", confirmRetryAction?.targetQualityProfileId)} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
+            </>
+          }
+          confirmLabel="Retry"
+          onConfirm={() => {
+            void executeRetry();
+          }}
         >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Force Retry Action</AlertDialogTitle>
-              <AlertDialogDescription asChild>
-                <div className="space-y-3">
-                  <p>
-                    Retry {formatActionTypeLabel(confirmRetryAction?.actionType ?? "", confirmRetryAction?.targetQualityProfileId)} for &quot;{confirmRetryAction?.mediaItem.title}&quot;?
+          {confirmRetryAction?.error?.includes("title mismatch") && (() => {
+            const arrTitleMatch = confirmRetryAction.error?.match(/Arr returned "([^"]+)"/);
+            return (
+              <div className="space-y-2">
+                {arrTitleMatch && (
+                  <p className="text-sm text-yellow-500">
+                    Arr title: &quot;{arrTitleMatch[1]}&quot;
                   </p>
-                  {confirmRetryAction?.error?.includes("title mismatch") && (() => {
-                    const arrTitleMatch = confirmRetryAction.error?.match(/Arr returned "([^"]+)"/);
-                    return (
-                      <div className="space-y-2">
-                        {arrTitleMatch && (
-                          <p className="text-sm text-yellow-500">
-                            Arr title: &quot;{arrTitleMatch[1]}&quot;
-                          </p>
-                        )}
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <Checkbox
-                            checked={retrySkipTitle}
-                            onCheckedChange={(checked) => setRetrySkipTitle(checked === true)}
-                          />
-                          <span className="text-sm">Skip title validation check</span>
-                        </label>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={executeRetry}>
-                Retry
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+                )}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={retrySkipTitle}
+                    onCheckedChange={(checked) => setRetrySkipTitle(checked === true)}
+                  />
+                  <span className="text-sm">Skip title validation check</span>
+                </label>
+              </div>
+            );
+          })()}
+        </ConfirmDialog>
       </div>
 
-      {selected && (
-        <MediaDetailSidePanel
-          item={selected.item}
-          mediaType={selected.type}
-          title={selected.title}
-          onClose={() => setSelected(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
-      {/* Exclude reason prompt */}
-      <Dialog open={!!excludePromptAction} onOpenChange={(open) => { if (!open) setExcludePromptAction(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Exclude from lifecycle actions</DialogTitle>
-            <DialogDescription>
-              &quot;{excludePromptAction?.mediaItem.parentTitle
-                ? `${excludePromptAction.mediaItem.parentTitle} — ${excludePromptAction.mediaItem.title}`
-                : excludePromptAction?.mediaItem.title}&quot; will be excluded from all lifecycle rules. Optionally provide a reason.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            placeholder="Reason (optional)"
-            value={excludeReason}
-            onChange={(e) => setExcludeReason(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && excludePromptAction) {
-                setExcludePromptAction(null);
-                confirmExclude(excludePromptAction, excludeReason);
-              }
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setExcludePromptAction(null)}>
-              Cancel
-            </Button>
-            <Button onClick={() => {
-              if (excludePromptAction) {
-                setExcludePromptAction(null);
-                confirmExclude(excludePromptAction, excludeReason);
-              }
-            }}>
-              Exclude
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+      <ExcludeReasonDialog
+        itemLabel={excludePromptAction ? actionItemTitle(excludePromptAction.mediaItem) : null}
+        onCancel={() => setExcludePromptAction(null)}
+        onConfirm={(reason) => {
+          const action = excludePromptAction;
+          setExcludePromptAction(null);
+          if (action) void confirmExclude(action, reason);
+        }}
+      />
+    </TooltipProvider>
   );
 }

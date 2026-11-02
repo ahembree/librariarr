@@ -1,8 +1,9 @@
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
+import { normalizeArtistTitle } from "@/lib/media/artist-key";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
-export interface CollapsibleItem {
+interface CollapsibleItem {
   id: string;
   parentTitle: string | null;
   seriesKey?: string | null;
@@ -20,7 +21,7 @@ function recordKey(type: MediaType, item: CollapsibleItem): string {
   const arrId = item.externalIds.find((e) => e.source === source)?.externalId;
   if (arrId) return `${source}:${arrId}`;
   if (type === "SERIES") return `series:${item.seriesKey ?? (item.parentTitle ?? "").trim().toLowerCase()}`;
-  if (type === "MUSIC") return `artist:${(item.parentTitle ?? "").trim().toLowerCase()}`;
+  if (type === "MUSIC") return `artist:${normalizeArtistTitle(item.parentTitle ?? "")}`;
   return `id:${item.id}`;
 }
 
@@ -38,13 +39,14 @@ function recordKey(type: MediaType, item: CollapsibleItem): string {
  * The first item of a record represents it. For shows and artists its members
  * become the union of the group's members (an item with none stands for
  * itself), so a member-scoped file delete still acts on every selected episode
- * or track, in one call.
+ * or track, in one call. `recordKeys` maps each kept item to its record, so a
+ * multi-batch run can tell a record an earlier batch already acted on.
  */
 export function collapseActionItems<T extends CollapsibleItem>(
   type: MediaType,
   items: T[],
   members: Map<string, string[]>,
-): { items: T[]; members: Map<string, string[]> } {
+): { items: T[]; members: Map<string, string[]>; recordKeys: Map<string, string> } {
   const groups = new Map<string, T[]>();
   for (const item of items) {
     const key = recordKey(type, item);
@@ -52,9 +54,11 @@ export function collapseActionItems<T extends CollapsibleItem>(
   }
   const kept: T[] = [];
   const keptMembers = new Map<string, string[]>();
-  for (const group of groups.values()) {
+  const recordKeys = new Map<string, string>();
+  for (const [key, group] of groups) {
     const [first] = group;
     kept.push(first);
+    recordKeys.set(first.id, key);
     if (type === "MOVIE") {
       const own = members.get(first.id);
       if (own) keptMembers.set(first.id, own);
@@ -64,5 +68,5 @@ export function collapseActionItems<T extends CollapsibleItem>(
     for (const item of group) for (const m of members.get(item.id) ?? [item.id]) union.add(m);
     keptMembers.set(first.id, [...union]);
   }
-  return { items: kept, members: keptMembers };
+  return { items: kept, members: keptMembers, recordKeys };
 }

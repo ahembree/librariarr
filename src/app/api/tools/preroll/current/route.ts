@@ -1,17 +1,12 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { PlexClient } from "@/lib/plex/client";
 import { isUnreachable } from "@/lib/media-server/health-cache";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const server = await prisma.mediaServer.findFirst({
-    where: { userId: session.userId!, type: "PLEX", enabled: true },
+    where: { userId: session.userId, type: "PLEX", enabled: true },
     select: { url: true, accessToken: true, tlsSkipVerify: true },
   });
 
@@ -32,4 +27,4 @@ export async function GET() {
   } catch {
     return NextResponse.json({ currentPreroll: "", available: false });
   }
-}
+});

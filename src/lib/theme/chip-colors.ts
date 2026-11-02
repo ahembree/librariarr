@@ -34,6 +34,8 @@ export const DEFAULT_CHIP_COLORS: ChipColorMap = {
     "Dolby Vision": "#a855f7",
     "HDR10+": "#f59e0b",
     HDR10: "#3b82f6",
+    // What the sync stores for an HDR stream it cannot name more exactly.
+    HDR: "#0ea5e9",
     HLG: "#22c55e",
     SDR: "#71717a",
   },
@@ -70,7 +72,7 @@ export const AUDIO_CODEC_ORDER = [
 
 // ── Palette of selectable colors ──────────────────────────────────
 
-export interface ColorPreset {
+interface ColorPreset {
   name: string;
   hex: string;
 }

@@ -55,7 +55,7 @@ interface ManagedConnection {
   lastBridgedConnected?: boolean;
 }
 
-export interface RealtimeStatusEntry {
+interface RealtimeStatusEntry {
   serverId: string;
   name: string;
   type: MediaServerType;

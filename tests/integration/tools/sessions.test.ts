@@ -35,10 +35,12 @@ vi.mock("@/lib/plex/client", () => ({
 // Import route handlers AFTER mocks
 import { logger } from "@/lib/logger";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
-import { invalidateSessionListings } from "@/lib/media-server/session-listing-cache";
 import { runAsApiKey, type ApiKeyPrincipal } from "@/lib/api-keys/principal";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
+import { _resetSessionsSnapshot } from "@/app/api/tools/sessions/snapshot";
+import { realtimeBus } from "@/lib/media-server/realtime/bus";
+import { eventBus } from "@/lib/events/event-bus";
 
 /** Just the termination lines — other logger.info calls must not shift them. */
 function terminationLogLines(): string[] {
@@ -58,12 +60,14 @@ describe("Tools sessions endpoints", () => {
     clearMockSession();
     vi.clearAllMocks();
     _resetFirstSeen();
-    invalidateSessionListings();
+    // The shared poll would otherwise answer this test with the last one's.
+    _resetSessionsSnapshot();
     mockGetSessions.mockResolvedValue([
       {
         sessionId: "s1",
         userId: "u1",
         username: "user1",
+        userThumb: "",
         title: "Movie",
         type: "movie",
         player: {
@@ -98,14 +102,15 @@ describe("Tools sessions endpoints", () => {
 
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
       const body = await expectJson<{ sessions: unknown[] }>(response, 200);
-      expect(body.sessions).toEqual([]);
+      expect(body).toEqual({ sessions: [], unreachableServers: [] });
     });
 
     it("returns sessions from Plex servers", async () => {
       const user = await createTestUser();
-      await createTestServer(user.id, { name: "Test Plex" });
+      const server = await createTestServer(user.id, { name: "Test Plex" });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
+      const before = Date.now();
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
       const body = await expectJson<{
         sessions: {
@@ -114,16 +119,112 @@ describe("Tools sessions endpoints", () => {
           title: string;
           serverId: string;
           serverName: string;
+          serverType: string;
           startedAt: number;
         }[];
+        unreachableServers: unknown[];
       }>(response, 200);
 
       expect(body.sessions).toHaveLength(1);
-      expect(body.sessions[0].sessionId).toBe("s1");
-      expect(body.sessions[0].username).toBe("user1");
-      expect(body.sessions[0].title).toBe("Movie");
-      expect(body.sessions[0].serverName).toBe("Test Plex");
-      expect(body.sessions[0].startedAt).toBeDefined();
+      expect(body.sessions[0]).toMatchObject({
+        sessionId: "s1",
+        username: "user1",
+        title: "Movie",
+        serverId: server.id,
+        serverName: "Test Plex",
+        serverType: "PLEX",
+      });
+      // First seen during this request.
+      expect(body.sessions[0].startedAt).toBeGreaterThanOrEqual(before);
+      expect(body.sessions[0].startedAt).toBeLessThanOrEqual(Date.now());
+      expect(body.unreachableServers).toEqual([]);
+    });
+
+    it("keeps a session's first-seen time across refreshes", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const t0 = new Date("2030-01-01T20:00:00Z").getTime();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(t0);
+        await callRoute(GET, { url: "/api/tools/sessions" });
+        vi.setSystemTime(t0 + 60_000);
+        // A fresh poll of the server, not the shared one from a moment ago.
+        _resetSessionsSnapshot();
+        const second = await expectJson<{ sessions: { startedAt: number }[] }>(
+          await callRoute(GET, { url: "/api/tools/sessions" }),
+          200,
+        );
+
+        // A manual refresh a minute later must not reset the displayed duration.
+        expect(second.sessions[0].startedAt).toBe(t0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("shares one poll of the servers between reads a moment apart", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const [a, b] = await Promise.all([
+        callRoute(GET, { url: "/api/tools/sessions" }),
+        callRoute(GET, { url: "/api/tools/sessions" }),
+      ]);
+      await callRoute(GET, { url: "/api/tools/sessions" });
+      expect(mockGetSessions).toHaveBeenCalledTimes(1);
+      expect(await b.json()).toEqual(await a.json());
+    });
+
+    it("polls again after a pushed session change, a server change or a termination", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const read = () => callRoute(GET, { url: "/api/tools/sessions" });
+
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(1);
+
+      realtimeBus.emit({ kind: "session-changed", serverId: server.id, serverType: "PLEX", at: Date.now() });
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(2);
+
+      realtimeBus.emit({ kind: "server-status", serverId: server.id, serverType: "PLEX", at: Date.now(), connected: false } as never);
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(3);
+
+      eventBus.emit({ type: "server:changed", userId: user.id });
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(4);
+
+      mockGetSessions.mockResolvedValueOnce([]);
+      await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+      });
+      // The refresh the Stream Manager makes right after shows the session gone.
+      const after = await expectJson<{ sessions: unknown[] }>(await read(), 200);
+      expect(after.sessions).toEqual([]);
+      expect(mockGetSessions).toHaveBeenCalledTimes(5);
+    });
+
+    it("does not keep a poll whose server list could not be read", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const prisma = (await import("../../setup/test-db")).getTestPrisma();
+      const findMany = vi.spyOn(prisma.mediaServer, "findMany").mockRejectedValueOnce(new Error("db down"));
+      try {
+        await expect(callRoute(GET, { url: "/api/tools/sessions" })).rejects.toThrow("db down");
+        const body = await expectJson<{ sessions: unknown[] }>(await callRoute(GET, { url: "/api/tools/sessions" }), 200);
+        expect(body.sessions).toHaveLength(1);
+      } finally {
+        findMany.mockRestore();
+      }
     });
 
     it("aggregates sessions from multiple servers", async () => {
@@ -166,83 +267,40 @@ describe("Tools sessions endpoints", () => {
       });
 
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
-      const body = await expectJson<{ sessions: unknown[] }>(response, 200);
+      const body = await expectJson<{
+        sessions: { serverName: string }[];
+        unreachableServers: { name: string; type: string }[];
+      }>(response, 200);
 
-      // Should still return sessions from the good server
+      // Should still return sessions from the good server, and name the other
+      // (the two are asked in the order the database lists them).
       expect(body.sessions).toHaveLength(1);
+      expect(body.unreachableServers).toHaveLength(1);
+      expect(body.unreachableServers[0].type).toBe("PLEX");
+      expect([body.sessions[0].serverName, body.unreachableServers[0].name].sort()).toEqual([
+        "Bad Server",
+        "Good Server",
+      ]);
     });
   });
 
   // Through `/api/v1/tools/sessions` the route runs under an API-key principal
-  // (the guard sets it and the session mock mirrors the real `getSession`).
-  // A key may send 600 requests a minute, each a round trip per server, so
-  // its answer comes from a short per-server cache; the UI's cookie requests
-  // do not, since they refetch on a pushed `session-changed` event.
+  // (the guard sets it and the session mock mirrors the real `getSession`). A
+  // key may send 600 requests a minute, each once a round trip per server; it
+  // reads through the same shared poll as every other reader.
   describe("GET /api/tools/sessions under an API key", () => {
-    const asKey = <T,>(userId: string, fn: () => Promise<T>): Promise<T> => {
-      const principal: ApiKeyPrincipal = { keyId: "k1", userId, name: "poller", prefix: "lbr_abcdef", scopes: ["streams:read"] };
-      return runAsApiKey(principal, fn);
-    };
-
-    it("asks each server once within the cache window, not once per request", async () => {
+    it("shares one poll of the servers between reads a moment apart", async () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Server 1" });
       await createTestServer(user.id, { name: "Server 2" });
+      const principal: ApiKeyPrincipal = { keyId: "k1", userId: user.id, name: "poller", prefix: "lbr_abcdef", scopes: ["streams:read"] };
 
       for (let i = 0; i < 5; i++) {
-        const response = await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" }));
+        const response = await runAsApiKey(principal, () => callRoute(GET, { url: "/api/v1/tools/sessions" }));
         const body = await expectJson<{ sessions: unknown[] }>(response, 200);
         expect(body.sessions).toHaveLength(2);
       }
       expect(mockGetSessions).toHaveBeenCalledTimes(2);
-    });
-
-    it("asks again on every cookie request — the UI refetches on a pushed change", async () => {
-      const user = await createTestUser();
-      await createTestServer(user.id, { name: "Server 1" });
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      for (let i = 0; i < 3; i++) {
-        await expectJson(await callRoute(GET, { url: "/api/tools/sessions" }), 200);
-      }
-      expect(mockGetSessions).toHaveBeenCalledTimes(3);
-    });
-
-    it("remembers an unreachable server for the window, and asks again after a termination there", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id, { name: "Server 1" });
-
-      mockGetSessions.mockRejectedValueOnce(new Error("Connection refused"));
-      let body = await expectJson<{ sessions: unknown[]; unreachableServers: unknown[] }>(
-        await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })),
-        200,
-      );
-      expect(body.unreachableServers).toHaveLength(1);
-
-      // Still reported unreachable, without another connection attempt.
-      body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
-      expect(body.unreachableServers).toHaveLength(1);
-      expect(mockGetSessions).toHaveBeenCalledTimes(1);
-
-      // Stopping a stream there drops what is remembered: the next reads ask
-      // the server — every one of them for a while, since a server still
-      // reports a just-stopped stream for a moment — which now reports
-      // nothing playing.
-      mockGetSessions.mockResolvedValue([]);
-      const stop = await asKey(user.id, () =>
-        callRoute(POST, {
-          url: "/api/v1/tools/sessions/terminate",
-          method: "POST",
-          body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
-        }),
-      );
-      await expectJson(stop, 200);
-      for (let i = 0; i < 2; i++) {
-        body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
-        expect(body.sessions).toHaveLength(0);
-        expect(body.unreachableServers).toHaveLength(0);
-      }
-      expect(mockGetSessions).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -268,8 +326,41 @@ describe("Tools sessions endpoints", () => {
         method: "POST",
         body: { serverId: "all" },
       });
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual([expect.stringMatching(/^message: /)]);
+      expect(mockTerminateSession).not.toHaveBeenCalled();
+    });
+
+    it("refuses explicit session ids with serverId \"all\"", async () => {
+      // Session ids mean something only to the server that issued them.
+      const user = await createTestUser();
+      await createTestServer(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: "all", sessionIds: ["s1"], message: "Bye" },
+      });
+      expect(await expectJson(response, 400)).toEqual({ error: 'Cannot specify sessionIds when serverId is "all"' });
+      expect(mockTerminateSession).not.toHaveBeenCalled();
+    });
+
+    it("refuses a session id that is not a single path segment", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["../System/Shutdown?x="], message: "Bye" },
+      });
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual([expect.stringMatching(/^sessionIds\.0: /)]);
+      expect(mockTerminateSession).not.toHaveBeenCalled();
     });
 
     it("terminates specific sessions on a server", async () => {
@@ -311,6 +402,29 @@ describe("Tools sessions endpoints", () => {
       // Each server has one session (from mock), both terminated
       expect(body.terminated).toBe(2);
       expect(body.errors).toEqual([]);
+      expect(mockTerminateSession).toHaveBeenCalledTimes(2);
+      expect(mockTerminateSession).toHaveBeenCalledWith("s1", "Shutting down");
+    });
+
+    it("reports a server whose sessions could not be listed when terminating all", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Down", url: "http://10.0.0.9:32400" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      mockGetSessions.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.9:32400"));
+
+      const response = await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: "all", message: "Shutting down" },
+      });
+      const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
+
+      // The private address is scrubbed from the reported error.
+      expect(body).toEqual({
+        terminated: 0,
+        errors: ['Failed to connect to server "Down": Error: connect ECONNREFUSED [internal]:32400'],
+      });
+      expect(mockTerminateSession).not.toHaveBeenCalled();
     });
 
     it("reports errors when termination fails", async () => {
@@ -332,8 +446,9 @@ describe("Tools sessions endpoints", () => {
       const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
 
       expect(body.terminated).toBe(0);
-      expect(body.errors).toHaveLength(1);
-      expect(body.errors[0]).toContain("(session s1)");
+      expect(body.errors).toEqual([
+        'Failed to terminate session for "unknown user" on "Test Server" — unknown media (session s1): Error: Network error',
+      ]);
     });
 
     it("logs the username, media title and reason for each termination", async () => {
@@ -460,27 +575,25 @@ describe("Tools sessions endpoints", () => {
       const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
 
       expect(body.terminated).toBe(0);
-      expect(body.errors[0]).toContain(
-        'Failed to terminate session for "alice" on "My Plex" — Arrival (2016) (session s1)'
-      );
+      expect(body.errors).toEqual([
+        'Failed to terminate session for "alice" on "My Plex" — Arrival (2016) (session s1): Error: Network error',
+      ]);
     });
 
-    it("answers 404 for a server that is unknown, disabled or another user's", async () => {
+    it("answers 404 for a server that is unknown or disabled", async () => {
       // It answered 200 `{ terminated: 0, errors: [] }` — what a server with
       // nothing playing answers — so a mistyped id read as success.
       const user = await createTestUser();
-      const other = await createTestUser({ plexId: "other-plex-id", username: "other" });
       const disabled = await createTestServer(user.id, { name: "Off", enabled: false });
-      const foreign = await createTestServer(other.id, { name: "Theirs" });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id, foreign.id]) {
+      for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id]) {
         const response = await callRoute(POST, {
           url: "/api/tools/sessions/terminate",
           method: "POST",
           body: { serverId, sessionIds: ["s1"], message: "Test" },
         });
-        await expectJson(response, 404);
+        expect(await expectJson(response, 404)).toEqual({ error: "Server not found" });
       }
       expect(mockTerminateSession).not.toHaveBeenCalled();
     });

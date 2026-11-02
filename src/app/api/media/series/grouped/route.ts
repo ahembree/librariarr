@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import type { ServerPresence } from "@/lib/dedup/deduplicate";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import type { Prisma } from "@/generated/prisma/client";
 
 interface SeriesGroupRow {
   group_key: string;
@@ -108,7 +114,12 @@ function parseConditions(raw: string | null, logic: string): ((val: number) => b
     : (val) => fns.every((fn) => fn(val));
 }
 
-/** Parse a date filter (min/max range or "last N days") into a predicate */
+/**
+ * Parse a date filter (min/max range or "last N days") into a predicate. Days
+ * are UTC calendar days, as `applyCommonFilters` reads them for All Seasons and
+ * every flat list: local midnight put a show played on the bound's own day
+ * outside it on a server west of UTC.
+ */
 function parseDateFilter(
   params: URLSearchParams,
   minKey: string,
@@ -119,9 +130,8 @@ function parseDateFilter(
   if (daysStr) {
     const days = parseInt(daysStr);
     if (isNaN(days) || days <= 0) return null;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    since.setHours(0, 0, 0, 0);
+    const since = new Date(Date.now() - days * 86_400_000);
+    since.setUTCHours(0, 0, 0, 0);
     return (val) => val != null && val >= since;
   }
   const minStr = params.get(minKey);
@@ -129,7 +139,7 @@ function parseDateFilter(
   if (!minStr && !maxStr) return null;
   const minDate = minStr ? new Date(minStr) : null;
   const maxDate = maxStr ? new Date(maxStr) : null;
-  if (maxDate) maxDate.setHours(23, 59, 59, 999);
+  if (maxDate) maxDate.setUTCHours(23, 59, 59, 999);
   return (val) => {
     if (val == null) return false;
     if (minDate && val < minDate) return false;
@@ -147,6 +157,16 @@ interface SeriesItem {
   lastEpisodeAiredAt: Date | null;
   isWatchlisted: boolean;
 }
+
+/**
+ * The `applyCommonFilters` keys `applySeriesFilters` answers on the show's own
+ * figures, so they are kept out of the per-episode match.
+ */
+const SHOW_LEVEL_FILTER_KEYS = [
+  "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays",
+  "addedAtMin", "addedAtMax", "addedAtDays",
+  "isWatchlisted",
+];
 
 /** Apply post-aggregation filters on series-level fields */
 function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchParams): T[] {
@@ -177,12 +197,7 @@ function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchPa
   return result;
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // The shared parser, so `offset` (documented for every paged listing, and
   // what an offset-based client pages with) is honoured here too: these routes
@@ -197,7 +212,7 @@ export async function GET(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
+  const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
     return NextResponse.json({ series: [], pagination: { page, limit, hasMore: false } });
   }
@@ -231,6 +246,60 @@ export async function GET(request: NextRequest) {
       filters.push(`AND mi."parentTitle" ILIKE $${params.length} || '%'`);
     }
   }
+  // The library filters (resolution, genre, year, codec, …) are per-episode
+  // facts, so a show qualifies when ANY of its episodes matches — and its
+  // figures stay the whole show's: a "4K" filter lists every show with a 4K
+  // episode with its full episode count and quality mix, which is what the
+  // Series page showed when it filtered resolution on the client (it filtered
+  // nothing else, and sent the server no filter at all). `applyCommonFilters`
+  // builds a Prisma where with no SQL form here, so Prisma resolves the
+  // qualifying series keys and the aggregate is scoped to them. The date and
+  // watchlist filters are facts about the SHOW (its latest play, its newest
+  // addition) and are answered on its own figures by `applySeriesFilters`
+  // below — never per episode as well, where they were ANDed into the one
+  // episode that has to match: "4K, last played this month" then demanded a
+  // single episode that is both, and dropped a show whose 4K episodes were
+  // watched years ago and whose latest play was last week.
+  const episodeParams = new URLSearchParams(searchParams);
+  for (const key of SHOW_LEVEL_FILTER_KEYS) episodeParams.delete(key);
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it, and a
+  // resolution by the label its quality chip shows ("576" is 480P): this page
+  // filtered resolution by those chips' labels before it filtered on the server.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings, {
+    resolutionOtherIncludesNull: true,
+  });
+  // The qualifying shows' keys, when a filter narrows the listing: known before
+  // the aggregate runs, so the server presence below can be scoped to them.
+  let qualifyingKeys: string[] | null = null;
+  if (Object.keys(narrowing).length > 0) {
+    // `groupBy`, not `findMany({ distinct })`: Prisma applies `distinct` in
+    // Node, so that read one row per matching EPISODE and kept one per show;
+    // `groupBy` is a SQL GROUP BY and returns one row per show.
+    const qualifying = await prisma.mediaItem.groupBy({
+      by: ["seriesKey"],
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "SERIES",
+            seriesKey: { not: null },
+            parentTitle: { not: null },
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+    });
+    qualifyingKeys = qualifying.flatMap((r) => (r.seriesKey ? [r.seriesKey] : []));
+    params.push(qualifyingKeys);
+    filters.push(`AND mi."seriesKey" = ANY($${params.length}::text[])`);
+  }
+
   // `parentTitle IS NOT NULL`: a row can carry a TVDB-derived seriesKey with no
   // show title, and MIN("parentTitle") over such a group is NULL, which the
   // title sort below cannot compare.
@@ -243,7 +312,7 @@ export async function GET(request: NextRequest) {
         AND l."mediaServerId" = ANY($1::text[])
         ${filters.join("\n        ")}`;
 
-  const first = (col: string) => firstNonNullSql(col, `"seasonNumber", "episodeNumber"`);
+  const first = (col: string) => firstNonNullSql(col, `"seasonNumber", "episodeNumber", id`);
 
   // Two queries in parallel rather than one, on purpose. The aggregate below
   // is NARROW — counts, sums, maxes and a handful of scalar firsts — and the
@@ -255,6 +324,14 @@ export async function GET(request: NextRequest) {
   // row in a subquery pinned with `OFFSET 0`; inlined, the planner substitutes
   // the regex CASE into each of the six FILTER clauses and evaluates it six
   // times per row.
+  //
+  // `ORDER BY group_key`: the list is sorted below with a stable sort, so this
+  // is the order of ties — shows with equal episode counts, or two same-titled
+  // shows — and a page boundary falls in the same place on every request.
+  const presenceSource = seriesPresenceSource(sf.isSingleServer, qualifyingKeys, {
+    paged: limit > 0,
+    titleFiltered: !!search || !!startsWith,
+  });
   const [groups, representatives, groupServerPresence] = await Promise.all([
     prisma.$queryRawUnsafe<SeriesGroupRow[]>(
       `SELECT
@@ -304,7 +381,8 @@ export async function GET(request: NextRequest) {
         ${scope}
         OFFSET 0
       ) items
-      GROUP BY group_key`,
+      GROUP BY group_key
+      ORDER BY group_key`,
       ...params,
     ),
     // One row per show: show art wins over any server preference (a poster on
@@ -327,9 +405,15 @@ export async function GET(request: NextRequest) {
       ...params,
       artworkServerId,
     ),
-    // On one server every show is on that server: the presence scan (a
-    // DISTINCT ON over every episode) would only ever say so.
-    sf.isSingleServer ? null : getServerPresenceByGroup("SERIES", sf.serverIds),
+    // On one server every show is on that server: the presence scan would only
+    // ever say so. Otherwise it is read alongside the aggregate when it must
+    // cover the whole library or the filter's shows, and after paging when
+    // only the returned shows need it (`presenceSource`).
+    presenceSource === "library"
+      ? getServerPresenceByGroup("SERIES", sf.serverIds)
+      : presenceSource === "qualifying"
+        ? getServerPresenceByGroup("SERIES", sf.serverIds, { groupKeys: qualifyingKeys! })
+        : null,
   ]);
 
   const repByKey = new Map(representatives.map((r) => [r.group_key, r]));
@@ -363,9 +447,11 @@ export async function GET(request: NextRequest) {
       isWatchlisted: g.isWatchlisted,
       qualityCounts: (g.qualityCounts ?? {}) as Record<string, number>,
       thumbUrl: rep?.thumbUrl ?? null,
-      servers: singleServer
+      // Filled in after paging when `presenceSource` is "page" — the key is
+      // set here so it keeps its place in the row.
+      servers: (singleServer
         ? [{ serverId: singleServer.serverId, serverName: singleServer.name, serverType: singleServer.type, mediaItemId: rep?.mediaItemId ?? "" }]
-        : groupServerPresence?.get(g.group_key) ?? [],
+        : groupServerPresence?.get(g.group_key) ?? []) as ServerPresence[],
       summary: rep?.summary ?? summaryByKey.get(g.group_key) ?? null,
       genres: g.genres as string[] | null,
       studio: g.studio,
@@ -382,12 +468,54 @@ export async function GET(request: NextRequest) {
   seriesList = applySeriesFilters(seriesList, searchParams);
 
   const sorted = sortSeriesList(seriesList, sortBy, sortOrder);
+  // The presence of just the shows being returned.
+  const withPresence = async <T extends { seriesKey: string; servers: ServerPresence[] }>(rows: T[]) => {
+    if (presenceSource !== "page") return rows;
+    const presence = await getServerPresenceByGroup("SERIES", sf.serverIds, presenceScope(rows.map((r) => r.seriesKey)));
+    for (const row of rows) row.servers = presence.get(row.seriesKey) ?? [];
+    return rows;
+  };
   if (limit > 0) {
     const paged = sorted.slice(skip, skip + limit + 1);
     const hasMore = paged.length > limit;
     if (hasMore) paged.pop();
-    return jsonResponse(request, { series: paged, pagination: { page, limit, hasMore } });
+    return jsonResponse(request, { series: await withPresence(paged), pagination: { page, limit, hasMore } });
   }
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { series: sorted.slice(skip), pagination: { page, limit, hasMore: false } });
+  return jsonResponse(request, { series: await withPresence(sorted.slice(skip)), pagination: { page, limit, hasMore: false } });
+});
+
+/**
+ * Above this many shows, presence is read for the whole library instead: past
+ * it the scoped scan costs about what the full one does (measured: 50 shows
+ * ~6 ms, 1,000 shows ~140 ms, the whole 1,500-show library ~150 ms).
+ */
+const PRESENCE_SCOPE_MAX_KEYS = 500;
+
+function presenceScope(keys: string[]): { groupKeys: string[] } | undefined {
+  return keys.length <= PRESENCE_SCOPE_MAX_KEYS ? { groupKeys: keys } : undefined;
 }
+
+/**
+ * Where a multi-server listing's presence comes from: none on one server;
+ * alongside the aggregate for the filter's shows when a filter named few of
+ * them; after paging for the returned shows when a page, a search or a
+ * letter makes the answer a part of the library; else for every show.
+ */
+function seriesPresenceSource(
+  isSingleServer: boolean,
+  qualifyingKeys: string[] | null,
+  { paged, titleFiltered }: { paged: boolean; titleFiltered: boolean },
+): "none" | "library" | "qualifying" | "page" {
+  if (isSingleServer) return "none";
+  if (paged) return "page";
+  if (qualifyingKeys && qualifyingKeys.length <= PRESENCE_SCOPE_MAX_KEYS) return "qualifying";
+  if (titleFiltered) return "page";
+  return "library";
+}
+
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-series-grouped", listGet);

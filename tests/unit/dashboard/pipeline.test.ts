@@ -11,8 +11,11 @@ describe("pipelineStateFrom", () => {
     // used to leave the error showing.
     const first = pipelineStateFrom(null);
     const second = pipelineStateFrom({ ruleTotal: 1, ruleEnabled: 1 });
-    expect(first.status).toBe("failed");
-    expect(second.status).toBe("ready");
+    expect(first).toEqual({ status: "failed" });
+    expect(second).toEqual({
+      status: "ready",
+      data: expect.objectContaining({ ruleTotal: 1, ruleEnabled: 1 }),
+    });
   });
 
   it("reads the summary, byte sizes from their decimal strings", () => {

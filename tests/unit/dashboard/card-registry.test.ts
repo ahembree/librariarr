@@ -70,6 +70,7 @@ describe("resolveLayout", () => {
         { id: "quality-breakdown", size: 12 },
       ]),
     );
-    expect(resolved.main).toHaveLength(1);
+    // The first occurrence wins.
+    expect(resolved.main).toEqual([{ id: "quality-breakdown", size: 6 }]);
   });
 });

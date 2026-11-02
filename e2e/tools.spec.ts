@@ -68,3 +68,13 @@ test.describe("tools — preroll manager", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 });
+
+test.describe("tools — TRaSH guide sync", () => {
+  test("with no Sonarr or Radarr connected, points to Settings instead of a picker", async ({ page }) => {
+    await page.goto("/tools/trash");
+    await expect(page.getByRole("heading", { name: /TRaSH Guide Sync/i })).toBeVisible();
+    await expect(page.getByText(/No Sonarr or Radarr integrations found/i)).toBeVisible();
+    await expect(page.getByText("Settings → Integrations")).toBeVisible();
+    await expect(page.getByRole("combobox")).toHaveCount(0);
+  });
+});

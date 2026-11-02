@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authSetupSchema } from "@/lib/validation";
 import { checkAuthRateLimit, SETUP_BUCKET } from "@/lib/rate-limit/rate-limiter";
+import { installedVersion } from "@/lib/version/whats-new";
 
 export async function POST(request: NextRequest) {
   try {
@@ -56,6 +57,7 @@ export async function POST(request: NextRequest) {
             userId: created.id,
             localAuthEnabled: true,
             plexLoginEnabled: false,
+            lastSeenVersion: installedVersion(),
           },
         });
         await tx.systemConfig.upsert({

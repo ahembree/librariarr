@@ -13,6 +13,15 @@ vi.mock("@/lib/logger", () => ({
 import { startRealtime, getRealtimeManager, _resetRealtimeForTesting } from "@/lib/media-server/realtime";
 import { eventBus } from "@/lib/events/event-bus";
 
+// `eventBus.emit` delivers synchronously, so whether an event asked for a
+// reconcile is known the moment `emit` returns — no wait needed to prove a
+// negative.
+async function startAndSpyOnReconcile() {
+  startRealtime();
+  await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+  return vi.spyOn(getRealtimeManager(), "reconcile");
+}
+
 describe("startRealtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -23,26 +32,28 @@ describe("startRealtime", () => {
   });
   afterEach(() => _resetRealtimeForTesting());
 
-  it("is idempotent — repeated calls reuse the same manager", () => {
+  it("is idempotent — a repeated call starts nothing a second time", async () => {
     startRealtime();
-    const first = getRealtimeManager();
-    startRealtime();
-    expect(getRealtimeManager()).toBe(first);
+    const reconcile = await startAndSpyOnReconcile();
+    // One subscription: a server change reconciles once, not once per call.
+    eventBus.emit({ type: "server:changed", userId: "u1" });
+    expect(reconcile).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
   });
 
   it("reconciles on start and on server:changed", async () => {
-    startRealtime();
-    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+    const reconcile = await startAndSpyOnReconcile();
 
     eventBus.emit({ type: "server:changed", userId: "u1" });
+    expect(reconcile).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
   });
 
   it("reconciles when the realtime toggle itself changes", async () => {
-    startRealtime();
-    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+    const reconcile = await startAndSpyOnReconcile();
 
     eventBus.emit({ type: "settings:changed", userId: "u1", meta: { realtimeSync: false } });
+    expect(reconcile).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
   });
 
@@ -50,20 +61,16 @@ describe("startRealtime", () => {
     // `settings:changed` is general-purpose — the maintenance toggle emits it
     // too. Reconciling on all of them would re-read the DB and diff every
     // media-server socket every time an unrelated setting moved.
-    startRealtime();
-    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+    const reconcile = await startAndSpyOnReconcile();
 
     eventBus.emit({ type: "settings:changed", userId: "u1", meta: { maintenanceMode: true } });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("ignores unrelated app events", async () => {
-    startRealtime();
-    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+    const reconcile = await startAndSpyOnReconcile();
 
     eventBus.emit({ type: "sync:completed", userId: "u1" });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
   });
 });

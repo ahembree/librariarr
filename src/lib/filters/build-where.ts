@@ -1,20 +1,13 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
+import { QUALITY_ORDER } from "@/lib/resolution";
 import { escapeLike } from "./escape-like";
-
-// Map standardized resolution labels to raw DB patterns
-const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-  "4K": ["4k", "2160", "2160p"],
-  "1080P": ["1080", "1080p"],
-  "720P": ["720", "720p"],
-  "480P": ["480", "480p"],
-  "SD": ["sd", "360", "360p"],
-};
 
 /**
  * Parse a multi-select filter value. Values are pipe-separated, e.g. "4K|1080P".
  * Returns null if value is null/empty, or an array of values.
  */
-export function parseMulti(value: string | null): string[] | null {
+function parseMulti(value: string | null): string[] | null {
   if (!value) return null;
   const vals = value.split("|").filter(Boolean);
   return vals.length > 0 ? vals : null;
@@ -105,10 +98,24 @@ export function intEqualsFilter(n: number): number | { in: number[] } {
 /**
  * Build Prisma WHERE clauses from common filter search params.
  * Handles multi-select (pipe-separated), range filters, and date filters.
+ *
+ * `genreSpellings` (from `loadGenreSpellings`) makes the genre filter
+ * case-insensitive; without it a genre matches only its exact spelling.
+ *
+ * `resolutionSpellings` (from `loadResolutionSpellings`) matches a resolution
+ * label by every stored value `normalizeResolutionLabel` gives that label, as
+ * the quality chips show it; without it a label matches only its fixed
+ * spellings in `RESOLUTION_DB_VALUES` ("576" is then "Other", not "480P").
+ * `resolutionOtherIncludesNull` makes "Other" also take a row with no
+ * resolution — only for the series listings, whose quality chips count one as
+ * Other; a movie, episode or track card shows no chip for it.
  */
 export function applyCommonFilters(
   where: Prisma.MediaItemWhereInput,
-  params: URLSearchParams
+  params: URLSearchParams,
+  genreSpellings?: Map<string, string[]>,
+  resolutionSpellings?: Map<string, string[]>,
+  { resolutionOtherIncludesNull = false }: { resolutionOtherIncludesNull?: boolean } = {},
 ): void {
   const andClauses: Prisma.MediaItemWhereInput[] = Array.isArray(where.AND)
     ? [...where.AND]
@@ -118,7 +125,12 @@ export function applyCommonFilters(
 
   // Resolution (multi-select with standardized label mapping)
   const resolutions = parseMulti(params.get("resolution"));
-  if (resolutions) {
+  if (resolutions && resolutionSpellings) {
+    const clauses = resolutions.map((label) =>
+      resolutionLabelClause(label, resolutionSpellings, resolutionOtherIncludesNull),
+    );
+    andClauses.push(clauses.length === 1 ? clauses[0] : { OR: clauses });
+  } else if (resolutions) {
     if (resolutions.length === 1) {
       applyResolutionFilter(where, andClauses, resolutions[0]);
     } else {
@@ -210,12 +222,19 @@ export function applyCommonFilters(
   // Year — multi-condition with AND/OR logic
   applyConditionFilter(where, andClauses, params, "yearConditions", "yearLogic", "year", parseInt, INT_RANGE);
 
-  // Genre (case-insensitive match in JSON array)
+  // Genre (case-insensitive match in JSON array). `array_contains` is
+  // case-sensitive with no insensitive form, so each genre matches any stored
+  // spelling of it — the dropdown offers one entry per genre whatever its case.
   const genreValues = parseMulti(params.get("genre"));
   if (genreValues) {
     // For multi-genre, require all genres to be present (AND)
     for (const g of genreValues) {
-      andClauses.push({ genres: { array_contains: g } });
+      const spellings = genreSpellings?.get(g.toLowerCase()) ?? [g];
+      andClauses.push(
+        spellings.length === 1
+          ? { genres: { array_contains: spellings[0] } }
+          : { OR: spellings.map((s) => ({ genres: { array_contains: s } })) },
+      );
     }
   }
 
@@ -327,7 +346,10 @@ export function applyCommonFilters(
   }
 
   // Stream-based relation filters (audio language, subtitle language, stream codec)
-  // Note: Prisma's `in` doesn't support `mode: "insensitive"`, so we use OR + equals
+  // Note: Prisma's `in` doesn't support `mode: "insensitive"`, so we use OR + equals.
+  // An insensitive `equals` compiles to ILIKE, so the value is escaped like any
+  // other LIKE pattern: unescaped, `?audioLanguage=%` matched every item with an
+  // audio language and `Engl_sh` matched "English" (see escape-like.ts).
   const audioLanguages = parseMulti(params.get("audioLanguage"));
   if (audioLanguages) {
     if (audioLanguages.length === 1) {
@@ -335,7 +357,7 @@ export function applyCommonFilters(
         streams: {
           some: {
             streamType: 2,
-            language: { equals: audioLanguages[0], mode: "insensitive" },
+            language: { equals: escapeLike(audioLanguages[0]), mode: "insensitive" },
           },
         },
       });
@@ -345,7 +367,7 @@ export function applyCommonFilters(
           streams: {
             some: {
               streamType: 2,
-              language: { equals: l, mode: "insensitive" },
+              language: { equals: escapeLike(l), mode: "insensitive" },
             },
           },
         })),
@@ -360,7 +382,7 @@ export function applyCommonFilters(
         streams: {
           some: {
             streamType: 3,
-            language: { equals: subtitleLanguages[0], mode: "insensitive" },
+            language: { equals: escapeLike(subtitleLanguages[0]), mode: "insensitive" },
           },
         },
       });
@@ -370,7 +392,7 @@ export function applyCommonFilters(
           streams: {
             some: {
               streamType: 3,
-              language: { equals: l, mode: "insensitive" },
+              language: { equals: escapeLike(l), mode: "insensitive" },
             },
           },
         })),
@@ -532,6 +554,25 @@ export function applyStartsWithFilter(
       (where as Record<string, unknown>)[field] = { startsWith: escapeLike(startsWith), mode: "insensitive" };
     }
   }
+}
+
+const RESOLUTION_LABELS = new Set<string>(QUALITY_ORDER);
+
+/**
+ * Rows whose resolution carries `label` by `normalizeResolutionLabel`, given
+ * the stored values grouped by label. With `otherIncludesNull`, "Other" also
+ * takes a row with no resolution, as the series quality chips count it. A
+ * value that is not a label at all is matched as a stored value, as before.
+ */
+function resolutionLabelClause(
+  label: string,
+  spellings: Map<string, string[]>,
+  otherIncludesNull: boolean,
+): Prisma.MediaItemWhereInput {
+  const values = spellings.get(label) ?? (RESOLUTION_LABELS.has(label) ? [] : [label]);
+  return label === "Other" && otherIncludesNull
+    ? { OR: [{ resolution: { in: values } }, { resolution: null }] }
+    : { resolution: { in: values } };
 }
 
 function applyResolutionFilter(

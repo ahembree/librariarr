@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -16,6 +16,10 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/settings/action-retention/route";
+
+const prisma = getTestPrisma();
+const storedRetention = async (userId: string) =>
+  (await prisma.appSettings.findUnique({ where: { userId } }))?.actionHistoryRetentionDays;
 
 beforeEach(async () => {
   await cleanDatabase();
@@ -45,14 +49,10 @@ describe("GET /api/settings/action-retention", () => {
     expect(body.actionHistoryRetentionDays).toBe(30);
   });
 
-  it("returns saved value after PUT", async () => {
+  it("returns the saved value", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
-
-    await callRoute(PUT, {
-      method: "PUT",
-      body: { actionHistoryRetentionDays: 90 },
-    });
+    await prisma.appSettings.create({ data: { userId: user.id, actionHistoryRetentionDays: 90 } });
 
     const res = await callRoute(GET);
     const body = await expectJson<{ actionHistoryRetentionDays: number }>(res);
@@ -82,6 +82,21 @@ describe("PUT /api/settings/action-retention", () => {
     });
     const body = await expectJson<{ actionHistoryRetentionDays: number }>(res);
     expect(body.actionHistoryRetentionDays).toBe(14);
+    expect(await storedRetention(user.id)).toBe(14);
+  });
+
+  it("updates an existing settings row", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    await prisma.appSettings.create({ data: { userId: user.id, actionHistoryRetentionDays: 90 } });
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { actionHistoryRetentionDays: 7 },
+    });
+    await expectJson(res);
+    expect(await storedRetention(user.id)).toBe(7);
+    expect(await prisma.appSettings.count()).toBe(1);
   });
 
   it("accepts 0 (keep forever)", async () => {
@@ -94,6 +109,7 @@ describe("PUT /api/settings/action-retention", () => {
     });
     const body = await expectJson<{ actionHistoryRetentionDays: number }>(res);
     expect(body.actionHistoryRetentionDays).toBe(0);
+    expect(await storedRetention(user.id)).toBe(0);
   });
 
   it("returns 400 for value > 365", async () => {
@@ -104,8 +120,23 @@ describe("PUT /api/settings/action-retention", () => {
       method: "PUT",
       body: { actionHistoryRetentionDays: 500 },
     });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["actionHistoryRetentionDays: Too big: expected number to be <=365"]);
+    expect(await storedRetention(user.id)).toBeUndefined();
+  });
+
+  it("returns 400 for a fractional value", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { actionHistoryRetentionDays: 7.5 },
+    });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 
   it("returns 400 for negative value", async () => {
@@ -116,8 +147,10 @@ describe("PUT /api/settings/action-retention", () => {
       method: "PUT",
       body: { actionHistoryRetentionDays: -1 },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["actionHistoryRetentionDays: Too small: expected number to be >=0"]);
+    expect(await storedRetention(user.id)).toBeUndefined();
   });
 
   it("returns 400 when field is missing", async () => {

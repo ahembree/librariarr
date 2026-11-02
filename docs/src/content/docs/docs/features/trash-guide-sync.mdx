@@ -18,7 +18,7 @@ The defining principle of this feature is **consent**: Librariarr never writes a
 
 Navigate to **Tools → TRaSH Sync** and pick a Sonarr or Radarr instance. Librariarr then:
 
-1. Downloads the current guide catalog for that app type (cached for several hours).
+1. Downloads the current guide catalog for that app type (cached for 6 hours).
 2. Reads the app's existing custom formats and quality profiles.
 3. Cross-references both against what you've already assigned, and shows a **status** for every item.
 
@@ -60,7 +60,7 @@ Each planned change is labelled **Create**, **Update**, **No change**, **Skipped
 
 ### Adding new resources
 
-For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Diff** first if you want to preview).
+For a guide item that **doesn't exist yet** in the app (status **Not added**), the row shows an **Add** button. Clicking it assigns the item and creates it in the app in one step — there's nothing to overwrite, so no confirmation is needed (use **Preview diff** first if you want to preview).
 
 Items that **already exist** in the app instead show **Manage**, which takes over management (with an overwrite confirmation) but does not write anything until you **Sync** — so an existing configuration is never replaced without a deliberate second step.
 
@@ -77,7 +77,7 @@ To add every not-yet-existing item at once, set the filter to **Not added**, tic
 
 There are two ways to sync:
 
-- **Sync managed** (top of the page) applies the changes for **every** assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles (so a profile's custom-format scores can reference formats that already exist).
+- **Sync managed** (top of the page) applies the changes for **every** assigned resource. Resources are processed in dependency order — quality definitions and naming first, then custom formats, then quality profiles, then the **Profile Formats** score overlays (so a profile's custom-format scores can reference formats that already exist).
 - **Sync** on an individual row (or **Sync now** on the sizes / naming cards) applies just that one managed resource — for example, pushing a single quality profile without touching anything else. Per-item sync is only offered once an item is managed, and it can still only write resources you've assigned.
 
 After a sync, the results dialog shows what was created or updated, and each item's status updates accordingly.
@@ -144,11 +144,11 @@ Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), t
 
 ## Refreshing the catalog
 
-The guide catalog is cached for several hours. Click **Refresh guides** to fetch the latest definitions immediately (for example, after the guides publish an update).
+The guide catalog is cached for 6 hours. Click **Refresh** to fetch the latest definitions immediately (for example, after the guides publish an update).
 
 If the guide can't be reached (a GitHub outage, or blocked outbound access), the page keeps your app selected and shows a **guide catalog unavailable** notice with a **Retry** button, rather than a partial or empty list. A failed fetch is never cached, so a later retry loads the complete catalog once the source is reachable again.
 
-The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` and `TRASH_GUIDES_REF` environment variables — useful if you maintain a fork or an internal mirror.
+The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` (default `TRaSH-Guides/Guides`) and `TRASH_GUIDES_REF` (default `master`) environment variables — useful if you maintain a fork or an internal mirror.
 
 <Aside type="tip">
   Librariarr fetches guide files over HTTPS from the public guides repository. If your deployment restricts outbound network access, allow access to `raw.githubusercontent.com` and `api.github.com` (or point the environment variables at a reachable mirror).

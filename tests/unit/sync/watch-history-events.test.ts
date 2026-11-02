@@ -4,10 +4,12 @@ const h = vi.hoisted(() => ({
   emit: vi.fn(),
   findUnique: vi.fn(),
   warn: vi.fn(),
+  invalidate: vi.fn(),
 }));
 
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: h.emit } }));
 vi.mock("@/lib/db", () => ({ prisma: { mediaServer: { findUnique: h.findUnique } } }));
+vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: h.invalidate }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: h.warn, error: vi.fn() },
 }));
@@ -19,6 +21,16 @@ describe("emitWatchHistoryUpdated", () => {
     h.emit.mockClear();
     h.findUnique.mockReset();
     h.warn.mockClear();
+    h.invalidate.mockClear();
+  });
+
+  it("drops the media caches before announcing, so a refetch never reads a pre-sync listing", async () => {
+    const order: string[] = [];
+    h.invalidate.mockImplementation(() => order.push("invalidate"));
+    h.emit.mockImplementation(() => order.push("emit"));
+    h.findUnique.mockResolvedValue({ userId: "user-1" });
+    await emitWatchHistoryUpdated("srv-1");
+    expect(order).toEqual(["invalidate", "emit"]);
   });
 
   it("emits watch-history:updated addressed to the server's owner", async () => {
@@ -28,6 +40,7 @@ describe("emitWatchHistoryUpdated", () => {
 
     await emitWatchHistoryUpdated("srv-1", { imported: 42 });
 
+    expect(h.findUnique).toHaveBeenCalledWith({ where: { id: "srv-1" }, select: { userId: true } });
     expect(h.emit).toHaveBeenCalledWith({
       type: "watch-history:updated",
       userId: "user-1",
@@ -43,7 +56,10 @@ describe("emitWatchHistoryUpdated", () => {
 
     await emitWatchHistoryUpdated("srv-1");
 
+    // Exactly one event, and it is not sync:completed.
+    expect(h.emit).toHaveBeenCalledTimes(1);
     expect(h.emit.mock.calls[0][0].type).toBe("watch-history:updated");
+    expect(h.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed" }));
   });
 
   it("emits with no extra meta when none is given", async () => {
@@ -67,6 +83,9 @@ describe("emitWatchHistoryUpdated", () => {
 
     await expect(emitWatchHistoryUpdated("srv-1")).resolves.toBeUndefined();
     expect(h.emit).not.toHaveBeenCalled();
-    expect(h.warn).toHaveBeenCalled();
+    expect(h.warn).toHaveBeenCalledWith("WatchHistory", "Failed to emit watch-history:updated", {
+      serverId: "srv-1",
+      error: "Error: db down",
+    });
   });
 });

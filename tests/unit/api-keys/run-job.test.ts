@@ -26,6 +26,7 @@ describe("runJobForApiKey", () => {
   it("refuses to run outside an authenticated API key request", async () => {
     const res = await runJobForApiKey("sync");
     expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
     expect(m.runJobNow).not.toHaveBeenCalled();
   });
 

@@ -21,3 +21,10 @@ export const MAX_QUERY_ACTION_ITEMS = 1000;
  * `src/proxy.ts`. Shared by the Zod schema and the client loader.
  */
 export const MAX_COLUMN_VALUE_ITEMS = 50_000;
+
+/**
+ * Max server ids a query may name. The column-values request carries the run's
+ * server selection, so it takes the same list the query was run with — one
+ * limit for both, or a query saved under one is refused by the other.
+ */
+export const MAX_QUERY_SERVER_IDS = 100;

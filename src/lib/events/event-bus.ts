@@ -1,7 +1,13 @@
 import { EventEmitter } from "events";
+import { logger } from "@/lib/logger";
 
 export type AppEventType =
   | "sync:started"
+  /**
+   * A sync finished and changed the dataset (`meta`: `SyncCompletedMeta` —
+   * `serverId`, and `libraryTypes` when the run knows which library types it
+   * touched; absent means "refetch as before").
+   */
   | "sync:completed"
   /**
    * A running sync committed a batch (`meta.serverId`).
@@ -70,7 +76,18 @@ export type AppEventType =
    *
    * Carries no session data — the receiver refetches the route that owns it.
    */
-  | "session-changed";
+  | "session-changed"
+  /**
+   * A display setting the authenticated shell renders was saved (chip colours,
+   * table columns, card display options, the dashboard layout, the accent,
+   * the "What's new" version).
+   *
+   * Carries nothing: every open tab refetches `/api/settings/shell`, the one
+   * place those values are read. The layout renders them only on a full page
+   * load, so without this a second tab or device kept the values it loaded and
+   * its next save overwrote the newer ones.
+   */
+  | "display-settings:changed";
 
 export interface AppEvent {
   type: AppEventType;
@@ -79,30 +96,58 @@ export interface AppEvent {
   meta?: Record<string, unknown>;
 }
 
-export type AppEventListener = (event: AppEvent) => void;
+type AppEventListener = (event: AppEvent) => void;
 
 const EVENT_KEY = "app-event";
 
 class AppEventBus {
   private emitter: EventEmitter;
+  private lastEmittedAt = new Map<string, number>();
 
   constructor() {
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(50);
   }
 
+  /**
+   * When each event type was last emitted (epoch ms); a type not yet emitted
+   * is absent. The stream sends it with its `connected` event: a page the
+   * server rendered with its data (the dashboard) asks whether anything it
+   * listens for happened between that render and the stream opening, which no
+   * event can tell it. Per type, because something is nearly always being
+   * emitted — a playback's `session-changed` every few seconds — and only the
+   * subscribers of the types that went out need to read again.
+   */
+  lastEventAtByType(): Record<string, number> {
+    return Object.fromEntries(this.lastEmittedAt);
+  }
+
   emit(event: Omit<AppEvent, "timestamp">) {
+    const timestamp = Date.now();
+    this.lastEmittedAt.set(event.type, timestamp);
     try {
-      this.emitter.emit(EVENT_KEY, { ...event, timestamp: Date.now() });
+      this.emitter.emit(EVENT_KEY, { ...event, timestamp });
     } catch {
       // Fire-and-forget — never let event emission break the caller
     }
   }
 
   subscribe(listener: AppEventListener): () => void {
-    this.emitter.on(EVENT_KEY, listener);
+    // EventEmitter calls listeners in turn and stops at the first that throws,
+    // so one broken subscriber (the realtime manager, an SSE stream) would
+    // silently cost every subscriber after it the event. Each is isolated.
+    const isolated: AppEventListener = (event) => {
+      try {
+        listener(event);
+      } catch (error) {
+        logger.error("Events", `A "${event.type}" listener threw; the other listeners still received it`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    this.emitter.on(EVENT_KEY, isolated);
     return () => {
-      this.emitter.removeListener(EVENT_KEY, listener);
+      this.emitter.removeListener(EVENT_KEY, isolated);
     };
   }
 
@@ -111,10 +156,14 @@ class AppEventBus {
   }
 }
 
+// Pinned to globalThis unconditionally, not only in development: the job worker
+// and the realtime manager started from instrumentation load their own copy of
+// this module, so a production build pinned to nothing had two buses, and
+// nothing they emitted (a background sync's progress and result, Tracearr
+// import progress, a media server's connection state) reached
+// /api/events/stream.
 const globalForEventBus = globalThis as unknown as {
   eventBus: AppEventBus | undefined;
 };
 
-export const eventBus = globalForEventBus.eventBus ?? new AppEventBus();
-
-if (process.env.NODE_ENV !== "production") globalForEventBus.eventBus = eventBus;
+export const eventBus = (globalForEventBus.eventBus ??= new AppEventBus());

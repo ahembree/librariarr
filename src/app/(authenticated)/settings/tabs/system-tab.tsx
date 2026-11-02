@@ -2,18 +2,11 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ColorChip } from "@/components/color-chip";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { SettingsSection } from "../components";
+import { ReleaseNoteSections } from "@/components/release-note-sections";
+import { formatDate } from "@/lib/format";
 import {
   Collapsible,
   CollapsibleContent,
@@ -33,7 +26,7 @@ import {
 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats, ReleaseNote, UpdateCheck } from "../types";
 
-export interface SystemTabProps {
+interface SystemTabProps {
   systemInfo: SystemInfo | null;
   /** Loaded separately (it asks GitHub); null until it answers. */
   updateCheck: UpdateCheck | null;
@@ -44,76 +37,8 @@ export interface SystemTabProps {
   loadingChangelog: boolean;
 }
 
-/**
- * Clean a markdown list item for display:
- * - Strip commit hash links: "([abc1234](url))" or "(abc1234)"
- * - Convert bold scopes: "**lifecycle:** msg" → "lifecycle: msg"
- * - Decode HTML entities: "&gt;" → ">"
- */
-function cleanItem(raw: string): string {
-  return (
-    raw
-      // Remove markdown commit links: ([hash](url))
-      .replace(/\s*\(\[?[a-f0-9]{7,40}\]?\([^)]*\)\)/g, "")
-      // Remove bare hash refs: (hash)
-      .replace(/\s*\([a-f0-9]{7,40}\)/g, "")
-      // Convert **scope:** to scope:
-      .replace(/\*\*([^*]+)\*\*/g, "$1")
-      // Decode common HTML entities from GitHub
-      .replace(/&gt;/g, ">")
-      .replace(/&lt;/g, "<")
-      .replace(/&amp;/g, "&")
-      .trim()
-  );
-}
-
-/**
- * Parse a release-please body into grouped sections.
- * Handles the format: ## [version](url) (date) then ### Section headings with * items.
- */
-function parseReleaseBody(body: string): { heading: string; items: string[] }[] {
-  const lines = body.split("\n");
-  const sections: { heading: string; items: string[] }[] = [];
-  let current: { heading: string; items: string[] } | null = null;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // Skip the version header line: ## [0.11.3](url) (date)
-    if (/^##\s+\[?\d+\.\d+/.test(trimmed)) continue;
-
-    // Section heading (### Bug Fixes, ### Features, etc.)
-    const headingMatch = trimmed.match(/^#{2,3}\s+(.+)/);
-    if (headingMatch) {
-      current = { heading: headingMatch[1], items: [] };
-      sections.push(current);
-      continue;
-    }
-
-    // List item
-    if ((trimmed.startsWith("* ") || trimmed.startsWith("- ")) && current) {
-      current.items.push(cleanItem(trimmed.slice(2)));
-    }
-  }
-
-  return sections.filter((s) => s.items.length > 0);
-}
-
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
-}
-
 function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
   const [open, setOpen] = useState(note.isLatest && !note.isCurrent);
-  const sections = parseReleaseBody(note.body);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -123,19 +48,15 @@ function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
             <span className="font-medium font-mono text-sm">v{note.version}</span>
             <div className="flex items-center gap-1.5 shrink-0">
               {note.isCurrent && (
-                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                  Current
-                </Badge>
+                <ColorChip className="bg-muted/40 text-muted-foreground">Current</ColorChip>
               )}
               {note.isLatest && !note.isCurrent && (
-                <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/20 text-[10px] px-1.5 py-0">
-                  Latest
-                </Badge>
+                <ColorChip className="border-green/25 bg-green-dim text-green">Latest</ColorChip>
               )}
             </div>
             {note.publishedAt && (
               <span className="text-xs text-muted-foreground truncate">
-                {formatDate(note.publishedAt)}
+                {formatDate(note.publishedAt, "")}
               </span>
             )}
           </div>
@@ -146,32 +67,7 @@ function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="pt-1 pb-3 space-y-3">
-          {sections.length > 0 ? (
-            sections.map((section) => (
-              <div key={section.heading}>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-                  {section.heading}
-                </h4>
-                <ul className="space-y-1">
-                  {section.items.map((item, i) => (
-                    <li
-                      key={i}
-                      className="text-sm text-foreground/80 flex gap-2"
-                    >
-                      <span className="text-muted-foreground mt-1 shrink-0">
-                        &bull;
-                      </span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))
-          ) : (
-            <p className="text-sm text-muted-foreground italic">
-              No release notes available.
-            </p>
-          )}
+          <ReleaseNoteSections body={note.body} />
           {note.url && (
             <a
               href={note.url}
@@ -286,30 +182,18 @@ export function SystemTab({
             </Button>
           </div>
 
-          <AlertDialog open={confirmClearCache} onOpenChange={setConfirmClearCache}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Clear image cache?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  All cached artwork will be deleted and re-fetched from your media servers as
-                  pages are viewed. This may briefly slow down library browsing.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    setConfirmClearCache(false);
-                    onClearImageCache();
-                  }}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Clear Cache
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <ConfirmDialog
+            open={confirmClearCache}
+            onOpenChange={setConfirmClearCache}
+            title="Clear image cache?"
+            description="All cached artwork will be deleted and re-fetched from your media servers as pages are viewed. This may briefly slow down library browsing."
+            confirmLabel="Clear Cache"
+            confirmIcon={Trash2}
+            destructive
+            onConfirm={() => {
+              onClearImageCache();
+            }}
+          />
       </SettingsSection>
 
       {/* Release Notes */}

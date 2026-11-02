@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LoadingButton } from "@/components/loading-button";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import {
   reauthWithOidcPopup,
@@ -13,6 +13,9 @@ import {
   type ReauthMethod,
   type ReauthResult,
 } from "@/lib/auth/reauth-client";
+
+/** The confirm buttons' spinner: small buttons, so a tighter gap than the default. */
+const SPINNER = "mr-1.5 h-4 w-4";
 
 /**
  * The "Confirm it's you" controls: one per way this account can renew its
@@ -95,29 +98,40 @@ export function ReauthPanel({
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {methods.includes("plex") && (
-          <Button
+          <LoadingButton
             size="sm"
             onClick={() => {
               setError(null);
               void plex.startAuth();
             }}
             disabled={inProgress}
+            loading={plex.isLoading}
+            iconClassName={SPINNER}
           >
-            {plex.isLoading && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             Sign in with Plex
-          </Button>
+          </LoadingButton>
         )}
         {methods.includes("oidc") && (
-          <Button size="sm" onClick={() => void run("oidc", reauthWithOidcPopup)} disabled={inProgress}>
-            {busy === "oidc" && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+          <LoadingButton
+            size="sm"
+            onClick={() => void run("oidc", reauthWithOidcPopup)}
+            disabled={inProgress}
+            loading={busy === "oidc"}
+            iconClassName={SPINNER}
+          >
             Sign in with SSO
-          </Button>
+          </LoadingButton>
         )}
         {methods.includes("forward") && (
-          <Button size="sm" onClick={() => void run("forward", reauthWithProxy)} disabled={inProgress}>
-            {busy === "forward" && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+          <LoadingButton
+            size="sm"
+            onClick={() => void run("forward", reauthWithProxy)}
+            disabled={inProgress}
+            loading={busy === "forward"}
+            iconClassName={SPINNER}
+          >
             Confirm with SSO
-          </Button>
+          </LoadingButton>
         )}
         {(plex.isLoading || busy === "oidc") && (
           <Button
@@ -153,10 +167,15 @@ export function ReauthPanel({
             disabled={inProgress}
             className="h-8"
           />
-          <Button size="sm" onClick={() => void submitPassword()} disabled={inProgress || !password}>
-            {busy === "password" && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+          <LoadingButton
+            size="sm"
+            onClick={() => void submitPassword()}
+            disabled={inProgress || !password}
+            loading={busy === "password"}
+            iconClassName={SPINNER}
+          >
             Confirm
-          </Button>
+          </LoadingButton>
         </div>
       )}
       {methods.includes("plex") && !plex.isLoading && (

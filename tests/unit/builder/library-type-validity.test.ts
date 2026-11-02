@@ -145,17 +145,22 @@ describe("dropIncompatibleRules", () => {
     expect(out).toEqual([]);
   });
 
-  it("preserves the streamQuery field when only some rules are pruned", () => {
+  it("keeps the streamQuery on a stream-query group with rules, which it rebuilds", () => {
+    // A group with rules is copied with its kept rules rather than passed
+    // through verbatim, so the copy must carry the streamQuery across.
     const streamGroup: ConditionGroup = {
       id: "g-stream",
       condition: "AND",
       rules: [
-        { id: "r1", field: "audioLanguage", operator: "equals", value: "eng", condition: "AND" },
+        { id: "r1", field: "sqLanguage", operator: "equals", value: "English", condition: "AND" },
       ],
       groups: [],
       streamQuery: { streamType: "audio" },
     };
-    const out = dropIncompatibleRules([streamGroup], "MOVIE");
+    const out = dropIncompatibleRules([streamGroup], "MUSIC");
+    expect(out).toHaveLength(1);
+    expect(out[0]).not.toBe(streamGroup);
+    expect(out[0].rules.map((r) => r.id)).toEqual(["r1"]);
     expect(out[0].streamQuery).toEqual({ streamType: "audio" });
   });
 });

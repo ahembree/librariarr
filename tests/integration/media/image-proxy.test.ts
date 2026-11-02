@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { rm, readdir } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -34,17 +35,9 @@ vi.mock("@/lib/media-server/factory", () => ({
   createMediaServerClient: vi.fn(() => ({ fetchImage: mockFetchImage })),
 }));
 
-vi.mock("axios", () => ({
-  default: {
-    get: vi.fn().mockResolvedValue({
-      data: Buffer.from("fake-image-data"),
-      headers: { "content-type": "image/jpeg" },
-    }),
-  },
-}));
-
 import { GET } from "@/app/api/media/[id]/image/route";
 import { computeCacheKey } from "@/lib/image-cache/image-cache";
+import { appCache } from "@/lib/cache/memory-cache";
 import {
   CACHE_WIDTH_ART,
   CACHE_WIDTH_DEFAULT,
@@ -62,6 +55,8 @@ describe("GET /api/media/[id]/image", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
+    // The route keeps item metadata and fetch failures in the in-process cache.
+    appCache.clear();
     // Now that the cache is genuinely written, it survives between tests and
     // the shared THUMB would be served from disk — start every test cold.
     await rm(cacheDir, { recursive: true, force: true });
@@ -94,11 +89,13 @@ describe("GET /api/media/[id]/image", () => {
     clearMockSession();
     const response = await callRouteWithParams(GET, { id: "any" });
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent item", async () => {
     const response = await callRouteWithParams(GET, { id: "nonexistent" });
     expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
   });
 
   it("returns 404 when item has no thumbnail", async () => {
@@ -106,6 +103,8 @@ describe("GET /api/media/[id]/image", () => {
     // item has no thumbUrl set by default
     const response = await callRouteWithParams(GET, { id: item.id });
     expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No thumbnail" });
+    expect(mockFetchImage).not.toHaveBeenCalled();
   });
 
   describe("width selection", () => {
@@ -123,18 +122,18 @@ describe("GET /api/media/[id]/image", () => {
     }
 
     it("serves the default width when no w is given", async () => {
-      expect(await etagFor()).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor()).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
     });
 
     it("serves the grid width for w=400", async () => {
       expect(await etagFor({ w: String(CACHE_WIDTH_GRID) })).toBe(
-        `"${computeCacheKey(THUMB, CACHE_WIDTH_GRID)}"`,
+        `"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID)}"`,
       );
     });
 
     it("serves the wide grid width for w=640", async () => {
       expect(await etagFor({ w: String(CACHE_WIDTH_GRID_WIDE) })).toBe(
-        `"${computeCacheKey(THUMB, CACHE_WIDTH_GRID_WIDE)}"`,
+        `"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID_WIDE)}"`,
       );
     });
 
@@ -147,13 +146,13 @@ describe("GET /api/media/[id]/image", () => {
 
     it("falls back to the default width for a w outside the allow-list", async () => {
       // Otherwise any caller could mint arbitrary cache entries.
-      expect(await etagFor({ w: "401" })).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
-      expect(await etagFor({ w: "abc" })).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor({ w: "401" })).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor({ w: "abc" })).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
     });
 
     it("ignores w for type=art — the hero picks its own width", async () => {
       expect(await etagFor({ type: "art", w: String(CACHE_WIDTH_GRID) })).toBe(
-        `"${computeCacheKey(ART, CACHE_WIDTH_ART)}"`,
+        `"${computeCacheKey(libraryId, ART, CACHE_WIDTH_ART)}"`,
       );
     });
 
@@ -178,8 +177,11 @@ describe("GET /api/media/[id]/image", () => {
       const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
       await callRouteWithParams(GET, { id: item.id }, { searchParams: { w: String(CACHE_WIDTH_GRID) } });
 
-      const shards = await readdir(cacheDir).catch(() => []);
-      expect(shards.length).toBeGreaterThan(0);
+      // <dir>/<key[0:2]>/<key[2:4]>/<key>.webp, as the cache lays it out.
+      const key = computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID);
+      const file = path.join(cacheDir, key.slice(0, 2), key.slice(2, 4), `${key}.webp`);
+      expect((await stat(file)).size).toBeGreaterThan(0);
+      expect((await sharp(file).metadata()).format).toBe("webp");
     });
 
     it("caches each width as a separate file, so a second width still fetches", async () => {
@@ -207,5 +209,38 @@ describe("GET /api/media/[id]/image", () => {
       await etagFor({ type: "art" });
       expect(mockFetchImage).toHaveBeenCalledWith(ART, { width: CACHE_WIDTH_ART });
     });
+  });
+
+  it("does not serve one server's cached poster for another server's item at the same path", async () => {
+    // Plex rating keys are per-server row ids, so two Plex servers both hold a
+    // `/library/metadata/1234/thumb/...` for UNRELATED items. Keyed by the path
+    // alone, whichever was fetched first was served for the other for the TTL.
+    const solid = (background: string) =>
+      sharp({ create: { width: 32, height: 48, channels: 3, background } }).jpeg().toBuffer();
+    mockFetchImage.mockReset();
+    mockFetchImage
+      .mockResolvedValueOnce({ data: await solid("#ff0000"), contentType: "image/jpeg" })
+      .mockResolvedValueOnce({ data: await solid("#0000ff"), contentType: "image/jpeg" });
+
+    const otherServer = await createTestServer(userId, { name: "Plex B", url: "http://plex-b.test:32400" });
+    const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
+    const movieOnA = await createTestMediaItem(libraryId, {
+      ratingKey: "1234", thumbUrl: "/library/metadata/1234/thumb/1700000000",
+    });
+    const episodeOnB = await createTestMediaItem(otherLibrary.id, {
+      type: "SERIES", parentTitle: "Some Show", ratingKey: "1234",
+      thumbUrl: "/library/metadata/1234/thumb/1711111111",
+    });
+
+    const resA = await callRouteWithParams(GET, { id: movieOnA.id });
+    expect(resA.status).toBe(200);
+    const resB = await callRouteWithParams(GET, { id: episodeOnB.id });
+    expect(resB.status).toBe(200);
+
+    // Server B was asked for its own artwork, and its item shows it (blue).
+    expect(mockFetchImage).toHaveBeenCalledTimes(2);
+    const [r, , b] = (await sharp(Buffer.from(await resB.arrayBuffer())).stats()).channels.map((c) => c.mean);
+    expect(b).toBeGreaterThan(r);
+    expect(resB.headers.get("etag")).not.toBe(resA.headers.get("etag"));
   });
 });

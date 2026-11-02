@@ -45,6 +45,13 @@ describe("extendToCurrentMonth", () => {
     expect(extendToCurrentMonth(pts, false, NOW)).toEqual(pts);
   });
 
+  it("ends at a given month label rather than this clock's month", () => {
+    // The server render's month, which the hydrating render must repeat even
+    // where the browser's clock is already in the next month.
+    const out = extendToCurrentMonth([{ date: "2026-08", total: 1 }], false, "2026-09");
+    expect(out.map((p) => p.date)).toEqual(["2026-08", "2026-09"]);
+  });
+
   it("leaves an empty series empty", () => {
     expect(extendToCurrentMonth([], false, NOW)).toEqual([]);
   });

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   CONDITION_FIELDS,
   CONDITION_OPERATORS,
-  CONDITION_SECTIONS,
   STREAM_QUERY_FIELDS,
   STREAM_QUERY_SECTIONS,
   ARR_FIELDS,
@@ -24,13 +23,6 @@ describe("CONDITION_FIELDS registry", () => {
     for (const v of values) {
       expect(seen.has(v)).toBe(false);
       seen.add(v);
-    }
-  });
-
-  it("every field's section is registered in CONDITION_SECTIONS", () => {
-    const sectionKeys = new Set(CONDITION_SECTIONS.map((s) => s.key));
-    for (const f of CONDITION_FIELDS) {
-      expect(sectionKeys.has(f.section)).toBe(true);
     }
   });
 
@@ -226,21 +218,6 @@ describe("CONDITION_OPERATORS", () => {
     const lte = CONDITION_OPERATORS.find((o) => o.value === "lessThanOrEqual");
     expect(gte?.label).toBe(">=");
     expect(lte?.label).toBe("<=");
-  });
-
-  it("every operator declares at least one applicable type", () => {
-    for (const op of CONDITION_OPERATORS) {
-      expect(op.types.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("number, text, date, and boolean each have at least one operator", () => {
-    const has = (t: "number" | "text" | "date" | "boolean") =>
-      CONDITION_OPERATORS.some((op) => op.types.includes(t));
-    expect(has("number")).toBe(true);
-    expect(has("text")).toBe(true);
-    expect(has("date")).toBe(true);
-    expect(has("boolean")).toBe(true);
   });
 });
 
