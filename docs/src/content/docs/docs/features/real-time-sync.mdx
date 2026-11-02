@@ -60,7 +60,7 @@ What that means in practice:
 - **Only the affected data is refetched.** Events carry no figures of their own — a page receiving one re-reads the endpoint that owns the number. That keeps a single source of truth for every value on screen, and stops a play import from forcing a full re-read of your library.
 
 <Aside type="caution">
-  If the stream drops — a reverse proxy that buffers responses or closes idle connections is the usual cause — a banner reading **Live updates disconnected** appears at the top of the page, and Librariarr reconnects automatically with backoff. On reconnect it refreshes the data on screen, because anything that happened while the stream was down was never delivered.
+  If the stream drops — a reverse proxy that buffers responses or closes idle connections is the usual cause — and does not come back within 15 seconds, a banner reading **Live updates disconnected** appears at the top of the page; Librariarr reconnects automatically with backoff. On reconnect it refreshes the data on screen, because anything that happened while the stream was down was never delivered.
 
   Every screen also keeps a slow background refresh as a fallback, so the app stays correct even with the stream permanently unavailable — just less immediate. To keep SSE working through a reverse proxy, disable response buffering for `/api/events/stream` (in nginx: `proxy_buffering off;`).
 </Aside>

@@ -111,7 +111,7 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(getSessions).toHaveBeenCalledTimes(2);
-    // Unchanged: nothing at all is written (the heartbeat is 30s away).
+    // Unchanged: nothing at all is written (the heartbeat is 15s away).
     expect(await drain()).toBe("");
 
     getSessions.mockResolvedValue([playing("s-1", 60_000)]);
@@ -134,10 +134,10 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
     for (const s of streams) await s.reader.cancel();
   });
 
-  it("writes a heartbeat comment every 30 seconds", async () => {
+  it("writes a heartbeat comment every 15 seconds", async () => {
     const { reader, drain } = await open();
     await drain();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(await drain()).toContain(": heartbeat\n\n");
     await reader.cancel();
   });

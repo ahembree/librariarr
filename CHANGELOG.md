@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.33.0](https://github.com/ahembree/librariarr/compare/v0.32.0...v0.33.0) (2026-10-29)
+
+
+### Features
+
+* add episode-scoped Unmonitor and Search for series rules ([#490](https://github.com/ahembree/librariarr/issues/490)) ([a0ad4ff](https://github.com/ahembree/librariarr/commit/a0ad4ff89c7a272615c2f8523cddc1da80c6b2f7))
+* **api:** accept fields=basic on /api/v1/servers, types= on /api/v1/media/search and itemId= on the season, episode, track and album lists ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** pin rule set switcher beside the rule editor ([#492](https://github.com/ahembree/librariarr/issues/492)) ([842b6ee](https://github.com/ahembree/librariarr/commit/842b6eeac1e817f632a80a7a1993ebbd91b79160))
+* **settings:** display settings follow changes made in another tab or on another device ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+
+
+### Bug Fixes
+
+* **history:** read an audio-only transcode as a transcode ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **integrations:** keep the stored key when an edit sends the masked one ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **library:** clear the filter panel's chips on clear filters ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** keep library-sized id lists under postgres' bind-parameter limit ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** keep plex collection sync from answering with another server's shows ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** remove and re-word a large exception row in slices ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** show a grouped match's quality across all its episodes ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** track episode coverage across representative changes ([#491](https://github.com/ahembree/librariarr/issues/491)) ([03fe6de](https://github.com/ahembree/librariarr/commit/03fe6de9016438408a532a1b817738dce558a23b))
+* **query:** stop the column choice throwing in a private window ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* reduce heartbeat interval to 15s to avoid proxy timeouts ([#493](https://github.com/ahembree/librariarr/issues/493)) ([9858702](https://github.com/ahembree/librariarr/commit/985870232ccce10a754cf735dd25607cf91c71b7))
+* **rules:** open a legacy rule set as the engine evaluates it ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **servers:** drop media caches when a library is turned on or off ([c9c81d2](https://github.com/ahembree/librariarr/commit/c9c81d26d75c598a1e392ad3f17d617022ce6513))
+* **servers:** recompute canonical copies before dropping caches on server delete ([c9c81d2](https://github.com/ahembree/librariarr/commit/c9c81d26d75c598a1e392ad3f17d617022ce6513))
+* **settings:** refuse a dashboard layout or column save made from an outdated copy instead of overwriting the newer one ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* **settings:** show the stored lifecycle detection and execution schedules ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **sync:** drop media caches before announcing watch-history updates ([c9c81d2](https://github.com/ahembree/librariarr/commit/c9c81d26d75c598a1e392ad3f17d617022ce6513))
+* **theme:** remove the blue accent preset ([#485](https://github.com/ahembree/librariarr/issues/485)) ([3eed099](https://github.com/ahembree/librariarr/commit/3eed09977ad1c98aaa0f706e152ee9b7e2036d56))
+* **tools:** stop the preroll page sorting a schedule's days in place ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* update the user chip and dashboard greeting after renaming the account or linking or unlinking Plex or SSO ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+
+
+### Performance Improvements
+
+* **api:** combine the dashboard's custom cards, the search palette and the settings page's reads into fewer requests ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **api:** share one poll of the media servers' sessions and one distinct-values computation ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **dashboard:** load the library tile sparklines in one request instead of one per tile ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* **db:** index the delete cascades, log filters and title searches that scanned whole tables ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **jobs:** prune finished sync jobs ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **library:** cache library listings and prefetch item details ([c9c81d2](https://github.com/ahembree/librariarr/commit/c9c81d26d75c598a1e392ad3f17d617022ce6513))
+* **lifecycle:** answer a detection run with counts per rule set, not every matched row ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** re-check deleted items instead of re-syncing their libraries after execution ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** read arr and seerr data once per detection run, in parallel and only as needed ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** share the rule editor's arr and seerr reads across preview, diff and test media ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **lifecycle:** sync plex collections with fewer reads and no writes when nothing changed ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* render the sidebar's library links and the maintenance banner with the page ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* **settings:** load the Settings page's opening data in one request instead of 24 ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* **settings:** render display settings with the page instead of fetching them after it loads ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* share the sidebar's and the dashboard's update check and active-session requests ([33c8748](https://github.com/ahembree/librariarr/commit/33c87487a1070be63706c46a96b586392e56dd59))
+* **sync:** fetch incremental changes in parallel and recompute only touched dedup groups ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **sync:** stop the full sync re-reading play history and write only changed rows ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **sync:** walk jellyfin/emby play history in parallel and fetch tracearr pages ahead ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **ui:** load settings tabs and the dashboard's drag-and-drop grid on demand ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+* **ui:** share one request per realtime event and poll only while the event stream is down ([f4b10b6](https://github.com/ahembree/librariarr/commit/f4b10b6e4d0a572b1811fa85d2234f75e53195e7))
+
 ## [0.32.0](https://github.com/ahembree/librariarr/compare/v0.31.1...v0.32.0) (2026-10-23)
 
 

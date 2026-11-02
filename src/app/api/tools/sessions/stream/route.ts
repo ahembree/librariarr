@@ -10,7 +10,9 @@ export const dynamic = "force-dynamic";
 const EVENT_POLL_MIN_MS = 2000;
 
 const POLL_INTERVAL = 5000;
-const HEARTBEAT_INTERVAL = 30000;
+// Under the 30s idle timeout common to reverse proxies, which a 30s heartbeat
+// raced: the proxy closed the stream just before each heartbeat arrived.
+const HEARTBEAT_INTERVAL = 15000;
 const MAX_STREAM_LIFETIME = 3600000; // 1 hour safety limit
 
 /**

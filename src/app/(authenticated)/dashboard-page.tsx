@@ -537,6 +537,9 @@ export function DashboardPage() {
   }
 
   const serverId = selectedServerId !== ALL_SERVERS ? selectedServerId : undefined;
+  const insightsFilterType = selectedMediaType !== ALL_TYPES
+    ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC"
+    : undefined;
   // The Insights cards read the saved layout and the type filter; mounting
   // them before either is known would render (and fetch for) the wrong cards.
   const insightsReady = layoutSettled && typesSettled;
@@ -656,7 +659,7 @@ export function DashboardPage() {
                 value={selectedMediaType}
                 onValueChange={setSelectedMediaType}
               >
-                <SelectTrigger className="h-8 w-36 text-sm">
+                <SelectTrigger className="h-9 w-36 text-sm">
                   {selectedMediaType === "MOVIE" ? (
                     <Film className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                   ) : selectedMediaType === "SERIES" ? (
@@ -692,11 +695,13 @@ export function DashboardPage() {
                   ]);
                 }}
                 onAddCustom={handleAddCustom}
+                serverId={serverId}
+                filterType={insightsFilterType}
+                availableTypes={availableTypes}
               />
             )}
             <Button
               variant="outline"
-              size="sm"
               disabled={!insightsReady}
               onClick={() => setEditMode(!editMode)}
             >
@@ -720,7 +725,7 @@ export function DashboardPage() {
             cards={insightCards}
             stats={stats}
             editMode={editMode}
-            filterType={selectedMediaType !== ALL_TYPES ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
+            filterType={insightsFilterType}
             serverId={serverId}
             servers={servers}
             availableTypes={availableTypes}
@@ -745,6 +750,9 @@ export function DashboardPage() {
           onOpenChange={(open) => { if (!open) setEditingCustomCard(null); }}
           onConfirm={handleConfigSave}
           initialConfig={editingCustomCard?.config}
+          serverId={serverId}
+          filterType={insightsFilterType}
+          availableTypes={availableTypes}
         />
       )}
     </div>
