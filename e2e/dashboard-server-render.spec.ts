@@ -84,8 +84,8 @@ test.describe("dashboard server render", () => {
   // which anything the app did in the background (a seeded server's
   // connection failing) could set.
   test.describe("an event between the server render and the stream", () => {
-    /** Answers the event stream with only its `connected` event, naming `lastEventAt`. */
-    async function stubStream(page: Page, lastEventAt: () => number | null) {
+    /** Answers the event stream with only its `connected` event, naming `lastEventAtByType`. */
+    async function stubStream(page: Page, lastEventAtByType: () => Record<string, number>) {
       await page.route(
         (url) => url.pathname === "/api/events/stream",
         (route) =>
@@ -96,20 +96,32 @@ test.describe("dashboard server render", () => {
                 headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
                 body:
                   "retry: 600000\n\n" +
-                  `event: connected\ndata: ${JSON.stringify({ timestamp: Date.now(), lastEventAt: lastEventAt() })}\n\n`,
+                  `event: connected\ndata: ${JSON.stringify({ timestamp: Date.now(), lastEventAtByType: lastEventAtByType() })}\n\n`,
               }),
       );
     }
 
     test("is caught up on when the stream connects", async ({ page }) => {
-      await stubStream(page, () => Date.now());
+      await stubStream(page, () => ({ "sync:completed": Date.now() }));
       const statsRequested = page.waitForRequest((req) => new URL(req.url()).pathname === "/api/media/stats");
       await page.goto("/");
       await statsRequested;
     });
 
     test("none: a full load asks for nothing the server read", async ({ page }) => {
-      await stubStream(page, () => null);
+      await stubStream(page, () => ({}));
+      const requests: Request[] = [];
+      page.on("request", (req) => requests.push(req));
+      await page.goto("/");
+      await expect(page.getByRole("button", { name: /^Customize$/ })).toBeEnabled();
+      await page.waitForLoadState("networkidle");
+      expect(seededReads(requests)).toEqual([]);
+    });
+
+    // A playback in progress emits `session-changed` every few seconds: only
+    // its own subscribers (the stream badges) read again, not the figures.
+    test("one the figures do not follow: they are not read again", async ({ page }) => {
+      await stubStream(page, () => ({ "session-changed": Date.now() }));
       const requests: Request[] = [];
       page.on("request", (req) => requests.push(req));
       await page.goto("/");

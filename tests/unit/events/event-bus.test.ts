@@ -186,7 +186,7 @@ describe("AppEventBus", () => {
     unsubscribe();
   });
 
-  it("records when the last event went out, the time delivered events carry", async () => {
+  it("records when each event type last went out, the time delivered events carry", async () => {
     const { eventBus } = await createEventBus();
     const listener = vi.fn();
     const unsubscribe = eventBus.subscribe(listener);
@@ -194,16 +194,24 @@ describe("AppEventBus", () => {
     eventBus.emit({ type: "sync:completed", userId: "user1" });
 
     const delivered = listener.mock.calls[0][0] as { timestamp: number };
-    expect(eventBus.lastEventAt).toBe(delivered.timestamp);
+    expect(eventBus.lastEventAtByType()["sync:completed"]).toBe(delivered.timestamp);
     unsubscribe();
   });
 
-  it("records the time even when no one is subscribed", async () => {
+  it("keeps each type's own time, even when no one is subscribed", async () => {
     const { eventBus } = await createEventBus();
     vi.useFakeTimers({ now: 5_000_000 });
     try {
       eventBus.emit({ type: "server:changed", userId: "user1" });
-      expect(eventBus.lastEventAt).toBe(5_000_000);
+      vi.setSystemTime(5_000_250);
+      eventBus.emit({ type: "session-changed", userId: "user1" });
+      vi.setSystemTime(5_000_500);
+      eventBus.emit({ type: "session-changed", userId: "user1" });
+      // The bus is one per process, so earlier tests' types are there too.
+      expect(eventBus.lastEventAtByType()).toMatchObject({
+        "server:changed": 5_000_000,
+        "session-changed": 5_000_500,
+      });
     } finally {
       vi.useRealTimers();
     }
