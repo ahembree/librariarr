@@ -488,3 +488,21 @@ describe("formatChannels", () => {
     expect(formatChannels(5, { verbose: true })).toBe("5ch");
   });
 });
+
+describe("formatRelativeDate and formatUntil against a given time", () => {
+  // A server-rendered page formats against its render time until it has
+  // hydrated, so the two renders write the same text.
+  const now = Date.parse("2026-03-10T12:00:00Z");
+
+  it("measures from `now`, not the clock", () => {
+    expect(formatRelativeDate("2026-03-10T11:55:00Z", { now })).toBe("5m ago");
+    expect(formatRelativeDate("2026-03-08T12:00:00Z", { now, largestUnit: "day" })).toBe("2d ago");
+    expect(formatUntil("2026-03-10T15:00:00Z", now)).toBe("in 3h");
+  });
+
+  it("falls back to the clock when `now` is undefined", () => {
+    const soon = new Date(Date.now() + 2 * 3_600_000 + 60_000).toISOString();
+    expect(formatUntil(soon, undefined)).toBe("in 2h");
+    expect(formatRelativeDate(new Date(Date.now() - 120_000), { now: undefined })).toBe("2m ago");
+  });
+});

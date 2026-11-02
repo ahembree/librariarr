@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
@@ -16,6 +16,8 @@ import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { latestSyncOutcome } from "@/lib/sync/latest-outcome";
 import { activeSyncPerServer } from "@/lib/sync/active-sync";
+import { useCountFormat, useDashboardSeed, useRenderNow } from "@/components/dashboard/dashboard-seed";
+import { SYNC_STATUS_URL } from "@/lib/dashboard/seed-urls";
 
 interface SyncJob {
   id: string;
@@ -48,14 +50,16 @@ interface SyncIndicatorProps {
   onSyncComplete?: () => void;
 }
 
-const formatTimeAgo = (date: Date) => formatRelativeDate(date, { largestUnit: "day" });
+const formatTimeAgo = (date: Date, now?: number) => formatRelativeDate(date, { largestUnit: "day", now });
 
-function ActiveSyncBar({ job }: { job: SyncJob }) {
+const isActiveJob = (j: SyncJob) => j.status === "RUNNING" || j.status === "PENDING";
+
+function ActiveSyncBar({ job, now }: { job: SyncJob; now?: number }) {
   const progress =
     job.totalItems > 0
       ? Math.round((job.itemsProcessed / job.totalItems) * 100)
       : 0;
-  const eta = formatSyncEta(job.startedAt, job.itemsProcessed, job.totalItems);
+  const eta = formatSyncEta(job.startedAt, job.itemsProcessed, job.totalItems, now);
 
   return (
     <TooltipProvider>
@@ -99,13 +103,19 @@ function ActiveSyncBar({ job }: { job: SyncJob }) {
   );
 }
 
-export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorProps) {
-  const [jobs, setJobs] = useState<SyncJob[]>([]);
-  const [hasActiveSync, setHasActiveSync] = useState(false);
-  const [initialCheckDone, setInitialCheckDone] = useState(false);
+export const SyncIndicator = memo(function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorProps) {
+  // On the dashboard's page load the server render read the jobs: the first
+  // check is that answer, and is not asked for again.
+  const seeded = useDashboardSeed<{ jobs?: SyncJob[] }>(SYNC_STATUS_URL);
+  const [seedJobs] = useState(() => (seeded === undefined ? null : (seeded.jobs ?? [])));
+  const [jobs, setJobs] = useState<SyncJob[]>(seedJobs ?? []);
+  const [hasActiveSync, setHasActiveSync] = useState(() => seedJobs?.some(isActiveJob) ?? false);
+  const [initialCheckDone, setInitialCheckDone] = useState(seedJobs !== null);
   const [, setTick] = useState(0);
-  const wasActiveRef = useRef(false);
-  const isFirstFetchRef = useRef(true);
+  const wasActiveRef = useRef(seedJobs?.some(isActiveJob) ?? false);
+  const isFirstFetchRef = useRef(seedJobs === null);
+  const now = useRenderNow();
+  const formatCount = useCountFormat();
   // Read through refs so `fetchStatus` stays stable: it is the realtime
   // subscriptions' callback.
   const onSyncActiveRef = useRef(onSyncActive);
@@ -119,7 +129,9 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
   // jobs list also carries historical COMPLETED/FAILED rows (for the idle
   // indicator), so we must not scan the whole list or a stale failure would
   // be re-announced on every successful sync.
-  const prevActiveIdsRef = useRef<Set<string>>(new Set());
+  const prevActiveIdsRef = useRef<Set<string>>(
+    new Set((seedJobs ?? []).filter(isActiveJob).map((j) => j.id)),
+  );
 
   // `announced`: the check runs on a delivered event (or a reconnect's
   // resync), so the page's own subscriptions saw the same event. Decided by
@@ -200,6 +212,7 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
   useRealtime("sync:progress", onEvent);
 
   useEffect(() => {
+    if (seedJobs !== null) return;
     void (async () => { await fetchStatus(false); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -229,7 +242,7 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
     return (
       <>
         {activeSyncPerServer(activeJobs).map((job) => (
-          <ActiveSyncBar key={job.id} job={job} />
+          <ActiveSyncBar key={job.id} job={job} now={now} />
         ))}
       </>
     );
@@ -245,9 +258,9 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
               <CheckCircle className="h-4 w-4 text-green" />
               <ServerTypeChip type={recentCompleted.mediaServer.type} />
               <span>
-                {recentCompleted.itemsProcessed.toLocaleString()} items
+                {formatCount(recentCompleted.itemsProcessed)} items
                 {" \u00b7 "}
-                {formatTimeAgo(completedAt)}
+                {formatTimeAgo(completedAt, now)}
               </span>
             </div>
           </TooltipTrigger>
@@ -276,7 +289,7 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
               <ServerTypeChip type={recentFailed.mediaServer.type} />
               <span>
                 Sync failed
-                {failedAt && ` \u00b7 ${formatTimeAgo(failedAt)}`}
+                {failedAt && ` \u00b7 ${formatTimeAgo(failedAt, now)}`}
               </span>
             </div>
           </TooltipTrigger>
@@ -292,4 +305,4 @@ export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorPro
   }
 
   return null;
-}
+});

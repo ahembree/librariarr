@@ -12,7 +12,7 @@ The dashboard is the landing page after login — an operations console for your
 
 ## Zones
 
-The page appears at once and every zone loads on its own, filling in as its data arrives — a slow source never holds up the rest of the dashboard.
+When you open or reload the dashboard, the server sends it with the library figures, the sync and schedule tiles, and the lifecycle pipeline already filled in, so they show as soon as the page appears — even on a phone, before the app's code has finished starting. Recently Added and the Insights grid follow a moment later, without a further round trip for their data. Moving to the dashboard from another page loads each zone on its own, filling in as its data arrives — a slow source never holds up the rest of the dashboard.
 
 ### Status Strip
 
@@ -26,7 +26,7 @@ A compact row of live operational tiles at the top of the page. Each tile links 
 | Next runs | Countdown to the next lifecycle detection and execution runs | Settings → Scheduling |
 | Update | Appears only when a newer Librariarr version is available | Settings → System |
 
-Slow data sources (streams and integration health probe your servers) load in the background without blocking the rest of the page.
+Slow data sources (streams and integration health probe your servers, and the update check asks GitHub) always load in the background, never holding up the rest of the page.
 
 ### Library Overview
 
@@ -85,6 +85,8 @@ The **media type filter** above the grid scopes every chart, custom cards includ
 #### Custom Cards
 
 Custom cards let you create charts with any dimension and chart type. Click **Customize → Add Card → Custom Card**.
+
+The dialog shows a live **Preview** of the card beside its options, drawn from your library for the server and media type selected on the dashboard. It appears once the card has everything it needs (a dimension, plus a second dimension for a heatmap) and updates as you change the chart type, item count, title or icon. Editing an existing card with its settings button shows the same preview.
 
 ##### Chart Types
 

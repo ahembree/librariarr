@@ -1,7 +1,16 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { createElement, type ReactNode } from "react";
+import { renderToString } from "react-dom/server";
 import { renderHook, act } from "@testing-library/react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { MobileGuessProvider } from "@/components/mobile-guess-provider";
+
+/** The provider around `children`. Its props type requires `children`, which lint wants as the third argument. */
+function guessing(guess: boolean, children: ReactNode) {
+  const props = { guess } as Parameters<typeof MobileGuessProvider>[0];
+  return createElement(MobileGuessProvider, props, children);
+}
 
 function stubMatchMedia(initial: boolean) {
   let matches = initial;
@@ -55,4 +64,21 @@ describe("useIsMobile", () => {
     unmount();
     expect(mm.listeners.size).toBe(0);
   });
+
+  it("renders the server's guess on the server, and false outside the shell", () => {
+    function Probe() {
+      return createElement("span", null, String(useIsMobile()));
+    }
+    expect(renderToString(guessing(true, createElement(Probe)))).toContain("true");
+    expect(renderToString(createElement(Probe))).toContain("false");
+  });
+
+  it("a client mount reads the screen, whatever the guess", () => {
+    stubMatchMedia(false);
+    const { result } = renderHook(() => useIsMobile(), {
+      wrapper: ({ children }) => guessing(true, children),
+    });
+    expect(result.current).toBe(false);
+  });
 });
+
