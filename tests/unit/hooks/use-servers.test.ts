@@ -180,4 +180,25 @@ describe("useServers", () => {
     await act(async () => answers[0]({ servers: [{ id: "old", name: "Old", type: "PLEX" }] }));
     expect(result.current.servers.map((s) => s.id)).toEqual(["new"]);
   });
+
+  it("takes the server render's answer: shown at once, stored, and not fetched again", async () => {
+    fetchMock.mockResolvedValue(ok({ servers: [] }));
+    const seedBody = { servers: [{ id: "1", name: "Plex", type: "PLEX" }] };
+    const { result } = renderHook(() => useServers(seedBody));
+    expect(result.current.servers).toEqual([{ id: "1", name: "Plex", type: "PLEX", enabled: true }]);
+    await act(async () => {});
+    expect(serverCalls()).toBe(0);
+    // The store holds it for the next picker.
+    const next = renderHook(() => useServers());
+    expect(next.result.current.servers).toHaveLength(1);
+  });
+
+  it("a seed never replaces a list the store already holds", async () => {
+    fetchMock.mockResolvedValue(ok({ servers: [{ id: "held", name: "Held", type: "PLEX" }] }));
+    const first = renderHook(() => useServers());
+    await waitFor(() => expect(first.result.current.servers).toHaveLength(1));
+    const seeded = renderHook(() => useServers({ servers: [{ id: "seed", name: "Seed", type: "PLEX" }] }));
+    expect(seeded.result.current.servers.map((s) => s.id)).toEqual(["held"]);
+  });
 });
+

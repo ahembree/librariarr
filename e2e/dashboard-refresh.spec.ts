@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import { storeDashboardLayout } from "./seed";
+import { openDashboardInBrowser } from "./dashboard-nav";
 
 /**
  * Dashboard behaviour across a realtime refresh. The page reloads its data on
@@ -9,8 +10,9 @@ import { storeDashboardLayout } from "./seed";
  * deleted or disabled selection was kept, freezing the figures on a 404.
  *
  * The data routes are stubbed so the spec controls exactly which servers exist
- * and what each one's stats say, and `/api/events/stream` is held open until
- * the test releases one event — `sync:completed` as a real sync delivers it,
+ * and what each one's stats say — the dashboard is opened by a client-side
+ * navigation, since a full load reads them on the server — and
+ * `/api/events/stream` is held open until the test releases one event — `sync:completed` as a real sync delivers it,
  * or `server:changed` as every server add, edit, disable and delete does.
  */
 
@@ -170,7 +172,7 @@ async function selectServer(page: Page, name: string) {
 test.describe("dashboard refresh", () => {
   test("does not offer a disabled server", async ({ page }) => {
     await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
 
     await page.getByRole("combobox").filter({ hasText: "All Servers" }).first().click();
@@ -181,7 +183,7 @@ test.describe("dashboard refresh", () => {
 
   test("a refresh keeps the selected server's stats", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
 
     await selectServer(page, "Alpha");
@@ -213,7 +215,7 @@ test.describe("dashboard refresh", () => {
       mediaServer: { name: "Bravo", type: "PLEX" },
     });
     await page.route(isPath("/api/sync/status"), (route) => route.fulfill({ json: { jobs: [job()] } }));
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
     await expect(page.getByText(/Syncing Bravo/)).toBeVisible();
     const before = h.statsRequests.length;
@@ -228,7 +230,7 @@ test.describe("dashboard refresh", () => {
 
   test("a refresh does not re-read the saved layout", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
     // The saved layout comes with the server render; the page never asks.
     expect(h.layoutGets()).toBe(0);
@@ -256,7 +258,7 @@ test.describe("dashboard refresh", () => {
 
   test("a deleted selection falls back to all servers", async ({ page }) => {
     const h = await setup(page);
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await selectServer(page, "Alpha");
     await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
 
@@ -304,7 +306,7 @@ test.describe("dashboard refresh", () => {
       },
     );
 
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     await expect.poll(() => "all" in held).toBe(true);
     await selectServer(page, "Alpha");
     await expect.poll(() => "srv-a" in held).toBe(true);
@@ -358,7 +360,7 @@ test.describe("dashboard refresh", () => {
       }
     });
 
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     // Recently Added has its own "All Types" selector above this one.
     const insights = page.locator("section", {
       has: page.getByRole("heading", { name: "Insights", exact: true }),
@@ -415,7 +417,7 @@ test.describe("dashboard refresh", () => {
           : route.fulfill({ status: 200, contentType: "image/png", body: png }),
     );
 
-    await page.goto("/");
+    await openDashboardInBrowser(page);
     const tile = page.getByRole("button", { name: /^Stranger Things — Season 1 \(\d+ episodes\)$/ });
     await expect(tile).toContainText("2 episodes");
     // The old row's season art and its series fallback both 404: the tile
