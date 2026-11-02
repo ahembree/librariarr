@@ -126,9 +126,14 @@ export async function loadCachedList<T>(
     onData(cached.value);
     if (cached.fresh) return;
   }
-  const response = await fetch(`${url}?${params}`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const data = (await response.json()) as T;
+  const data = await fetchJson<T>(`${url}?${params}`);
   cache.set(key, data, generation);
   onData(data);
+}
+
+/** GET `href` as JSON; rejects on an error status. A `signal` aborts the request. */
+export async function fetchJson<T>(href: string, signal?: AbortSignal): Promise<T> {
+  const response = await (signal ? fetch(href, { signal }) : fetch(href));
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as T;
 }
