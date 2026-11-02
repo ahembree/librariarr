@@ -64,7 +64,7 @@ pnpm e2e:docker        # docker-compose.e2e.yml: postgres + app + playwright, ru
 pnpm e2e:docker:down   # tear down + wipe the ephemeral e2e DB
 ```
 
-It uses a dedicated `librariarr_e2e` database and an in-suite first-run flow to create the admin (no manual `setup` step needed). See CLAUDE.md → "Browser E2E (Playwright)". Add new user-journey specs there, not here.
+It uses a dedicated `librariarr_e2e` database and an in-suite first-run flow to create the admin (no manual `setup` step needed). See the `e2e-tests` skill. Add new user-journey specs there, not here.
 
 ## Reset between runs
 

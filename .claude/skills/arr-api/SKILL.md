@@ -1,0 +1,53 @@
+---
+name: arr-api
+description: Sonarr, Radarr and Lidarr — where to fetch each app's REST API spec and how Librariarr's Arr clients, integration HTTP layer, integration instance routes and TRaSH Guide Sync work. Use when adding, debugging or extending a Sonarr/Radarr/Lidarr API call, an integration client or route, or TRaSH Guide Sync.
+---
+
+# Arr APIs (Sonarr, Radarr, Lidarr)
+
+## API references
+
+| App | Spec (OpenAPI JSON) | Prefix |
+|-----|---------------------|--------|
+| Sonarr | `https://raw.githubusercontent.com/Sonarr/Sonarr/main/src/Sonarr.Api.V3/openapi.json` | `/api/v3/*` |
+| Radarr | `https://raw.githubusercontent.com/Radarr/Radarr/master/src/Radarr.Api.V3/openapi.json` (~300 KB) | `/api/v3/*` |
+| Lidarr | `https://raw.githubusercontent.com/lidarr/Lidarr/master/src/Lidarr.Api.V1/openapi.json` | `/api/v1/*` (v1, not v3) |
+
+Auth is the `X-Api-Key: <apiKey>` header for all three. The specs are large — extract with `jq`, never load them whole:
+
+```bash
+U=https://raw.githubusercontent.com/Radarr/Radarr/master/src/Radarr.Api.V3/openapi.json
+curl -s $U | jq '.paths | keys'                                    # list paths
+curl -s $U | jq '.paths."/api/v3/movie"'                           # one endpoint (/api/v3/series, /api/v1/artist)
+curl -s $U | jq '.components.schemas.MovieResource'                # SeriesResource, ArtistResource
+curl -s $U | jq '[.paths | to_entries[] | select(.value | .. | .tags? // [] | index("Movie")) | .key]'
+```
+
+## Integration HTTP layer (all integration clients)
+
+- `src/lib/integrations/http.ts` — **`createIntegrationHttp(appName, baseURL, headers, { timeout })`** (+ `apiKeyHeaders(apiKey)`) is how every integration client gets its axios instance. It registers, in order: trailing-slash strip, request start time, `configureRetry`, then the AxiosError → `IntegrationError` converter. **The retry must be registered before the converter** (axios runs response interceptors in registration order and the retry needs the raw AxiosError). A new client uses this rather than wiring its own interceptors. `tests/unit/integration-clients-retry.test.ts` drives each client's real chain against a local HTTP server.
+- `src/lib/http-retry.ts` — `configureRetry`: 3 retries (1/2/3 s). GET/HEAD retry 5xx, timeouts and mid-exchange transport errors; writes retry only a failure that provably preceded sending (`EAI_AGAIN`), since a reset can follow an applied write. An aborted request (`ERR_CANCELED`) is rethrown untouched (never retried, never trips the breaker). `NO_RETRY` (`{ ...NO_RETRY }` in a request config) opts out — every `testConnection` and the rule editor's recycle-bin probe use it. `NO_BREAKER_MARK` keeps a failure from marking the server down (artwork fetches).
+- **Bounding dead instances**: `/api/media/[id]/arr-info` and `seerr-info` query enabled instances in parallel, each capped by `withTimeout` (`src/lib/api/bounded.ts`, 10 s). Action loops track `UnreachableInstances` (`src/lib/lifecycle/unreachable-instances.ts`): after a host-level failure the manual/query path fails the remaining items without calling the instance, and the scheduled executor leaves them PENDING. Host-level (`isHostLevelFailure`) = a connection that could not be made (`ECONNREFUSED`/`ENOTFOUND`/`EHOSTUNREACH`/`EAI_AGAIN`…) or a **GET/HEAD** with no response or 502/503/504 after retries — **never a write's timeout or gateway error** (Sonarr's bulk episode-file delete routinely outlives the timeout while healthy). `IntegrationError.method` carries the method. TRaSH sync caches getter promises so a failed read fails every target at once.
+
+## Integration instance routes
+
+- `api/integrations/{radarr,sonarr,lidarr,seerr,tracearr}/` — every route file is one line, `export const { GET, POST } = builder(CONFIG)`, built from `src/lib/integrations/instance-routes.ts` (configs `RADARR` … `TRACEARR`, `INTEGRATIONS`; builders `instanceCollectionRoutes`, `instanceItemRoutes`, `instanceTestConnectionRoutes`, `instanceTestRoutes`, `instanceRecycleBinRoutes`, `instanceMetadataRoutes`). Builders declare each handler as `const METHOD = withSession(…)` (`tests/unit/auth/reauth-callers.test.ts` follows the export into the builder). A blank key or `MASKED_VALUE` keeps the stored key for all five; a failed test answers `Failed to connect to <Label>`. An add/edit/delete drops the instance's cached metadata and, for Arr apps, calls `invalidateArrMetadataCache()`. `[id]/metadata` (rule editor / Query dropdown values, no per-item map) is cached 60 s per instance under `integration-metadata:` (`readInstanceMetadata`: single-flight, failures answered but not kept, gzipped). `GET /api/integrations/instances` returns all five instance lists in one request; `?withMetadata=1` adds `seerrUsers`.
+
+## Arr clients
+
+- `src/lib/arr/` — Sonarr/Radarr/Lidarr clients (15 s timeout, title validation via `normalizeTitle()`) extending `ArrClientBase` (`arr-client-base.ts`: connection test, tags, quality profiles, languages, media management, bulk tag removal; Lidarr uses `/api/v1`). `instances.ts` (`ARR_FAMILY_FOR_TYPE`, `findArrInstance(s)`, `familyOfArrInstance`) is the one instance lookup by family; `family-data.ts` (`loadArrFamilyData`) reads a family's library into an `ArrDataMap`, instances in parallel.
+  - Array query params the Arr apps bind as `int[]` use `paramsSerializer: { indexes: null }`.
+  - By-external-id lookups (`getMovieByTmdbId`, `getSeriesByTvdbId`, `getArtistByMusicBrainzId`) return only a record carrying the requested id, never `data[0]` (Lidarr's single answer under a merged id is accepted).
+  - An import-list exclusion is added only by the whole-record deletes (`addImportExclusion`/`addImportListExclusion`); the rule editor and Query action bar offer it for those alone (`deletesArrRecord`).
+  - `IntegrationError.validationMessages` holds an Arr 400's `errorMessage`s and becomes `detail`. The `[id]/recycle-bin` routes return `externalUrl || url` as `arrUrl`.
+  - An execution run shares an `ArrExecutionContext` (`lifecycle/actions.ts`): each instance's family and tag list read once, the instance row re-read per action. An action resolves its Arr record once for its tag step and main step (`ActionArrSession`). Removing a rule set's tags from every record is one bulk-editor request per instance.
+  - **Member-scoped file deletes act only on what they can prove.** Sonarr resolves each matched episode by S/E and skips one whose `originallyAvailableAt` is more than two days from Sonarr's `airDate`; a multi-episode file is deleted only when every episode in it matched. Lidarr resolves a track by MBID, then disc+track on the album its title names (title must agree), then exact `trackTitleKey` on that album — never the same title on another album. An action none of whose members resolve throws (FAILED). `ActionOutcome.deletedMemberIds` feeds `computeDeletedBytes` (`src/lib/lifecycle/deleted-bytes.ts`).
+  - Sonarr "Search after" uses `EpisodeSearch` on the acted-on episodes; Monitor & Delete Files re-monitors them. `mapSonarrSeries` excludes season 0, takes `episodeCount` from `totalEpisodeCount`, counts every episode of monitored seasons as `monitoredEpisodeCount`, and reads `hasUnaired` from `nextAiring`, status `upcoming`, or the calendar (`getSeriesIdsWithUpcomingEpisodes`).
+  - **Music items store the ARTIST's MusicBrainz id as `MUSICBRAINZ`** (what every Lidarr consumer reads); Jellyfin/Emby map `MusicBrainzAlbumArtist ?? MusicBrainzArtist` (the track's own id as `MBID`). Plex tracks carry only their own id, so the full sync reads artists and writes the id set-based (`writeArtistMbids`, `src/lib/sync/artist-mbid.ts`) and the incremental sync fetches artist metadata first. Helpers in `src/lib/media/musicbrainz.ts`.
+
+## TRaSH Guide Sync
+
+- `api/tools/trash/` — `instances`, `catalog`, `profiles` (includes `instanceFormatNames`), `status`, `assignments` (the consent gate), `sync` (dry-run/diff or apply). Resource types: `CUSTOM_FORMAT`, `QUALITY_PROFILE`, `QUALITY_DEFINITION`, `NAMING`, `PROFILE_CF` (guide CF scores overlaid onto any quality profile, keyed by profile name).
+- `src/lib/trash/` — TRaSH Guide Sync. `catalog.ts` fetches and caches the guide JSON (`raw.githubusercontent.com`, overridable via `TRASH_GUIDES_REPO`/`TRASH_GUIDES_REF`); `arr-guide-client.ts` is a focused Sonarr/Radarr v3 client (separate from `src/lib/arr`); `translate.ts` is pure guide → Arr payload conversion (Recyclarr-style `scoreSet` and opt-in `resetUnmatchedScores` stored on the QUALITY_PROFILE row's `selection`; the PROFILE_CF overlay folded in last as `scoreOverrides`); `diff.ts` + `signature.ts` (preview, upstream-change detection); `status.ts`; `sync.ts`.
+  - **Consent gate**: nothing is written to an Arr app for a resource without a `TrashManagedResource` row; `sync.ts` only writes managed resources (dry-run `items` are preview-only; on apply they only narrow), never to a disabled instance (409); taking over an existing item needs explicit UI confirmation.
+  - Managed CFs and profiles are found by guide name, then by the recorded `arrId` (`findManagedArrResource`), so renames update in place. A profile sync that leaves a guide score unapplied records no `lastSyncHash`. A sync never writes a row's `selection` back; both assignment routes validate it (`selectionError`, `selection.ts`). Quality sizes at the top of the app's slider (Radarr 2000/1999, Sonarr 1000/995) are sent as `null`.
