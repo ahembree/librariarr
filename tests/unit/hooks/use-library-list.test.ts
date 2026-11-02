@@ -4,13 +4,15 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   subscribers: [] as { type: string; cb: (data: Record<string, unknown>) => void }[],
+  // Whether pushes arrive: with them off, every cached list counts as past fresh.
+  live: true,
 }));
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: (type: string, cb: (data: Record<string, unknown>) => void) => {
     mocks.subscribers.push({ type, cb });
     return { connected: true, authExpired: false };
   },
-  isRealtimeLive: () => true,
+  isRealtimeLive: () => mocks.live,
 }));
 
 import { useLibraryList, type LibraryListOptions } from "@/hooks/use-library-list";
@@ -121,6 +123,7 @@ async function loadWhole(rest: number) {
 
 beforeEach(() => {
   mocks.subscribers = [];
+  mocks.live = true;
   clearLibraryListCache();
   stubFetch();
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -186,6 +189,39 @@ describe("useLibraryList — progressive", () => {
     await answer(isFirst, { items: range(0, 4), pagination: { hasMore: false } });
     await waitFor(() => expect(result.current.items).toHaveLength(4));
     expect(result.current.loading).toBe(false);
+  });
+
+  it("shows a stale cached list at once and swaps the server's answer in behind it", async () => {
+    const first = renderList({ query: "sortBy=title" });
+    await loadWhole(5);
+    await waitFor(() => expect(first.result.current.loadingRest).toBe(false));
+    first.unmount();
+    // Nothing clears the cache while pushes are not arriving, so the entry is past fresh.
+    mocks.live = false;
+
+    const { result, renders } = renderList({ query: "sortBy=title" });
+    // The kept list, then both requests at once behind it.
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(result.current).toMatchObject({ loading: false, loadingRest: false });
+    expect(result.current.items).toHaveLength(FIRST_CHUNK_SIZE + 5);
+    const shown = renders.findIndex((r) => !r.loading);
+
+    await answer(isFirst, { items: range(0, FIRST_CHUNK_SIZE), pagination: { hasMore: true } });
+    expect(result.current.items).toHaveLength(FIRST_CHUNK_SIZE + 5);
+    await answer(isRest, { items: range(FIRST_CHUNK_SIZE, FIRST_CHUNK_SIZE + 6) });
+    await waitFor(() => expect(result.current.items).toHaveLength(FIRST_CHUNK_SIZE + 6));
+    // No skeleton and no first screenful once the kept list was on screen.
+    expect(renders.slice(shown).every((r) => !r.loading && r.count >= FIRST_CHUNK_SIZE + 5)).toBe(true);
+  });
+
+  it("does not refetch for the same parameters in another order", async () => {
+    const { rerender } = renderList({ query: "sortBy=title&sortOrder=asc" });
+    await loadWhole(1);
+    // Past the cache, which would answer a refetch without a request.
+    clearLibraryListCache();
+    rerender({ query: "sortOrder=asc&sortBy=title" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pending).toHaveLength(0);
   });
 
   it("ignores a sync that cannot have changed the list", async () => {
@@ -279,6 +315,30 @@ describe("useLibraryList — grouped", () => {
     await answer(anyRequest, { things: [item(1), item(2), item(3)] });
     await waitFor(() => expect(result.current.items).toHaveLength(3));
     expect(renders.slice(before).every((r) => !r.loading)).toBe(true);
+  });
+
+  it("takes an inline select without refetching on every render", async () => {
+    // With the cache past fresh, every refetch is a request.
+    mocks.live = false;
+    const { result, rerender } = renderHook(
+      ({ render }: { render: number }) =>
+        useLibraryList({
+          url: "/api/things/grouped",
+          params: new URLSearchParams("limit=0"),
+          mode: "grouped",
+          select: (body: { things?: Item[] }) => (render >= 0 ? body.things : undefined),
+          syncScope: { types: "MOVIE" },
+          debounceMs: 0,
+        }),
+      { initialProps: { render: 0 } },
+    );
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await answer(anyRequest, { things: [item(1), item(2)] });
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+
+    rerender({ render: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pending).toHaveLength(0);
   });
 
   it("reads a body without the list as an empty one", async () => {

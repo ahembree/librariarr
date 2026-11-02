@@ -12,7 +12,7 @@
  * splitting their fetch would run that aggregation twice for no earlier paint.
  */
 
-import { libraryListCache, listCacheKeyFor, type ListCache } from "./list-cache";
+import { fetchJson, libraryListCache, listCacheKeyFor, type ListCache } from "./list-cache";
 
 /**
  * Rows in the first pass. Comfortably more than a viewport at any card size or
@@ -127,12 +127,14 @@ async function fetchBothPasses<T>(
     return `${url}?${restParams}`;
   };
 
-  const firstPage = fetchPage<T>(`${url}?${firstParams}`);
+  const firstPage = fetchJson<ListResponse<T>>(`${url}?${firstParams}`);
   // The early rest can be the whole library; when it goes unused (the first
   // page failed, was the whole list, or ended short of a full page) it is
   // aborted rather than downloaded for nothing.
   const earlyRestAbort = restAlongside && !onFirst ? new AbortController() : undefined;
-  const earlyRest = earlyRestAbort ? fetchPage<T>(restUrl(FIRST_CHUNK_SIZE), earlyRestAbort.signal) : undefined;
+  const earlyRest = earlyRestAbort
+    ? fetchJson<ListResponse<T>>(restUrl(FIRST_CHUNK_SIZE), earlyRestAbort.signal)
+    : undefined;
   // Awaited below, or dropped when the first page turns out to be the whole
   // list; a rejection must not surface as unhandled meanwhile.
   earlyRest?.catch(() => {});
@@ -161,13 +163,7 @@ async function fetchBothPasses<T>(
     restBody = await earlyRest;
   } else {
     earlyRestAbort?.abort();
-    restBody = await fetchPage<T>(restUrl(firstItems.length));
+    restBody = await fetchJson<ListResponse<T>>(restUrl(firstItems.length));
   }
   return { items: [...firstItems, ...(restBody.items ?? [])], firstWasAll: false };
-}
-
-async function fetchPage<T>(href: string, signal?: AbortSignal): Promise<ListResponse<T>> {
-  const response = await (signal ? fetch(href, { signal }) : fetch(href));
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return (await response.json()) as ListResponse<T>;
 }

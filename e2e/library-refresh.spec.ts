@@ -95,23 +95,30 @@ async function setup(page: Page): Promise<Harness> {
 }
 
 const card = (page: Page, title: string) => page.locator(`[aria-label="${title}"]`);
+/** A poster card of the grid skeleton (`MediaGridSkeleton`). */
+const GRID_SKELETON = '[data-slot="skeleton"][class*="aspect-2/3"]';
 
 test.describe("library refresh", () => {
   test("a sync that adds a movie updates the Movies page in place", async ({ page }) => {
     const h = await setup(page);
+    // The first load shows the skeleton: proof the selector watched below
+    // matches it, so "never seen" cannot pass because the markup moved.
+    const releaseInitialLoad = h.holdFirstPage();
     await page.goto("/library/movies");
+    await expect(page.locator(GRID_SKELETON).first()).toBeVisible();
+    releaseInitialLoad();
     await expect(card(page, "Movie 001")).toBeVisible();
     await expect(page.getByText(`${FIRST_CHUNK + 20} movies`)).toBeVisible();
 
     // Mark a card that stays in its row, and watch for the grid skeleton.
     await card(page, "Movie 001").evaluate((el) => el.setAttribute("data-e2e-kept", "1"));
-    await page.evaluate(() => {
+    await page.evaluate((selector) => {
       const w = window as unknown as { __skeletonSeen: boolean };
       w.__skeletonSeen = false;
       new MutationObserver(() => {
-        if (document.querySelector('[data-slot="skeleton"][class*="aspect-2/3"]')) w.__skeletonSeen = true;
+        if (document.querySelector(selector)) w.__skeletonSeen = true;
       }).observe(document.body, { childList: true, subtree: true });
-    });
+    }, GRID_SKELETON);
     const before = h.requests.length;
 
     h.setMovies([movie(0, "AAA New Movie"), ...Array.from({ length: FIRST_CHUNK + 20 }, (_, i) => movie(i + 1))]);

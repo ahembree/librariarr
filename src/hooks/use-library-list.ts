@@ -1,12 +1,13 @@
 "use client";
 
-import { startTransition, useCallback, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import type { SyncViewScope } from "@/lib/media/sync-scope";
+import { sortedQueryString } from "@/lib/sorted-query";
 
 interface LibraryListCommonOptions {
   /** The listing route, e.g. `/api/media/movies`. */
@@ -37,7 +38,7 @@ export type LibraryListOptions<T, B> = LibraryListCommonOptions &
          * aggregated server-side (`loadCachedList`).
          */
         mode: "grouped";
-        /** The list in the response body. Must be stable — a module-level function. */
+        /** The list in the response body. */
         select: (body: B) => T[] | undefined;
       }
   );
@@ -82,7 +83,14 @@ export interface LibraryList<T> {
 export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>): LibraryList<T> {
   const { url, params, syncScope, debounceMs, mode } = options;
   const select = options.mode === "grouped" ? options.select : undefined;
-  const query = params.toString();
+  // Sorted, so the same parameters in another order are the same request.
+  const query = sortedQueryString(params);
+  // Read through a ref, so a page may pass `select` inline: as a dependency of
+  // `refetch` a new function every render would refetch after every render.
+  const selectRef = useRef(select);
+  useEffect(() => {
+    selectRef.current = select;
+  });
 
   const [items, setItems] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,8 +137,8 @@ export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>
           quiet: refresh,
           shownLength: refresh ? held.current.length : undefined,
         });
-      } else if (select) {
-        await loadCachedList<B>(url, requestParams, (body) => apply(select(body) ?? [], true));
+      } else {
+        await loadCachedList<B>(url, requestParams, (body) => apply(selectRef.current?.(body) ?? [], true));
       }
     } catch (error) {
       console.error(`Failed to load ${url}:`, error);
@@ -144,7 +152,7 @@ export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>
       setLoading(false);
       setLoadingRest(false);
     }
-  }, [url, query, mode, select, latest]);
+  }, [url, query, mode, latest]);
 
   useListFetch(refetch, debounceMs);
   useLibrarySyncRefetch(syncScope, refetch);
