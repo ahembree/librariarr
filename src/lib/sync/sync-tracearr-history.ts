@@ -793,10 +793,10 @@ async function runTracearrImport(
    * Walk one window to its end, or until something stops us.
    *
    * Returns `"exhausted"` only when the keyset genuinely ran out
-   * (`nextCursor === null`). Every other exit — cancelled, page cap, a stalled
-   * cursor, or a fetch/write error — returns `"stopped"`, and the distinction
-   * is load-bearing: it is what decides whether a backfill may be marked
-   * complete. Treating a cancelled walk as exhausted would permanently strand
+   * (`nextCursor === null`). Cancelled, page cap, a stalled cursor, the
+   * deadline, a yield and a mid-run mapping change return `"stopped"`; a
+   * fetch/write error returns `"errored"`. The distinction is load-bearing: it
+   * is what decides whether a backfill may be marked complete. Treating a cancelled walk as exhausted would permanently strand
    * the unread older history.
    */
   async function walk(
@@ -1927,9 +1927,12 @@ async function insertRows(
  * changes is the size of the window — from "any moment in the whole run" down to
  * "one query" — and therefore how often the failure is hit at all. The residual
  * case stays self-healing exactly as it was: `walk()`'s catch keeps every page
- * already committed, returns `"stopped"`, and the next run rebuilds the index
- * and skips the now-absent item as `unresolved`. The cost that pre-checking
- * avoids is that recovery burning the rest of a five-minute backfill slice.
+ * already committed and returns `"errored"` (a write error, not a
+ * `TracearrMappingChangedError`, which is the only catch that returns
+ * `"stopped"`), the backfill task throws so graphile-worker retries the slice
+ * with backoff, and the next run rebuilds the index and skips the now-absent
+ * item as `unresolved`. The cost that pre-checking avoids is that recovery
+ * burning the rest of a five-minute backfill slice.
  *
  * Cheap enough to run per batch: the distinct ids of ~180 rows probed against
  * the primary key in one round-trip. The overwhelmingly common answer is "all of

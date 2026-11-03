@@ -615,8 +615,11 @@ export class TracearrClient {
    * Found by bisecting the `until` filter rather than paging: the API is keyset
    * -paginated newest-first with no total and no count endpoint, so the only
    * way to learn where the history *starts* is to ask whether anything exists
-   * before a given instant and halve the range. ~16 calls at hour precision for
-   * a seven-year history, against ~1,600 to walk it.
+   * before a given instant and halve the range. The range runs from `floor`
+   * (default `OLDEST_PLAY_SEARCH_FLOOR`, 2008-01-01) to the newest play, not
+   * from the oldest, so at hour precision it takes about 19 calls whatever the
+   * history's length (one for the newest play, then one per halving), against
+   * ~1,600 pages to walk a 160k-play archive.
    *
    * This is what lets the backfill report determinate progress. A record-count
    * denominator is not obtainable, and would not be truthful even if it were —

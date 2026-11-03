@@ -203,8 +203,9 @@ export class RealtimeManager {
         // ~30s. Leading-edge throttle: immediate on a real change, floored so a
         // server that keeps pushing session frames can't drive it in a loop.
         this.enforcerThrottle.trigger();
-        // Tell the browser too, so the sidebar's stream badge updates on a push
-        // rather than on a 30s poll that round-trips to every media server.
+        // Tell the browser too, so the sidebar's stream badge updates on a push.
+        // Its session poll (round-trips to every media server) is a 5-minute
+        // fallback that runs only while the event stream is not delivering.
         this.getSessionBridge(event.serverId).trigger();
         break;
       case "library-changed":
@@ -229,10 +230,11 @@ export class RealtimeManager {
   /**
    * Forward a media-server connection state change to the browser.
    *
-   * `realtimeBus` is server-side only, so before this the UI could learn a
-   * server had dropped only by watching the sidebar's 30s session poll fail —
-   * a poll that round-trips to every server to find out something this layer
-   * already knew instantly.
+   * `realtimeBus` is server-side only, so without this the UI could learn a
+   * server had dropped only by watching the sidebar's session poll fail — a
+   * 5-minute fallback poll (`useFallbackPoll`, only while the event stream is
+   * not delivering) that round-trips to every server to find out something
+   * this layer already knew instantly.
    *
    * Only emitted on an actual transition. `server-status` can repeat the same
    * state (a reconnect attempt that fails again), and a browser event per
