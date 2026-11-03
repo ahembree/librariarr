@@ -141,7 +141,7 @@ export const DELETE = withSession(async (session, request: NextRequest, { params
 
 - It reads `getSession()`, so revocation, the settings bundle's `withSharedSession` and `withApiKey`'s principal all apply.
 - Declare only the parameters the handler reads: a handler of `(session)` alone is callable with no arguments (the settings bundle relies on that).
-- Do not write an inline `getSession()` + `isLoggedIn` check in a new route. Inline checks are only for the sign-in flows and where something must run first (a rate limit — `ai/chat`, `settings/ai/test`; the same-origin check — the SSO routes; the bundle's path validation). `backup/restore` still checks inline with no such reason.
+- Do not write an inline `getSession()` + `isLoggedIn` check in a new route. Inline checks are only for the sign-in flows and where something must run first (a rate limit — `ai/chat`, `settings/ai/test`; the same-origin check — the SSO routes; the bundle's path validation).
 
 ### API Request Validation
 
