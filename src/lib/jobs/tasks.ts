@@ -317,10 +317,7 @@ const tracearrBackfill: Task = async (payload) => {
   // pages the play data moved. `tracearr:import-progress` fires per page but
   // only drives the "still importing" notice; this is what makes the rows,
   // stats and dashboard actually reflect an import in flight.
-  await emitWatchHistoryUpdated(serverId, {
-    imported: result.count,
-    backfillPending: result.backfillPending,
-  });
+  await emitWatchHistoryUpdated(serverId);
 
   if (!result.backfillPending) {
     logger.info(

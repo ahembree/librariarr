@@ -270,7 +270,7 @@ export async function syncWatchHistory(
     // tab that started it), and the full sync's inline pass. Only when rows
     // actually landed — a no-op sync should not cost every open tab a refetch.
     if (result.count > 0) {
-      await emitWatchHistoryUpdated(serverId, { imported: result.count });
+      await emitWatchHistoryUpdated(serverId);
     }
 
     return { count: result.count };
@@ -356,7 +356,7 @@ export async function syncWatchHistory(
       );
     }
     if (count > 0) {
-      await emitWatchHistoryUpdated(serverId, { imported: count });
+      await emitWatchHistoryUpdated(serverId);
     }
     return { count };
   }
@@ -502,7 +502,7 @@ export async function syncWatchHistory(
   // tab that started it), and the full sync's inline pass. Only when rows
   // actually landed — a no-op sync should not cost every open tab a refetch.
   if (insertedCount > 0) {
-    await emitWatchHistoryUpdated(serverId, { imported: insertedCount });
+    await emitWatchHistoryUpdated(serverId);
   }
 
   return { count: insertedCount };

@@ -22,9 +22,10 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
  * *in flight* and drives only the "still importing" notice. This one says the
  * data itself is different and should be re-read.
  *
- * Carries no counts that a consumer could render as truth — like
- * `tracearr:import-progress`, the receiving page refetches the route that owns
- * the numbers, so there is only ever one place they are computed.
+ * Carries only `meta.serverId` — no counts. Like `tracearr:import-progress`,
+ * the receiving page refetches the route that owns the numbers, so there is
+ * only ever one place they are computed; the signature takes nothing else so a
+ * caller cannot attach figures.
  *
  * The media caches are dropped FIRST, here rather than by each caller: the
  * browser empties its own list cache on this event and refetches, and a
@@ -34,10 +35,7 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
  *
  * Best-effort: a sync must never fail because an event could not be emitted.
  */
-export async function emitWatchHistoryUpdated(
-  serverId: string,
-  meta?: Record<string, unknown>,
-): Promise<void> {
+export async function emitWatchHistoryUpdated(serverId: string): Promise<void> {
   invalidateMediaCaches();
   try {
     // These jobs are scheduler- and realtime-driven, so there is no session to
@@ -51,7 +49,7 @@ export async function emitWatchHistoryUpdated(
     eventBus.emit({
       type: "watch-history:updated",
       userId: server.userId,
-      meta: { serverId, ...meta },
+      meta: { serverId },
     });
   } catch (error) {
     logger.warn("WatchHistory", "Failed to emit watch-history:updated", {
