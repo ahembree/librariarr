@@ -46,8 +46,8 @@ curl -sL $P | yq '{security: .components.securitySchemes, headers: (.components.
 
 ## Artwork cache
 
-- `src/lib/image-cache/image-cache.ts`: fetch → `sharp` resize → WebP q80 → `/config/cache/images/<shard>/<sha256>.webp`, keyed by **library id + normalized artwork URL** (`normalizeCacheUrl` strips Plex's trailing timestamp) **+ width** — rating keys are per server, so the library id is part of the key.
-- `src/lib/image-url.ts` (client-safe): widths `CACHE_WIDTH_GRID` 400 (poster/square cards), `CACHE_WIDTH_GRID_WIDE` 640, 800 default, `CACHE_WIDTH_ART` 1920; `parseImageWidth` allow-list (arbitrary `?w=` refused); `resolveArtworkPath` (the one `?type=` fallback chain).
+- `src/lib/image-cache/image-cache.ts`: fetch → `sharp` resize → WebP q80 → `<IMAGE_CACHE_DIR>/<aa>/<bb>/<sha256>.webp` (default `/config/cache/images`; two shard levels from the hash), keyed by **library id + normalized artwork URL** (`normalizeCacheUrl` strips Plex's trailing timestamp) **+ width** — rating keys are per server, so the library id is part of the key.
+- `src/lib/image-url.ts` (client-safe): widths `CACHE_WIDTH_GRID` 400 (poster/square cards), `CACHE_WIDTH_GRID_WIDE` 640, 800 default, `CACHE_WIDTH_ART` 1920; `parseImageWidth` allow-list (an unlisted `?w=` is ignored and the default width served; 1920 only via `?type=art`); `resolveArtworkPath` (the one `?type=` fallback chain).
 - `invalidateCachedUrls(libraryId, urls)` **must purge every width** (`ALL_CACHE_WIDTHS`) and writes `_stats.json` once per call.
 - The media server resizes: `fetchImage(path, { width })` uses Plex's photo transcoder (`/photo/:/transcode?url=…&width=W&height=W&minSize=1&upscale=0`, falling back to the raw path on error, non-image or empty body) or Jellyfin/Emby `maxWidth`, sent with `NO_BREAKER_MARK`.
 - `sharp.concurrency(1)`; the cache's own file walks and deletes run `FILE_OP_CONCURRENCY` (8) at a time.
