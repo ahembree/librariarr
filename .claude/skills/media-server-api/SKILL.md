@@ -11,22 +11,29 @@ Realtime WebSocket handling lives in the `realtime-events` skill; how syncs use 
 
 Never load a spec whole into context — extract what you need with `jq` (JSON) or `yq` (mikefarah v4, YAML).
 
-| Server | Spec | Format | Auth |
+| Server | Spec | Format | Auth (`components.securitySchemes`) |
 |--------|------|--------|------|
-| Plex | `https://raw.githubusercontent.com/LukeHagar/plex-api-spec/main/plex-api-spec.yaml` (community OpenAPI 3.1 behind the official SDKs; the official spec at https://developer.plex.tv/ is only a browser `blob:` download — use it to verify if the mirror looks stale) | YAML | `X-Plex-Token` header (scheme `token`); identifying client headers (`X-Plex-Client-Identifier`, `X-Plex-Product`, …) are in `components.parameters` |
-| Jellyfin | `https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json` (~2 MB) | JSON | several schemes — read `components.securitySchemes` |
-| Emby | `https://swagger.emby.media/openapi.json` (~2 MB) | JSON | several schemes — read `components.securitySchemes` and per-operation `security` |
+| Plex (official) | embedded in the Redoc page `https://developer.plex.tv/pms/` — extract it with the command below. Newest (1.2.3 at time of writing), ~200 paths | JSON | `user_token` — `X-Plex-Token` header |
+| Plex (community) | `https://raw.githubusercontent.com/LukeHagar/plex-api-spec/main/plex-api-spec.yaml` — behind the Speakeasy SDKs; covers more endpoints (~345 paths) but lags the official version (1.1.1) | YAML | `token` — `X-Plex-Token`; identifying client headers (`X-Plex-Client-Identifier`, `X-Plex-Product`, …) are in `components.parameters` |
+| Jellyfin | `https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json` (~2 MB) | JSON | `CustomAuthentication` |
+| Emby | `https://swagger.emby.media/openapi.json` (~2 MB) | JSON | `apikeyauth`, `embyauth` — also check per-operation `security` |
 
-Jellyfin and Emby paths are not version-prefixed (`/Items`, `/Users/{userId}/Items`, `/System/Info`).
+Jellyfin and Emby paths are not version-prefixed (`/Items`, `/System/Info`). Per-user item listings differ: Emby documents `/Users/{UserId}/Items`; Jellyfin documents `/Items?userId=` and keeps `/Users/{userId}/Items` only as an obsolete route hidden from its spec (`[ApiExplorerSettings(IgnoreApi = true)]` in Jellyfin's `ItemsController`). The shared client's watch-history scan calls `/Users/{id}/Items` (`jellyfin-base.ts`), which works on both. Tag names differ per spec — list them before filtering by one.
 
 ```bash
 U=https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json   # or the Emby URL
 curl -s $U | jq '.paths | keys'                                    # list paths
 curl -s $U | jq '.paths."/Items"'                                  # one endpoint
 curl -s $U | jq '.components.schemas.BaseItemDto'                  # a schema
-curl -s $U | jq '[.paths | to_entries[] | select(.value | .. | .tags? // [] | index("Items")) | .key]'  # by tag
+curl -s $U | jq '[.paths[][]? | objects | .tags[]?] | unique'      # list tags
+curl -s $U | jq '[.paths | to_entries[] | select(.value | .. | .tags? // [] | index("Library")) | .key]'  # by tag (Emby: "ItemsService")
 curl -s $U | jq '.components.securitySchemes'                      # auth
 
+# Official Plex spec, extracted from the Redoc page's embedded state
+curl -sL https://developer.plex.tv/pms/ | python3 -c 'import sys,json; h=sys.stdin.read(); s=h[h.index("__redoc_state = ")+16:]; print(json.dumps(json.JSONDecoder().raw_decode(s)[0]["spec"]["data"]))' > plex-openapi.json
+jq '.paths | keys' plex-openapi.json                               # then query it like the JSON specs above
+
+# Community Plex spec (YAML; yq is mikefarah v4 — the Python yq has no `-o`)
 P=https://raw.githubusercontent.com/LukeHagar/plex-api-spec/main/plex-api-spec.yaml
 curl -sL $P | yq '.paths | keys'
 curl -sL $P | yq '.paths."/library/collections"'
