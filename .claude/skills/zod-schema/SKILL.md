@@ -15,6 +15,7 @@ Add a new validation schema for: $ARGUMENTS
 3. Export as `const`: `export const mySchema = z.object({ ... })`
 4. Create schemas use required fields; Update schemas use `.partial()` on the create schema
 5. Schema names use camelCase ending in `Schema` (e.g., `thingCreateSchema`, `thingUpdateSchema`)
+6. Bound every string and array with `.max()` — required for any input an `/api/v1` route reaches (see the `public-api` skill), where id strings are capped at 200 characters
 
 ## Common Patterns
 
@@ -27,6 +28,7 @@ name: z.string().min(1, "Name is required")
 ```typescript
 url: z.url("Invalid URL format")
 ```
+A bare `z.url()` accepts any scheme. A URL the browser will open (an instance's external link) uses the file's `externalLinkUrlSchema` (http(s) only).
 
 ### Optional with default:
 ```typescript

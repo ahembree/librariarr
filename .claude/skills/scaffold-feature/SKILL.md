@@ -20,7 +20,7 @@ Scaffold a complete feature for: $ARGUMENTS
 - Add the relation field to the `User` model in schema.prisma
 - Create migration file at `prisma/migrations/NNNN_<name>/migration.sql`
 - Run `pnpm docker:dev:db:push` to apply
-- Mark migration as applied: `DATABASE_URL="postgresql://librariarr:librariarr@localhost:5432/librariarr" pnpm exec prisma migrate resolve --applied NNNN_<name>`
+- Check the migration against a scratch database (step 5 of the `prisma-migration` skill)
 - Regenerate client: `pnpm exec prisma generate`
 
 ### 2. Validation Layer
@@ -65,14 +65,14 @@ vi.mock("@/lib/logger", () => ({
 
 Import route handlers AFTER mocks. Use `function()` for constructor mocks (not arrows).
 
-Standard test cases: 401 unauthorized, validation errors, CRUD operations, cross-user isolation.
+Standard test cases: 401 unauthorized, validation errors, CRUD operations, 404 for a non-existent id. Every new route handler needs an integration test and every new `src/lib` module a unit test (CLAUDE.md coverage requirement). Never write a second user — the app is single-admin.
 
 ### 5. Test Infrastructure Updates
-- Add `deleteMany()` to `tests/setup/test-db.ts` `cleanDatabase()` in correct FK dependency order
+- No change to `tests/setup/test-db.ts`: `cleanDatabase()` truncates every `public` table it reads from `pg_tables`
 - Add data factory `createTest<Feature>()` to `tests/setup/test-helpers.ts` if needed
 
-### 6. Backup Service (if persistent user data)
-- Check if `src/lib/backup/backup-service.ts` needs to include the new table in backup/restore
+### 6. Backup Service (every new model)
+- Place the new model in `BACKUP_TABLE_ORDER` (backed up and restored) or `BACKUP_EXCLUDED_TABLES` in `src/lib/backup/backup-service.ts` — `tests/unit/backup/table-order.test.ts` fails otherwise (see the `backup-restore` skill)
 
 ### 7. Documentation
 - Update relevant doc in `docs/src/content/docs/docs/` or create new MDX file

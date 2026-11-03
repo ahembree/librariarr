@@ -142,7 +142,10 @@ cmd_clean() {
 # Docker Desktop without needing `--network=host` or `host.docker.internal`.
 #
 # First call: docker pulls the ~2GB image. Cached after that.
-PLAYWRIGHT_IMAGE="${LIBRARIARR_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.60.0-noble}"
+# The image's browsers only work with the exact `playwright` JS version, so the
+# tag is derived from this skill's package.json rather than written twice.
+PLAYWRIGHT_VERSION="$(sed -n 's/.*"playwright": *"\([^"]*\)".*/\1/p' "${SKILL_DIR}/package.json")"
+PLAYWRIGHT_IMAGE="${LIBRARIARR_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble}"
 APP_CONTAINER="${LIBRARIARR_APP_CONTAINER:-librariarr-dev}"
 
 cmd_screenshot() {

@@ -33,7 +33,8 @@ context — and the wrapped handler takes exactly those:
 
 - `withSession(async (session) => …)` takes no arguments. Every GET the
   settings bundle (`src/app/api/settings/bundle/route.ts` `HANDLERS`) runs must
-  have this shape, since the bundle calls them with none.
+  have this shape (or take the request as optional, `request?: NextRequest`, as
+  `/api/servers` does), since the bundle calls them with none.
 - `withSession(async (session, request: NextRequest) => …)` takes the request.
 - `withSession(async (session, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => …)` takes both.
 
@@ -157,23 +158,25 @@ export const DELETE = withSession(async (
 
 ### Paginated list endpoint:
 ```typescript
+import { parseListPagination } from "@/lib/api/pagination";
+import { jsonResponse } from "@/lib/api/json-response";
+
 export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
-  const page = parseInt(searchParams.get("page") ?? "1");
-  const rawLimit = parseInt(searchParams.get("limit") ?? "50");
-  const limit = rawLimit === 0 ? 0 : Math.min(rawLimit, 100);
+  // page (1-based), limit (default 50, capped at MAX_LIST_LIMIT 100; 0 = all), offset → skip
+  const { page, limit, skip } = parseListPagination(searchParams);
 
   const where = { userId: session.userId };
   const items = await prisma.model.findMany({
     where,
-    ...(limit > 0 ? { skip: (page - 1) * limit, take: limit + 1 } : {}),
-    orderBy: { createdAt: "desc" },
+    ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }], // total order: id breaks ties
   });
 
   const hasMore = limit > 0 && items.length > limit;
   if (hasMore) items.pop();
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     items: sanitize(items),
     pagination: { page, limit, hasMore },
   });
@@ -182,6 +185,7 @@ export const GET = withSession(async (session, request: NextRequest) => {
 
 ### Media routes with multi-server dedup:
 ```typescript
+import type { Prisma } from "@/generated/prisma/client";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 
 // Inside handler:
@@ -201,4 +205,5 @@ if (!sf.isSingleServer) where.dedupCanonical = true;
 2. If a new Zod schema is needed, add it to `src/lib/validation.ts` using `zod/v4`
 3. Create `src/app/api/<route-path>/route.ts` using the patterns above
 4. If the route has dynamic params like `[id]`, use the Next.js 16 async params pattern
-5. Run `pnpm lint` to verify no lint errors
+5. Add an integration test in `tests/integration/` (the `api-test` skill) — every new route handler needs one (CLAUDE.md coverage requirement); a route reachable from `/api/v1` also follows the `public-api` skill
+6. Run `pnpm lint` to verify no lint errors
