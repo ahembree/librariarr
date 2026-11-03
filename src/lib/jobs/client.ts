@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { makeWorkerUtils, type WorkerUtils, type TaskSpec } from "graphile-worker";
 import { logger } from "@/lib/logger";
+import { TASK_SYNC_WATCH_HISTORY, type SyncWatchHistoryPayload } from "@/lib/jobs/constants";
 
 /**
  * Shared client-side plumbing for enqueueing background jobs.
@@ -53,7 +54,8 @@ export async function enqueueJob(
 ): Promise<boolean> {
   try {
     const utils = await getWorkerUtils();
-    await utils.addJob(identifier, payload, await keepQueuedPriority(spec));
+    const nextPayload = await keepQueuedFullReplace(identifier, payload, spec);
+    await utils.addJob(identifier, nextPayload, await keepQueuedPriority(spec));
     return true;
   } catch (error) {
     logger.error("Jobs", `Failed to enqueue job "${identifier}"`, { error: String(error) });
@@ -90,6 +92,56 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
     logger.warn("Jobs", `Could not read the queued priority for "${spec.jobKey}"`, { error: String(error) });
   }
   return spec;
+}
+
+/**
+ * Never let a keyed enqueue turn a queued full watch-history replace into an
+ * incremental append.
+ *
+ * `/api/sync/by-type` queues a full replace under `watch-history:<serverId>` as
+ * the deferred server-wide refresh for its per-library jobs; the realtime
+ * manager queues `incremental: true` under the same key after a finished
+ * playback. graphile-worker's default `replace` mode overwrites the queued
+ * payload, so a play finishing while the full replace waited turned it into an
+ * append, and the plays the server had since deleted were never reconciled.
+ * The full replace re-reads every play, the new one included, so the incoming
+ * enqueue keeps it and drops `incremental`.
+ *
+ * Only a job still waiting (`locked_at` NULL) is replaced; a running one gets a
+ * fresh job beside it, which stays incremental. The payload lives on
+ * graphile-worker's private table; its public view leaves it out.
+ *
+ * Best-effort, like {@link keepQueuedPriority}: a failed lookup enqueues the
+ * payload unchanged rather than failing the enqueue, and the lookup and the add
+ * are not atomic, which only matters if a full replace is queued under the same
+ * key in between.
+ */
+async function keepQueuedFullReplace(
+  identifier: string,
+  payload: unknown,
+  spec: TaskSpec | undefined,
+): Promise<unknown> {
+  if (identifier !== TASK_SYNC_WATCH_HISTORY || !spec?.jobKey) return payload;
+  const next = payload as SyncWatchHistoryPayload;
+  if (next?.incremental !== true) return payload;
+  try {
+    const { rows } = await getJobsPool().query<{ incremental: string | null }>(
+      `SELECT "payload"->>'incremental' AS "incremental"
+         FROM graphile_worker._private_jobs
+        WHERE "key" = $1 AND "locked_at" IS NULL`,
+      [spec.jobKey],
+    );
+    if (rows.length > 0 && rows[0].incremental !== "true") {
+      const fullReplace: SyncWatchHistoryPayload = { ...next };
+      delete fullReplace.incremental;
+      return fullReplace;
+    }
+  } catch (error) {
+    logger.warn("Jobs", `Could not read the queued watch-history refresh for "${spec.jobKey}"`, {
+      error: String(error),
+    });
+  }
+  return payload;
 }
 
 /**
