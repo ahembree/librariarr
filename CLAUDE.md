@@ -213,7 +213,7 @@ Tracks carry the artist as `parentTitle` and every track stores its ARTIST's Mus
 
 ### Naming series and episodes
 
-An episode row's `title` is the episode's name; the show is `parentTitle`. Name TV items through `src/lib/media/display-title.ts`: a show → `seriesTitleOf`; one episode → `formatEpisodeTitle` (`"<Show> SxxExx"`) or `formatMediaItemTitle` for any type; `formatEpisodeCode` is the bare `S01E02`; a playback session → `formatSessionMediaTitle` (from `grandparentTitle`, never `parentTitle`). Lifecycle actions are named with `actionTargetTitle` (`lifecycle` skill). Use the episode's own title only where the show is already on screen.
+An episode row's `title` is the episode's name; the show is `parentTitle`. Name TV items through `src/lib/media/display-title.ts`: a show → `seriesTitleOf`; one episode → `formatEpisodeTitle` (`"<Show> SxxExx"`) or `formatMediaItemTitle` for any type; `formatEpisodeCode` is the bare `S01E02`; a playback session → `formatSessionMediaTitle` (`src/lib/media-server/session-title.ts`, from `grandparentTitle`, never `parentTitle`). Lifecycle actions are named with `actionTargetTitle` (`lifecycle` skill). Use the episode's own title only where the show is already on screen.
 
 ### Play state and watch history (detail in the `watch-history` skill)
 
@@ -235,7 +235,7 @@ An episode row's `title` is the episode's name; the show is `parentTitle`. Name 
 
 ### Lifecycle safety (detail in the `lifecycle` and `rule-engine` skills)
 
-- A rule set whose criteria depend on an external source that cannot answer (no enabled Arr/Seerr instance, un-established play history) is **skipped, never evaluated as empty** — `src/lib/lifecycle/evaluability.ts` is the single policy point, and every call site passes the rule set's `arrInstanceId` and `serverIds`.
+- A rule set whose criteria depend on an external source that cannot answer (no enabled Arr/Seerr instance, un-established play history) is **skipped, never evaluated as empty** — `src/lib/lifecycle/evaluability.ts` is the single policy point, and every call site passes the Arr instance and servers it evaluates against (the rule set's, the editor's unsaved values, the tested item's server, or the query's servers).
 - An exception protects every copy of an item (same `dedupKey`), and a whole-record delete is cancelled when any item of its group is excepted.
 - The lifecycle and query engines share one implementation of both evaluation phases — fix operator/NULL semantics once, in the shared functions. A shared evaluator returning `null` (unknown operator) must match nothing without applying `negate`.
 - Never sync a Plex collection per rule set — membership is the union of every contributing rule set.

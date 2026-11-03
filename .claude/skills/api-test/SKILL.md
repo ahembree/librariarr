@@ -114,17 +114,6 @@ it("returns data belonging to authenticated user", async () => {
   const body = await expectJson<{ items: unknown[] }>(response, 200);
   expect(body.items).toHaveLength(1);
 });
-
-it("does not return data belonging to another user", async () => {
-  const user1 = await createTestUser();
-  const user2 = await createTestUser({ data: { plexId: "other", plexUsername: "other" } });
-  // Create data for user2...
-  setMockSession({ userId: user1.id, isLoggedIn: true });
-
-  const response = await callRoute(GET);
-  const body = await expectJson<{ items: unknown[] }>(response, 200);
-  expect(body.items).toHaveLength(0);
-});
 ```
 
 ### POST endpoints:
@@ -133,7 +122,7 @@ it("returns 400 with invalid body", async () => {
   const user = await createTestUser();
   setMockSession({ userId: user.id, isLoggedIn: true });
 
-  const response = await callRoute(POST, { body: {} });
+  const response = await callRoute(POST, { method: "POST", body: {} });
   await expectJson(response, 400);
 });
 
@@ -142,6 +131,7 @@ it("creates resource with valid data", async () => {
   setMockSession({ userId: user.id, isLoggedIn: true });
 
   const response = await callRoute(POST, {
+    method: "POST",
     body: { name: "Test", /* fields */ },
   });
   const body = await expectJson<{ item: { id: string } }>(response, 201);
@@ -151,22 +141,22 @@ it("creates resource with valid data", async () => {
 
 ### PUT/DELETE with [id] — ownership check:
 ```typescript
-it("returns 404 when resource belongs to another user", async () => {
-  const user1 = await createTestUser();
-  const user2 = await createTestUser({ data: { plexId: "other", plexUsername: "other" } });
-  // Create resource owned by user2...
-  setMockSession({ userId: user1.id, isLoggedIn: true });
+it("returns 404 for a non-existent resource", async () => {
+  const user = await createTestUser();
+  setMockSession({ userId: user.id, isLoggedIn: true });
 
-  const response = await callRouteWithParams(DELETE, { id: resource.id });
+  const response = await callRouteWithParams(DELETE, { id: "00000000-0000-0000-0000-000000000000" }, { method: "DELETE" });
   await expectJson(response, 404);
 });
 ```
 
+Librariarr is single-admin (see CLAUDE.md "Single-user model"): never write a second user for cross-user or cross-tenant tests.
+
 ## Route Handler Invocation
 
-- Simple routes: `callRoute(GET)` or `callRoute(POST, { body: { ... } })`
+- Simple routes: `callRoute(GET)` or `callRoute(POST, { method: "POST", body: { ... } })` — `method` defaults to `"GET"`, and a GET request with a body throws (`Request with GET/HEAD method cannot have body`)
 - With URL: `callRoute(GET, { url: "/api/path?param=value" })`
-- Dynamic params: `callRouteWithParams(PUT, { id: "abc" }, { body: { ... } })`
+- Dynamic params: `callRouteWithParams(PUT, { id: "abc" }, { method: "PUT", body: { ... } })`
 - Assert response: `const body = await expectJson<{ key: Type }>(response, 200);`
 
 ## Steps
