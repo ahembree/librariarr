@@ -92,7 +92,7 @@ import {
   ChevronsUpDown,
   X,
 } from "lucide-react";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { sessionMediaType } from "@/lib/media/detail-panel-item";

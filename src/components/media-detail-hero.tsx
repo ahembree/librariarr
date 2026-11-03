@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { posterPlaceholderFor } from "@/lib/loaded-images";
 import {
   DropdownMenu,

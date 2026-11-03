@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { Clock, Film, Tv, Music, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
