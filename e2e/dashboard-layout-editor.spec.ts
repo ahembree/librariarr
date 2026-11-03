@@ -45,8 +45,8 @@ test.afterEach(async () => {
   restoreLayout = undefined;
 });
 
-async function openDashboard(page: Page) {
-  restoreLayout = await storeDashboardLayout({ main: LAYOUT, movies: [], series: [], music: [] });
+async function openDashboard(page: Page, layout: object[] = LAYOUT) {
+  restoreLayout = await storeDashboardLayout({ main: layout, movies: [], series: [], music: [] });
   await page.route(isPath("/api/media/stats"), (route) => route.fulfill({ json: STATS }));
   await page.route(isPath("/api/media/library-types"), (route) =>
     route.fulfill({ json: { types: ["MOVIE"], allTypes: ["MOVIE"] } }),
@@ -143,7 +143,12 @@ test.describe("dashboard layout editor", () => {
     await openDashboard(page);
     await page.getByRole("button", { name: /^Customize$/ }).click();
     await expect(page.getByRole("button", { name: "Drag to move card" })).toHaveCount(LAYOUT.length);
-    await cells(page).first().scrollIntoViewIfNeeded();
+    // The whole grid on screen below the sticky header, so neither drag ends
+    // near an edge and sets off the drag's auto-scroll.
+    await cells(page).first().evaluate((el) => {
+      (el as HTMLElement).style.scrollMarginTop = "150px";
+      el.scrollIntoView({ block: "start" });
+    });
 
     // Content Rating onto the right half of Quality: after it.
     let saved = page.waitForResponse((r) => isPath("/api/settings/dashboard-layout")(new URL(r.url())) && r.request().method() === "PUT");
@@ -172,6 +177,27 @@ test.describe("dashboard layout editor", () => {
     const stored = await page.request.get("/api/settings/dashboard-layout");
     const { layout } = (await stored.json()) as { layout: { main: { id: string }[] } };
     expect(layout.main.map((c) => c.id)).toEqual(["content-rating", "video-codec", "quality-breakdown", "audio-codec", "top-played"]);
+  });
+
+  test("a narrow card's edit controls stay apart and inside it", async ({ page }) => {
+    // Two columns of twelve: placed separately, Auto height ran under Remove.
+    await openDashboard(page, [{ id: "content-rating", size: 2, heightPx: 300 }, { id: "audio-codec", size: 10 }]);
+    await page.getByRole("button", { name: /^Customize$/ }).click();
+    const narrow = cells(page).filter({ hasText: "Content Rating" });
+    const boxes = await Promise.all(
+      ["Drag to move card", "Auto height", "Remove card"].map(async (name) => {
+        const box = await narrow.getByRole("button", { name }).boundingBox();
+        if (!box) throw new Error(`${name} is not on screen`);
+        return box;
+      }),
+    );
+    const card = await narrow.boundingBox();
+    if (!card) throw new Error("card not on screen");
+    for (let i = 1; i < boxes.length; i++) {
+      expect(boxes[i].x, "each control starts after the one before ends").toBeGreaterThanOrEqual(boxes[i - 1].x + boxes[i - 1].width);
+    }
+    expect(boxes[0].x).toBeGreaterThanOrEqual(card.x);
+    expect(boxes[2].x + boxes[2].width).toBeLessThanOrEqual(card.x + card.width);
   });
 
   test("Auto height gives a card with a set height its natural height back", async ({ page }) => {

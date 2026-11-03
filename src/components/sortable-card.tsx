@@ -104,12 +104,15 @@ export function SortableCard({
         isDragging && "opacity-40",
       )}
     >
-      <div className="absolute -top-3 left-3 z-30 flex items-center gap-1">
+      {/* One row, so the controls can never sit on top of each other: placed
+          separately, a narrow card's Auto height button ran under its Remove
+          button. Clicks pass through the row's empty middle. */}
+      <div className="pointer-events-none absolute -top-3 inset-x-3 z-30 flex items-center gap-1 *:pointer-events-auto">
         <button
           ref={setActivatorNodeRef}
           type="button"
           aria-label="Drag to move card"
-          className="flex h-6 touch-none items-center gap-0.5 rounded bg-muted px-1.5 text-xs text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
+          className="flex h-6 shrink-0 touch-none items-center gap-0.5 rounded bg-muted px-1.5 text-xs text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
           {...attributes}
           {...listeners}
         >
@@ -119,21 +122,19 @@ export function SortableCard({
         {heightPx != null && (
           <button
             type="button"
-            title="Size the card to its content again"
-            className="flex h-6 items-center gap-1 rounded bg-muted px-1.5 text-xs text-muted-foreground hover:text-foreground"
+            aria-label="Auto height"
+            title="Auto height: size the card to its content again"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground hover:text-foreground"
             onClick={onHeightReset}
           >
             <FoldVertical className="h-3.5 w-3.5" />
-            Auto height
           </button>
         )}
-      </div>
-      <div className="absolute -top-3 right-8 z-30">
         <Button
           variant="ghost"
           size="sm"
           aria-label="Remove card"
-          className="h-6 w-6 rounded-full bg-muted p-0 text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
+          className="ml-auto h-6 w-6 shrink-0 rounded-full bg-muted p-0 text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
           onClick={onRemove}
         >
           <X className="h-3.5 w-3.5" />

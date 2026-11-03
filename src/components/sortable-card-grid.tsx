@@ -64,12 +64,17 @@ interface DropData {
   axis: DropAxis;
 }
 
-/** The marker for the first collision, unless the card is over itself. */
-function markerFrom(collisions: Collision[] | null, activeId: UniqueIdentifier): DropMarker | null {
+/**
+ * The marker for the first collision — none where dropping would leave the
+ * card where it is (over itself, or beside the place it already holds), so
+ * the marker only ever shows a real move.
+ */
+function markerFrom(collisions: Collision[] | null, activeId: UniqueIdentifier, cards: CardEntry[]): DropMarker | null {
   const first = collisions?.[0];
   const drop = first?.data?.drop as DropData | undefined;
-  if (!first || !drop || first.id === activeId) return null;
-  return { id: String(first.id), side: drop.side, axis: drop.axis };
+  if (!first || !drop) return null;
+  const marker: DropMarker = { id: String(first.id), side: drop.side, axis: drop.axis };
+  return moveCard(cards, String(activeId), marker.id, marker.side) === cards ? null : marker;
 }
 
 function sameMarker(a: DropMarker | null, b: DropMarker | null): boolean {
@@ -161,19 +166,20 @@ export function SortableCardGrid({ cards, limitsOf, renderCard, onLayoutChange }
     setMarker(null);
   }, []);
 
-  const handleDragMove = useCallback((event: DragMoveEvent) => {
-    const next = markerFrom(event.collisions, event.active.id);
-    setMarker((prev) => (sameMarker(prev, next) ? prev : next));
-  }, []);
+  const handleDragMove = useCallback(
+    (event: DragMoveEvent) => {
+      const next = markerFrom(event.collisions, event.active.id, cards);
+      setMarker((prev) => (sameMarker(prev, next) ? prev : next));
+    },
+    [cards],
+  );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
-      const drop = markerFrom(event.collisions, event.active.id);
+      const drop = markerFrom(event.collisions, event.active.id, cards);
       setActiveId(null);
       setMarker(null);
-      if (!drop) return;
-      const next = moveCard(cards, String(event.active.id), drop.id, drop.side);
-      if (next !== cards) onLayoutChange(next);
+      if (drop) onLayoutChange(moveCard(cards, String(event.active.id), drop.id, drop.side));
     },
     [cards, onLayoutChange],
   );
