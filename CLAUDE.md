@@ -141,7 +141,7 @@ export const DELETE = withSession(async (session, request: NextRequest, { params
 
 - It reads `getSession()`, so revocation, the settings bundle's `withSharedSession` and `withApiKey`'s principal all apply.
 - Declare only the parameters the handler reads: a handler of `(session)` alone is callable with no arguments (the settings bundle relies on that).
-- Do not write an inline `getSession()` + `isLoggedIn` check in a new route. Inline checks are only for the sign-in flows and where something must run first (a rate limit — `ai/chat`, `settings/ai/test`; the same-origin check — the SSO routes; the bundle's path validation).
+- Do not write an inline `getSession()` + `isLoggedIn` check in a new route. Inline checks are only for the sign-in flows and where something must run first (a rate limit — `ai/chat`, `settings/ai/test`; the same-origin check — the SSO routes; the bundle's path validation). `backup/restore` still checks inline with no such reason.
 
 ### API Request Validation
 
@@ -174,9 +174,9 @@ if (error) return error;
 - The session cookie carries identity only, never a credential; the Plex token is read from the `User` row via `getStoredPlexToken`. `getSession()` enforces revocation (`sessionVersion`).
 - **Every login path establishes its session through `rotateSession()`**, never `getSession()`.
 - Under an API key the cookie is never read; `getSession()` returns the key owner's frozen session.
-- **Actions that add a lasting way in, or expose a credential, need a recent sign-in** (`hasRecentLogin`, refused via `reauthRequired`): API key creation, a first password, Plex/SSO linking, backup create/download/restore, sending a stored token or key to a new URL (`refuseStoredKeyToNewUrl`), and turning password, Plex or SSO sign-in settings back on. **Keep this list closed**: a new route that adds a sign-in method or long-lived credential, or returns or forwards a stored Plex token, must call it, and a route relaying a media server's responses must restrict what it asks for.
+- **Actions that add a lasting way in, or expose a credential, need a recent sign-in** (`hasRecentLogin`, refused via `reauthRequired`): API key creation, a first password, Plex/SSO linking, backup create/download/restore, adding a Plex server by machine id (the token is looked up server-side), a server URL change or turning `tlsSkipVerify` on while its token stays, sending a stored key to a new URL (`refuseStoredKeyToNewUrl`), changing SSO's identity source (turning SSO on, `ssoMode`, `forwardAuthUserHeader`, the issuer while OIDC SSO is on), and turning password or Plex sign-in back on. The full list is in the `auth-security` skill. **Keep this list closed**: a new route that adds a sign-in method or long-lived credential, or returns or forwards a stored Plex token, must call it, and a route relaying a media server's responses must restrict what it asks for.
 - **Every client call to a recent-login-guarded route goes through `fetchWithReauth`** (`src/lib/auth/reauth-client.ts`); `tests/unit/auth/reauth-callers.test.ts` enforces it.
-- Credential-verifying routes are rate-limited and charged only on failure (`peekAuthRateLimit` + `reserveAuthAttempt`); `src/proxy.ts` applies the CSRF origin check to every non-GET `/api/*`.
+- Credential-verifying routes are rate-limited and charged only on failure (`peekAuthRateLimit` + `reserveAuthAttempt`); `src/proxy.ts` applies the CSRF origin check to every non-GET/HEAD/OPTIONS `/api/*` request.
 
 ### Public API (essentials — detail in the `public-api` skill)
 
