@@ -116,9 +116,11 @@ export function VerticalResizeHandle({
 
   return (
     <>
+      {/* In the gap below the card, clear of its content */}
       <div
         ref={handleRef}
-        className="absolute bottom-0 left-0 right-0 h-4 cursor-row-resize z-20 group/vresize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
+        title="Drag to set the height · double-click for auto height"
+        className="absolute -bottom-5 left-0 right-0 h-4 cursor-row-resize z-20 rounded group/vresize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onDoubleClick={handleDoubleClick}

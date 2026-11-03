@@ -29,7 +29,10 @@ export function InsightCard({
     // so the default spacing reads as a hole between title and content.
     <Card className="h-full flex flex-col gap-3">
       <CardHeader>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        {/* Side by side once the card is wide enough (its header is a
+            container), else the controls go below the title — a narrow card
+            on a wide screen pushed them past its edge. */}
+        <div className="flex flex-col gap-2 @sm/card-header:flex-row @sm/card-header:items-start @sm/card-header:justify-between">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
               <Icon className="h-4 w-4" />

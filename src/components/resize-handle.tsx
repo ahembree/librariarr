@@ -115,9 +115,11 @@ export function ResizeHandle({
 
   return (
     <>
-      {/* Resize handle bar */}
+      {/* Resize handle bar: in the gap beside the card, so it never sits over
+          the card's own content (its scrollbar runs down that edge) */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize z-20 group/resize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
+        title="Drag to resize"
+        className="absolute -right-5 top-0 bottom-0 w-4 cursor-col-resize z-20 rounded group/resize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
       >

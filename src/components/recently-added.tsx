@@ -395,7 +395,7 @@ export const RecentlyAdded = memo(function RecentlyAdded({
   return (
     <Card className="h-full flex flex-col gap-3">
       <CardHeader>
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex flex-col @xl/card-header:flex-row @xl/card-header:items-center @xl/card-header:justify-between gap-2">
           <CardTitle className="flex items-baseline gap-2 text-base">
             <span className="flex items-center gap-2">
               <Clock className="h-4 w-4" />
