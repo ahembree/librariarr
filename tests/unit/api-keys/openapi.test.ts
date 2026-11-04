@@ -150,6 +150,14 @@ describe("OpenAPI document", () => {
     expect(execute.responses?.["409"]).toMatch(/rules or servers changed since its matches were detected/);
   });
 
+  it("tells a client the actions listing says which rule sets are held", () => {
+    // The listing returns the hold per rule set group, so a client can tell
+    // before it executes that the request would be refused.
+    const listing = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/lifecycle/actions")!;
+    expect(listing.description).toMatch(/`ruleSet\.actionsHeldSince` is the time its rules or servers were changed/);
+    expect(listing.description).toMatch(/answers 409 until then\), and null otherwise/);
+  });
+
   it("names only registry scopes", () => {
     for (const op of API_OPERATIONS) {
       if (op.scope !== null) expect(API_SCOPES).toContain(op.scope);

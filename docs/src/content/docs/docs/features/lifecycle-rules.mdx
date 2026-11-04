@@ -620,6 +620,8 @@ When a match is found and the rule set's action is enabled, an action is schedul
 
 Changing the rules prompts **Save and re-detect** (shows a **Match Changes Preview** — new, retained and removed — and **Confirm and Save** runs detection for the rule set at once) or **Save only** (the matches stay as they are until the next detection run re-checks them against the new rules). Until that run, the rule set's pending actions are held: they don't run on schedule, from **Execute** on the Pending page or through the API, even when due. The run that re-checks them keeps each action whose item still matches, with its date, and cancels the rest. Changing the rule set's servers holds them the same way. Action-only changes save directly and are copied onto the pending actions. Turning off **Enabled** or **Enable lifecycle action** cancels the pending actions.
 
+On the **Pending Actions** page a held rule set's group, and each of its pending and failed actions, carry a **Held** chip; hover it to see since when. Its **Execute**, **Execute All** and **Retry** buttons are turned off until the next detection run, and **Execute All** says how many actions it skips. To release them straight away, use the rule set's **Re-evaluate** button on the Matches page. The page updates by itself when the detection run finishes.
+
 ## Deletion Stats
 
 The **Pending Actions** page displays a running total of data deleted by lifecycle actions — including the total bytes removed and the number of completed actions. This gives you visibility into how much storage the lifecycle system has reclaimed.

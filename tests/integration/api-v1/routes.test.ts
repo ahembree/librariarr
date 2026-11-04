@@ -10,6 +10,7 @@ import {
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
+  createTestRuleSet,
   createTestApiKey,
 } from "../../setup/test-helpers";
 
@@ -332,6 +333,41 @@ describe("/api/v1 endpoints", () => {
       setMockSession({ isLoggedIn: true, userId: user.id });
       const viaApp = await expectJson<Status>(await callRoute(appSyncStatusGET), 200);
       expect(viaApp.jobs[0].error).toBe("connect ECONNREFUSED 192.168.1.20:32400");
+    });
+
+    it("GET /lifecycle/actions reports which rule sets' actions are held, and since when", async () => {
+      // A save that changed what a rule set matches holds its actions until
+      // detection re-checks them (`RuleSet.actionsHeldSince`); executing one
+      // answers 409 meanwhile, so a client reads the hold from the listing.
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const film = await createTestMediaItem(library.id, { title: "Arrival", year: 2016 });
+      const heldSince = new Date("2026-03-01T12:00:00.000Z");
+      const held = await createTestRuleSet(user.id, { name: "Edited", actionEnabled: true, actionType: "DELETE_RADARR" });
+      await prisma.ruleSet.update({ where: { id: held.id }, data: { actionsHeldSince: heldSince } });
+      const unheld = await createTestRuleSet(user.id, { name: "Untouched", actionEnabled: true, actionType: "UNMONITOR_RADARR" });
+      for (const ruleSet of [held, unheld]) {
+        await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            ruleSetId: ruleSet.id,
+            mediaItemId: film.id,
+            actionType: ruleSet.actionType!,
+            status: "PENDING",
+            scheduledFor: new Date(),
+          },
+        });
+      }
+      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:read"] });
+
+      type Listing = { groups: Array<{ ruleSet: { id: string; actionsHeldSince: string | null }; count: number }> };
+      const viaApi = await expectJson<Listing>(
+        await call(ROUTES.find((r) => r.label === "GET /lifecycle/actions")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      const holds = Object.fromEntries(viaApi.groups.map((g) => [g.ruleSet.id, [g.ruleSet.actionsHeldSince, g.count]]));
+      expect(holds).toEqual({ [held.id]: [heldSince.toISOString(), 1], [unheld.id]: [null, 1] });
     });
 
     it("POST /jobs/sync queues a sync per enabled server, attributed to the key", async () => {

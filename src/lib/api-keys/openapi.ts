@@ -298,7 +298,11 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Actions by status",
-    description: `A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
+    description:
+      `Grouped by rule set. A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. ` +
+      `Each group's \`ruleSet.actionsHeldSince\` is the time its rules or servers were changed, while its actions wait for the next detection run ` +
+      `to re-check its matches (executing or retrying one answers 409 until then), and null otherwise. ` +
+      `Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
   {
