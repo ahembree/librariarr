@@ -800,6 +800,12 @@ async function runTracearrImport(
     // exhaust having stored nothing at all.
     sawAnyRecord: false,
   };
+  /**
+   * Whether a write found the server no longer mapped to `mappedServerId`.
+   * Nothing of this source may touch the server's history after that — see the
+   * NATIVE purge below. On an object for the same reason as `walked`.
+   */
+  const mapping: { changed: boolean } = { changed: false };
 
   /**
    * Walk one window to its end, or until something stops us.
@@ -1140,6 +1146,7 @@ async function runTracearrImport(
           `Tracearr history import for "${serverName}" stopped after ${pages} page(s) — ` +
             `the server's watch-history source changed while it ran`,
         );
+        mapping.changed = true;
         return "stopped";
       }
       // A fetch or write failure must never reach the job runner as a failed
@@ -1434,15 +1441,26 @@ async function runTracearrImport(
     // self-correcting: once inflated it never comes back down.
     //
     // Runs after rows landed, so a failed run can never leave the server with
-    // neither source. Unconditional rather than first-run-only: a mixed stratum
+    // neither source. On every run rather than the first only: a mixed stratum
     // can also arrive with a non-null watermark (a restored backup), and the
     // DELETE is an indexed no-op on every healthy sync.
-    {
-      const purged = await prisma.$executeRawUnsafe(
-        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "source"='NATIVE'`,
-        serverId,
-      );
-      if (purged > 0) {
+    //
+    // But only while the server is still mapped to the Tracearr server this run
+    // read. After an unlink the NATIVE rows are no longer a leftover: the PUT
+    // wiped this run's rows, and a History Refresh may already have written the
+    // server's fresh native history — which this DELETE would destroy while
+    // `watchHistorySyncedAt` stays set, so `watchedByUser is not X` would match
+    // the whole library. Skipped outright when a write already found the
+    // mapping moved; otherwise checked atomically with the delete.
+    if (!mapping.changed) {
+      const purged = await purgeNativeStratum(serverId, mappedServerId);
+      if (purged === null) {
+        logger.info(
+          "WatchHistory",
+          `Kept the native watch history of "${server.name}" — its watch-history ` +
+            `source changed while the Tracearr import ran`,
+        );
+      } else if (purged > 0) {
         logger.info(
           "WatchHistory",
           `Removed ${purged} native watch-history row(s) for "${server.name}" — ` +
@@ -1812,6 +1830,35 @@ async function persistMappedState(
     return false;
   }
   return true;
+}
+
+/**
+ * Delete the server's NATIVE rows, but only while it is still mapped to
+ * `tracearrServerId`; null when it no longer is.
+ *
+ * The same unit as `writeBatch`'s check: the `FOR SHARE` lock makes the server
+ * PUT's mapping change wait for this transaction, so either the stratum goes
+ * while this source still owns the history (and the PUT then wipes what is
+ * left), or the check sees the new mapping and nothing is deleted.
+ */
+async function purgeNativeStratum(
+  serverId: string,
+  tracearrServerId: string,
+): Promise<number | null> {
+  return prisma.$transaction(async (tx) => {
+    const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT "id" FROM "MediaServer"
+        WHERE "id" = $1 AND "tracearrServerId" = $2
+        FOR SHARE`,
+      serverId,
+      tracearrServerId,
+    );
+    if (mapped.length === 0) return null;
+    return tx.$executeRawUnsafe(
+      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "source"='NATIVE'`,
+      serverId,
+    );
+  });
 }
 
 /**

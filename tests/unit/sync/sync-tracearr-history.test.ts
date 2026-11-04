@@ -990,6 +990,60 @@ describe("syncTracearrHistory", () => {
       expect(purges[0][1]).toBe("server-1");
     });
 
+    /**
+     * Answers the mapping check (`FOR SHARE`) from `answers`, in call order —
+     * true while the server is still mapped to the run's Tracearr server.
+     */
+    function mappingChecksAnswer(...answers: boolean[]) {
+      const base = mockPrisma.$queryRawUnsafe.getMockImplementation()!;
+      let call = 0;
+      mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+        if (sql.includes("FOR SHARE")) return (answers[call++] ?? false) ? [{ id: params[0] }] : [];
+        return base(sql, ...params);
+      });
+    }
+
+    function nativePurges() {
+      return mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes(`DELETE FROM "WatchHistory"`),
+      );
+    }
+
+    it("keeps native rows when a write found the mapping moved mid-run", async () => {
+      // The admin unlinked Tracearr after page 1 was written; the PUT wiped the
+      // server's rows and a Refresh wrote its native history. Those NATIVE
+      // rows are the server's history now, not a leftover stratum.
+      neverBackfilled();
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-2" })], nextCursor: null });
+      mappingChecksAnswer(true, false);
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(result).toMatchObject({ count: 1, backfillOutcome: "stopped" });
+      expect(nativePurges()).toHaveLength(0);
+    });
+
+    it("re-checks the mapping under a row lock in the same transaction as the purge", async () => {
+      // Every write succeeded, then the mapping moved before the purge ran:
+      // only the purge's own check can see it.
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+      mappingChecksAnswer(true, false);
+
+      await syncTracearrHistory("server-1");
+
+      expect(nativePurges()).toHaveLength(0);
+      const checks = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes("FOR SHARE"),
+      );
+      expect(checks).toHaveLength(2);
+      expect(checks[1].slice(1)).toEqual(["server-1", TRACEARR_SERVER_ID]);
+    });
+
     it("does not purge when the import wrote nothing", async () => {
       // A failed or empty run must never leave the server with neither source.
       mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });

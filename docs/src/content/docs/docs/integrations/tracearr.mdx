@@ -159,7 +159,7 @@ Two limits, stated honestly:
 **One Tracearr server per media server.** A Tracearr server that is already the watch-history source for one of your media servers cannot be picked for a second one. Its plays are matched by that server's own item IDs, which mean something else on another server.
 
 <Aside type="note">
-  **Changing a server's watch-history source while an import is running is safe.** Every write checks that the server is still mapped to the Tracearr server the import is reading from. Once the mapping changes, nothing more from the old source is stored, and the next run uses the new one.
+  **Changing a server's watch-history source while an import is running is safe.** Every write checks that the server is still mapped to the Tracearr server the import is reading from. Once the mapping changes, nothing more from the old source is stored, the import leaves the server's native history alone (a sync on its own history may already have refilled it), and the next run uses the new source.
 </Aside>
 
 <Aside type="note">
