@@ -253,7 +253,7 @@ export async function seedGroupedLibraries(): Promise<void> {
         [
           track.id, MUSIC_LIB_ID, `${track.id}-rk`, track.title, GROUPED_SEED.artistTitle,
           GROUPED_SEED.albumTitle, track.number,
-          `music:${GROUPED_SEED.artistTitle.toLowerCase()}:${track.title.toLowerCase()}`,
+          `track:${GROUPED_SEED.artistTitle.toLowerCase()}:${GROUPED_SEED.albumTitle.toLowerCase()}:${track.title.toLowerCase()}`,
         ],
       );
     }

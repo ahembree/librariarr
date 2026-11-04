@@ -18,12 +18,14 @@ vi.mock("@/lib/logger", () => ({ logger: mockLogger, apiLogger: mockLogger, dbLo
 vi.mock("@/lib/db-retry", () => ({
   withDeadlockRetry: vi.fn().mockImplementation((_name: string, fn: () => Promise<void>) => fn()),
 }));
+vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: vi.fn() }));
 
 import {
   runBackfillIfNeeded,
   backfillSeriesKeys,
   backfillDedupKeys,
 } from "@/lib/dedup/recompute-canonical";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 const prisma = getTestPrisma();
 
@@ -113,6 +115,49 @@ describe("runBackfillIfNeeded", () => {
     expect(e.dedupCanonical).toBe(true);
     expect(mockLogger.info).toHaveBeenCalledWith("Sync", "Backfilled 1 seriesKey(s)");
     expect(mockLogger.info).toHaveBeenCalledWith("Sync", "Backfilled 3 dedupKey(s)");
+  });
+
+  it("re-keys tracks whose dedupKey predates the album, then recomputes their canonical copies", async () => {
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id, { name: "One" });
+    const s2 = await createTestServer(user.id, { name: "Two" });
+    const lib1 = await createTestLibrary(s1.id, { type: "MUSIC" });
+    const lib2 = await createTestLibrary(s2.id, { type: "MUSIC" });
+    const movieLib = await createTestLibrary(s1.id, { type: "MOVIE" });
+    const legacy = "music:queen:bohemian rhapsody";
+    const track = async (libraryId: string, ratingKey: string, albumTitle: string, canonical: boolean, offsetMs: number) => {
+      const row = await createTestMediaItem(libraryId, {
+        ratingKey, type: "MUSIC", title: "Bohemian Rhapsody", parentTitle: "Queen", albumTitle,
+      });
+      return prisma.mediaItem.update({
+        where: { id: row.id },
+        data: { dedupKey: legacy, dedupCanonical: canonical, createdAt: new Date(Date.now() + offsetMs) },
+      });
+    };
+    // One group under the old key: only the studio version on server One was
+    // canonical, so the compilation was hidden even on its own server.
+    const studio = await track(lib1.id, "a1", "A Night at the Opera", true, 0);
+    const compilation = await track(lib1.id, "a2", "Greatest Hits", false, 1_000);
+    const compilationCopy = await track(lib2.id, "b1", "Greatest Hits", false, 2_000);
+    const movie = await createTestMediaItem(movieLib.id, { title: "Heat" });
+    await prisma.mediaItem.update({ where: { id: movie.id }, data: { dedupKey: "movie:tmdb:949", dedupCanonical: false } });
+
+    await runBackfillIfNeeded();
+
+    const read = (id: string) => prisma.mediaItem.findUniqueOrThrow({ where: { id }, select: { dedupKey: true, dedupCanonical: true } });
+    expect(await read(studio.id)).toEqual({ dedupKey: "track:queen:a night at the opera:bohemian rhapsody", dedupCanonical: true });
+    // The compilation is its own track now, and its copy on server Two folds into it.
+    expect(await read(compilation.id)).toEqual({ dedupKey: "track:queen:greatest hits:bohemian rhapsody", dedupCanonical: true });
+    expect(await read(compilationCopy.id)).toEqual({ dedupKey: "track:queen:greatest hits:bohemian rhapsody", dedupCanonical: false });
+    // Other keys are left as they were.
+    expect((await read(movie.id)).dedupKey).toBe("movie:tmdb:949");
+    expect(mockLogger.info).toHaveBeenCalledWith("Sync", "Re-keying 3 track(s) whose dedupKey predates the album");
+    expect(invalidateMediaCaches).toHaveBeenCalled();
+
+    // Nothing is left in the old shape, so the next boot re-keys nothing.
+    vi.clearAllMocks();
+    await runBackfillIfNeeded();
+    expect(mockLogger.info).not.toHaveBeenCalledWith("Sync", expect.stringContaining("Re-keying"));
   });
 
   it("logs and swallows a failure rather than crashing startup", async () => {

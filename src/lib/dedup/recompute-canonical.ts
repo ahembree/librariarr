@@ -9,8 +9,9 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { withDeadlockRetry } from "@/lib/db-retry";
-import { computeDedupKey } from "./compute-dedup-key";
+import { computeDedupKey, LEGACY_TRACK_DEDUP_KEY_PREFIX } from "./compute-dedup-key";
 import { seriesKeySqlExpression } from "@/lib/media/series-key";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 
 /**
  * Recompute canonical flags for all items belonging to a user.
@@ -123,11 +124,12 @@ export async function backfillDedupKeys(userId?: string): Promise<number> {
             title: string;
             year: number | null;
             parentTitle: string | null;
+            albumTitle: string | null;
             seasonNumber: number | null;
             episodeNumber: number | null;
             userId: string;
           }[]
-        >`SELECT mi.id, mi.type::text, mi.title, mi.year, mi."parentTitle",
+        >`SELECT mi.id, mi.type::text, mi.title, mi.year, mi."parentTitle", mi."albumTitle",
                 mi."seasonNumber", mi."episodeNumber", ms."userId"
          FROM "MediaItem" mi
          JOIN "Library" l ON mi."libraryId" = l.id
@@ -141,11 +143,12 @@ export async function backfillDedupKeys(userId?: string): Promise<number> {
             title: string;
             year: number | null;
             parentTitle: string | null;
+            albumTitle: string | null;
             seasonNumber: number | null;
             episodeNumber: number | null;
             userId: string;
           }[]
-        >`SELECT mi.id, mi.type::text, mi.title, mi.year, mi."parentTitle",
+        >`SELECT mi.id, mi.type::text, mi.title, mi.year, mi."parentTitle", mi."albumTitle",
                 mi."seasonNumber", mi."episodeNumber", ms."userId"
          FROM "MediaItem" mi
          JOIN "Library" l ON mi."libraryId" = l.id
@@ -190,6 +193,7 @@ export async function backfillDedupKeys(userId?: string): Promise<number> {
         {
           year: item.year,
           parentTitle: item.parentTitle,
+          albumTitle: item.albumTitle,
           seasonNumber: item.seasonNumber,
           episodeNumber: item.episodeNumber,
           externalIds: extIdMap.get(item.id),
@@ -254,6 +258,21 @@ export async function runBackfillIfNeeded(): Promise<void> {
       logger.info("Sync", `Backfilled ${updatedSeriesKeys} seriesKey(s)`);
     }
 
+    // Track keys gained the album (`music:<artist>:<title>` became
+    // `track:<artist>:<album>:<title>`). The old key folded a song's studio,
+    // live and compilation versions into one group, so deduplicated listings
+    // showed one of them. A row still carrying it is cleared here and re-keyed
+    // by the dedupKey backfill below, which then recomputes the canonical
+    // copies — rather than staying wrong until a full sync of its server.
+    const legacyTrackKeys = await prisma.$executeRaw`
+      UPDATE "MediaItem" SET "dedupKey" = NULL
+      WHERE "type" = 'MUSIC'::"LibraryType"
+        AND "dedupKey" LIKE ${LEGACY_TRACK_DEDUP_KEY_PREFIX + "%"}
+    `;
+    if (legacyTrackKeys > 0) {
+      logger.info("Sync", `Re-keying ${legacyTrackKeys} track(s) whose dedupKey predates the album`);
+    }
+
     const [{ count }] = await prisma.$queryRaw<[{ count: number }]>`
       SELECT COUNT(*)::int AS count FROM "MediaItem" WHERE "dedupKey" IS NULL LIMIT 1
     `;
@@ -275,6 +294,9 @@ export async function runBackfillIfNeeded(): Promise<void> {
     for (const { userId } of users) {
       await recomputeCanonical(userId);
     }
+    // Runs in the background after boot, so listings and stats may already
+    // have cached answers built on the old keys and flags.
+    invalidateMediaCaches();
   } catch (error) {
     logger.error("Sync", "Dedup backfill failed", { error: String(error) });
   }

@@ -392,6 +392,7 @@ function buildRowParams(
   const dedupKey = computeDedupKey(libraryType, d.title, {
     year: d.year,
     parentTitle: d.parentTitle,
+    albumTitle: d.albumTitle,
     seasonNumber: d.seasonNumber,
     episodeNumber: d.episodeNumber,
     externalIds,
