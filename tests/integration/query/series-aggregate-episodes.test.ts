@@ -17,6 +17,8 @@ import {
   createTestLibrary,
   createTestMediaItem,
 } from "../../setup/test-helpers";
+import { getTestPrisma } from "../../setup/test-db";
+import { compareIds } from "@/lib/conditions/compare-ids";
 import type { QueryDefinition } from "@/lib/query/types";
 
 vi.mock("@/lib/db", async () => {
@@ -159,5 +161,104 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
     expect(Object.keys(byKey).sort()).toEqual(["tvdb:73244", "tvdb:78107"]);
     expect(byKey["tvdb:78107"]).toMatchObject({ title: "The Office", matchedEpisodes: 1 });
     expect(byKey["tvdb:73244"]).toMatchObject({ title: "The Office", matchedEpisodes: 2 });
+  });
+
+  /**
+   * One show of three episodes: the first (the aggregate's representative,
+   * the lowest id) 4K, the other two 1080p, 1000 MB each.
+   */
+  async function seedMixedResolutionShow(libraryId: string) {
+    const ids: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(libraryId, {
+        type: "SERIES", title: `Mixed S1E${e}`, parentTitle: "Mixed Show",
+        seasonNumber: 1, episodeNumber: e, resolution: "1080", fileSize: BigInt(1000 * 1024 * 1024),
+      });
+      ids.push(ep.id);
+    }
+    const [first, ...rest] = [...ids].sort(compareIds);
+    await getTestPrisma().mediaItem.update({ where: { id: first }, data: { resolution: "4k" } });
+    return { fourK: first, hd: rest };
+  }
+
+  function mixedQuery(serverId: string, includeEpisodes: boolean, rules: Array<{ field: string; operator: string; value: string }>): QueryDefinition {
+    return {
+      mediaTypes: ["SERIES"],
+      serverIds: [serverId],
+      groups: [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: rules.map((r, i) => ({ id: `r${i}`, condition: "AND" as const, ...r })),
+          groups: [],
+        },
+      ],
+      sortBy: "title",
+      sortOrder: "asc",
+      includeEpisodes,
+    };
+  }
+
+  const FOURK_WITH_AGGREGATE = [
+    { field: "availableEpisodeCount", operator: "greaterThanOrEqual", value: "3" },
+    { field: "resolution", operator: "equals", value: "4K" },
+  ];
+
+  // Regression: the aggregate reads `resolution` off its representative, so a
+  // show whose first episode is 4K passed, and every one of its episodes was
+  // returned — the 1080p ones too, which a Query "Delete files" then deleted.
+  it("returns only the episodes that match on their own (episode view)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const { fourK } = await seedMixedResolutionShow(library.id);
+
+    const result = await executeQuery(mixedQuery(server.id, true, FOURK_WITH_AGGREGATE), user.id, 1, 0);
+
+    expect(result.items.map((i) => i.id)).toEqual([fourK]);
+  });
+
+  it("lists the show with only its matching episodes (grouped view)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const { fourK } = await seedMixedResolutionShow(library.id);
+
+    const result = await executeQuery(mixedQuery(server.id, false, FOURK_WITH_AGGREGATE), user.id, 1, 0);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      id: fourK, title: "Mixed Show", matchedEpisodes: 1, fileSize: String(1000 * 1024 * 1024),
+    });
+  });
+
+  it("does not list a show that passes only as a whole", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    await seedMixedResolutionShow(library.id);
+    // 3000 MB summed over the show; no 1000 MB episode is larger than 2000 MB.
+    const rules = [
+      { field: "availableEpisodeCount", operator: "greaterThanOrEqual", value: "3" },
+      { field: "fileSize", operator: "greaterThan", value: "2000" },
+    ];
+
+    for (const includeEpisodes of [true, false]) {
+      const result = await executeQuery(mixedQuery(server.id, includeEpisodes, rules), user.id, 1, 0);
+      expect(result.items).toEqual([]);
+    }
+  });
+
+  it("still returns every episode when only show-level criteria filter", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const { fourK, hd } = await seedMixedResolutionShow(library.id);
+    const rules = [{ field: "availableEpisodeCount", operator: "greaterThanOrEqual", value: "3" }];
+
+    const episodes = await executeQuery(mixedQuery(server.id, true, rules), user.id, 1, 0);
+    expect(episodes.items.map((i) => i.id).sort()).toEqual([fourK, ...hd].sort());
+    const grouped = await executeQuery(mixedQuery(server.id, false, rules), user.id, 1, 0);
+    expect(grouped.items[0]).toMatchObject({ matchedEpisodes: 3 });
   });
 });

@@ -4,6 +4,7 @@ import {
   serializeSeriesAggregateForEval,
   withGroupParentTitle,
   isGroupRecord,
+  episodesMatchingIndividually,
   type AggregableEpisode,
 } from "@/lib/conditions/series-aggregates";
 
@@ -276,5 +277,35 @@ describe("withGroupParentTitle / isGroupRecord", () => {
     expect(isGroupRecord({ id: "a", title: "Pilot", parentTitle: "Show" })).toBe(false);
     expect(isGroupRecord({ id: "a", title: "Pilot", parentTitle: "Show", memberIds: ["a"] })).toBe(false);
     expect(isGroupRecord({ id: "a", title: "Film", parentTitle: null })).toBe(false);
+  });
+});
+
+describe("episodesMatchingIndividually", () => {
+  it("keeps the episodes that pass on their own, with every series aggregate carried over", () => {
+    const aggregate = {
+      title: "Show", resolution: "4k",
+      availableEpisodeCount: 3, watchedEpisodeCount: 1, watchedEpisodePercentage: 33,
+      latestEpisodeViewDate: "2026-01-01T00:00:00.000Z", seriesLastPlayedAt: "2026-01-02T00:00:00.000Z",
+      lastEpisodeAddedAt: "2026-01-03T00:00:00.000Z", lastEpisodeAiredAt: "2026-01-04T00:00:00.000Z",
+    };
+    const episodes = [
+      { id: "e1", resolution: "4k" },
+      { id: "e2", resolution: "1080" },
+      { id: "e3", resolution: "4k" },
+    ];
+    const seen: Array<Record<string, unknown>> = [];
+    const kept = episodesMatchingIndividually(episodes, aggregate, (ep, seriesFields) => {
+      const item: Record<string, unknown> = { ...ep, ...seriesFields };
+      seen.push(item);
+      return item.resolution === "4k" && Number(item.availableEpisodeCount) >= 3;
+    });
+    expect(kept).toEqual(["e1", "e3"]);
+    // The episode's own fields stay its own; only the aggregates are injected.
+    expect(seen[1]).toEqual({
+      id: "e2", resolution: "1080",
+      availableEpisodeCount: 3, watchedEpisodeCount: 1, watchedEpisodePercentage: 33,
+      latestEpisodeViewDate: "2026-01-01T00:00:00.000Z", seriesLastPlayedAt: "2026-01-02T00:00:00.000Z",
+      lastEpisodeAddedAt: "2026-01-03T00:00:00.000Z", lastEpisodeAiredAt: "2026-01-04T00:00:00.000Z",
+    });
   });
 });

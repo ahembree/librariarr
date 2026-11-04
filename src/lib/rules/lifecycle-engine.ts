@@ -37,6 +37,7 @@ import {
   matchNameListField,
   withGroupParentTitle,
   isGroupRecord,
+  episodesMatchingIndividually,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -2070,22 +2071,14 @@ export async function evaluateSeriesScope(
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta, seerrMeta)) {
       if (restrictMembersToEpisodeMatches) {
-        // Re-evaluate per-episode with the 6 series-aggregate fields injected as
-        // series-level constants (so aggregate rules pass for every episode and
-        // only the per-episode conditions actually filter). Keep only matching
-        // episodes as members. Same arr/seerr meta — correlation is series-level.
-        const aggInjection = {
-          availableEpisodeCount: item.availableEpisodeCount,
-          watchedEpisodeCount: item.watchedEpisodeCount,
-          watchedEpisodePercentage: item.watchedEpisodePercentage,
-          latestEpisodeViewDate: item.latestEpisodeViewDate,
-          seriesLastPlayedAt: item.seriesLastPlayedAt,
-          lastEpisodeAddedAt: item.lastEpisodeAddedAt,
-          lastEpisodeAiredAt: item.lastEpisodeAiredAt,
-        };
-        const epis = episodesByRepId.get(series.id) ?? [];
-        series.memberIds = epis
-          .filter((ep) => {
+        // Keep only the episodes that match on their own, with the series
+        // aggregates carried over as series-level constants — the narrowing
+        // the query engine's aggregate path shares. Same arr/seerr meta:
+        // correlation is series-level.
+        series.memberIds = episodesMatchingIndividually(
+          episodesByRepId.get(series.id) ?? [],
+          item,
+          (ep, seriesFields) => {
             const epExternalIds = "externalIds" in ep
               ? (ep.externalIds as Array<{ source: string; externalId: string }>)
               : [];
@@ -2099,11 +2092,11 @@ export async function evaluateSeriesScope(
               watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
               externalIds: epExternalIds,
               ...crossSystem?.get(ep.id),
-              ...aggInjection,
+              ...seriesFields,
             };
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
-          })
-          .map((ep) => ep.id);
+          },
+        );
         // Passing only as a whole (a summed file size, say) is not a match when
         // the rule is per episode: with no member an episode-scoped action fell
         // back to the representative, which never matched, and its settled

@@ -1,5 +1,6 @@
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { compareIds } from "@/lib/conditions/compare-ids";
+import { CONDITION_FIELDS } from "@/lib/conditions/fields";
 
 /**
  * Shared series-aggregate computation. Both the rule engine and the query
@@ -201,6 +202,38 @@ export function withGroupParentTitle<T extends { title?: unknown }>(
  */
 export function isGroupRecord(record: Record<string, unknown>): boolean {
   return Array.isArray(record.memberIds) && record.parentTitle == null && typeof record.title === "string";
+}
+
+/** The series-aggregate fields (`isSeriesAggregate` in the registry). */
+const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggregate).map((f) => f.value);
+
+/**
+ * The episodes of a show that matched as a whole which also match one by one.
+ * Shared by the lifecycle engine (`evaluateSeriesScope` with series scope off)
+ * and the query engine's series-aggregate path, so the two narrow alike.
+ *
+ * A series-aggregate field (episode counts, watched %, …) has no value on a
+ * single episode, so a rule reading one is evaluated against the show's
+ * aggregate, where every per-episode field (resolution, file size, …) reads the
+ * representative episode's value. Where the rule is meant per episode, the
+ * show's members are narrowed to the episodes that pass on their own, each
+ * re-evaluated with the aggregate's series-aggregate values carried over as
+ * series-level constants: the aggregate conditions pass for every episode and
+ * only the per-episode conditions filter. Kept whole, "Available Episode Count
+ * ≥ 20 and Resolution = 4K" on a show whose first episode is 4K returned — and
+ * a file delete acted on — every 1080p episode too. A show with no such episode
+ * is not a match: it passed only as a whole (a summed file size, say).
+ *
+ * `matches(episode, seriesFields)` evaluates one episode with the caller's
+ * evaluator, `seriesFields` spread last onto the episode's record.
+ */
+export function episodesMatchingIndividually<E extends { id: string }>(
+  episodes: readonly E[],
+  aggregate: Record<string, unknown>,
+  matches: (episode: E, seriesFields: Record<string, unknown>) => boolean,
+): string[] {
+  const seriesFields = Object.fromEntries(SERIES_AGGREGATE_FIELDS.map((field) => [field, aggregate[field]]));
+  return episodes.filter((episode) => matches(episode, seriesFields)).map((episode) => episode.id);
 }
 
 /**
