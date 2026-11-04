@@ -1610,11 +1610,24 @@ describe("syncTracearrHistory", () => {
     });
 
     it("backfills from scratch when the flag says complete but no rows remain", async () => {
-      // "Complete" with zero stored rows is a contradiction — the rows are what
-      // the flag describes. Something removed them out from under it (a manual
-      // delete, a partial restore), and trusting the flag would mean importing
-      // nothing, forever, on a server whose history is entirely missing.
+      // The rows were removed out from under the flag — a config-only restore
+      // brings the server row back verbatim without its history, and withdraws
+      // the established marker from every server left without plays. Trusting
+      // the flag would mean importing nothing, forever, on a server whose
+      // history is entirely missing.
       watermark = { maxWatchedAt: null, minWatchedAt: null, oldestOpenChain: null };
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        id: "server-1",
+        name: "Test Plex",
+        enabled: true,
+        tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrBackfillComplete: true,
+        tracearrOldestPlayAt: null,
+        tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00.000Z"),
+        tracearrForwardResumeAt: new Date("2025-07-01T00:00:00.000Z"),
+        watchHistorySyncedAt: null,
+        userId: "user-1",
+      });
       mockGetHistoryPage.mockResolvedValueOnce({
         records: [historyRecord({ id: "chain-1" })],
         nextCursor: null,
@@ -2587,6 +2600,36 @@ describe("syncTracearrHistory", () => {
       // Established in the SAME guarded statement as the completion flag, so
       // one can never land without the other.
       expect(write.data.watchHistorySyncedAt).toBeInstanceOf(Date);
+    });
+
+    it("is not walked again by the next run when it completed having stored nothing", async () => {
+      // The walk above marks the history established and records a forward
+      // watermark. "Complete with no rows" is then the archive's honest state,
+      // not a wiped one: resetting it re-walked the whole archive after every
+      // forward sync, completed, and reset again — forever.
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        id: "server-1",
+        name: "Test Plex",
+        enabled: true,
+        tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrBackfillComplete: true,
+        tracearrOldestPlayAt: null,
+        tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00.000Z"),
+        tracearrForwardResumeAt: new Date("2025-07-10T11:00:00.000Z"),
+        watchHistorySyncedAt: new Date("2025-07-10T12:00:00.000Z"),
+        userId: "user-1",
+      });
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "backfill" }),
+      ).resolves.toMatchObject({ backfillPending: false });
+
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ tracearrBackfillComplete: false }),
+        }),
+      );
     });
 
     it("completes normally once the server already holds rows from earlier slices", async () => {
