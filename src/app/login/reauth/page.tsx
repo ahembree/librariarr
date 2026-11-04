@@ -50,7 +50,7 @@ export default function ReauthPage() {
   }, []);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
+    <div className="flex min-h-dvh items-center justify-center bg-background">
       <p className="text-sm text-muted-foreground">{message}</p>
     </div>
   );

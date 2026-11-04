@@ -44,7 +44,7 @@ export function ConnectionTestResult({
         className={cn(
           "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
           result.ok
-            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+            ? "border-green/30 bg-green-dim text-green"
             : "border-destructive/30 bg-destructive/10 text-destructive",
           className,
         )}
@@ -61,7 +61,7 @@ export function ConnectionTestResult({
       aria-live="polite"
       className={cn(
         "flex items-center gap-2 rounded-md p-3 text-sm",
-        result.ok ? "bg-green-500/10 text-green-500" : "bg-destructive/10 text-destructive",
+        result.ok ? "bg-green-dim text-green" : "bg-destructive/10 text-destructive",
         className,
       )}
     >

@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
 import { LogConsoleSkeleton } from "@/components/skeletons";
 
 interface LogEntry {
@@ -204,32 +205,31 @@ export default function LogsPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Logs</h1>
-          <p className="text-muted-foreground mt-1">
-            Application activity from the backend, API requests, and database operations.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant={autoRefresh ? "default" : "outline"}
-            size="sm"
-            onClick={() => setAutoRefresh(!autoRefresh)}
-          >
-            {autoRefresh ? (
-              <Pause className="mr-1.5 h-3.5 w-3.5" />
-            ) : (
-              <Play className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            {autoRefresh ? "Live" : "Auto-refresh"}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => fetchLogs()} disabled={loading}>
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Logs"
+        description="Application activity from the backend, API requests, and database operations."
+        actions={
+          <>
+            <Button
+              variant={autoRefresh ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAutoRefresh(!autoRefresh)}
+            >
+              {autoRefresh ? (
+                <Pause className="mr-1.5 h-3.5 w-3.5" />
+              ) : (
+                <Play className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {autoRefresh ? "Live" : "Auto-refresh"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => fetchLogs()} disabled={loading}>
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -323,7 +323,7 @@ export default function LogsPage() {
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-4 w-4" />
-            Clear all
+            Clear All
           </Button>
         )}
       </div>
@@ -337,7 +337,7 @@ export default function LogsPage() {
           </span>
           {autoRefresh && (
             <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="h-1.5 w-1.5 rounded-full bg-green animate-pulse" />
               <span>Live · refreshing every 5s</span>
             </span>
           )}

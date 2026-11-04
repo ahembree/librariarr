@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Sparkles, Send, Loader2, Square, User, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/inline-error";
+import { PageHeader } from "@/components/page-header";
 import { MarkdownLite } from "@/components/ai/markdown-lite";
 import { Skeleton } from "@/components/ui/skeleton";
 import { lazyComponent } from "@/components/lazy-component";
@@ -25,6 +27,8 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   evidence?: AiEvidence[];
+  /** A failed answer: shown as an error, sent back as plain text. */
+  error?: boolean;
 }
 
 const SUGGESTIONS = [
@@ -142,8 +146,9 @@ export default function AiAnalysisPage() {
             ...prev,
             {
               role: "assistant",
-              content: `⚠️ ${err instanceof Error ? err.message : "Something went wrong."}`,
+              content: err instanceof Error ? err.message : "Something went wrong.",
               evidence: [],
+              error: true,
             },
           ]);
         }
@@ -161,16 +166,17 @@ export default function AiAnalysisPage() {
 
   return (
     <div className="flex h-full flex-col p-4 sm:p-6 lg:p-8">
-      <div className="mb-4 flex flex-col gap-1">
-        <h1 className="flex items-center gap-2 text-2xl font-bold font-display tracking-tight sm:text-3xl">
-          <Sparkles className="h-6 w-6 text-primary" />
-          AI Analysis
-        </h1>
-        <p className="text-muted-foreground">
-          Ask questions about your media library in plain language. Answers are grounded in your own data
-          — the assistant is read-only and can&apos;t change anything.
-        </p>
-      </div>
+      <PageHeader
+        className="mb-4"
+        title="AI Analysis"
+        icon={Sparkles}
+        description={
+          <>
+            Ask questions about your media library in plain language. Answers are grounded in your own data
+            — the assistant is read-only and can&apos;t change anything.
+          </>
+        }
+      />
 
       {config.loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -276,6 +282,8 @@ function MessageRow({ message }: { message: ChatMessage }) {
       <div className="min-w-0 flex-1 space-y-3 pt-0.5">
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+        ) : message.error ? (
+          <InlineError multiline>{message.content}</InlineError>
         ) : (
           <MarkdownLite content={message.content} />
         )}
@@ -298,7 +306,7 @@ function NotConfigured({ enabled, configured }: { enabled: boolean; configured: 
         <Sparkles className="h-6 w-6" />
       </div>
       <div className="space-y-1">
-        <h2 className="text-lg font-semibold">
+        <h2 className="text-xl font-bold font-display">
           {!configured ? "Set up the AI assistant" : "AI assistant is turned off"}
         </h2>
         <p className="max-w-md text-sm text-muted-foreground">
@@ -310,7 +318,7 @@ function NotConfigured({ enabled, configured }: { enabled: boolean; configured: 
       <Button asChild>
         <Link href="/settings#ai">
           <SettingsIcon className="mr-2 h-4 w-4" />
-          Go to AI settings
+          Go to AI Settings
         </Link>
       </Button>
       {enabled && !configured && null}

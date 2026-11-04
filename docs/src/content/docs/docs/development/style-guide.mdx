@@ -58,6 +58,52 @@ All colors use the **OKLCH color model** for perceptual uniformity. The applicat
 | `--input` | `oklch(1 0.01 270 / 15%)` | Input field borders |
 | `--ring` | `oklch(0.50 0.015 260)` | Focus ring color |
 
+### Surfaces, Text and Brand
+
+| Token | OKLCH Value | Role |
+|-|-|-|
+| `--surface-0` | `var(--background)` | The page canvas |
+| `--surface-1` | `var(--card)` | Cards and panels |
+| `--surface-2` | `oklch(0.245 0.01 270)` | Hover wells, icon wells, the `kbd` hint |
+| `--surface-3` | `oklch(0.285 0.012 270)` | Hover on top of `surface-2` |
+| `--faint-foreground` (`text-faint`) | `oklch(0.52 0.012 262)` | Tertiary text: eyebrows, nav group labels, timestamps — small mono labels only |
+| `--border-strong` | `oklch(1 0.01 270 / 18%)` | Hover border on tiles and outlined surfaces |
+| `--brand` | `oklch(0.62 0.2 264)` | The brand blue: primary fills, active rows, chart-1 |
+| `--brand-bright` | `oklch(0.7 0.2 264)` | Brand as text or a mark: active nav icon and tab underline, the "arr" of the wordmark, hover titles |
+| `--brand-dim` / `--brand-faint` | brand at 15% / 8% | Active sidebar row, count pills / the sidebar's top wash |
+| `--on-brand` | `oklch(0.98 0.005 270)` | Text and icons on a brand fill |
+
+### Status Colors
+
+Four hues, each with a `-dim` fill at 14%. A status chip is the hue as text on its `-dim` fill with a 25% border (`border-green/25 bg-green-dim text-green`); a status always carries its word, never colour alone.
+
+| Token | OKLCH Value | Means |
+|-|-|-|
+| `--green` / `--green-dim` | `oklch(0.74 0.16 158)` | Success, active, connected, completed, Direct Play |
+| `--amber` / `--amber-dim` | `oklch(0.8 0.15 78)` | Pending, queued, warning, Transcode |
+| `--red` / `--red-dim` | `oklch(0.7 0.19 22)` | Failed, expired, disconnected |
+| `--sky` / `--sky-dim` | `oklch(0.72 0.13 235)` | Informational, running, syncing, update available, Direct Stream |
+
+A neutral label is `bg-muted/40 text-muted-foreground`. Never write a raw Tailwind palette colour (`text-green-500`, `bg-blue-500/10`, `text-yellow-500`, `text-slate-300`…) for a status: those drift from the tokens and from each other.
+
+### Identity Colors
+
+What a thing **is**, never how it is doing — so they never borrow the status hues. The same in both themes.
+
+| Token | Value | Used for |
+|-|-|-|
+| `--excluded` | `oklch(75% 0.183 55.934)` | An item protected by a lifecycle exception: the shield marker, the Exclude button, the corner badge on a card (its icon in `text-background`) |
+| `--app-sonarr` | `oklch(74.6% 0.16 232.661)` | Sonarr |
+| `--app-radarr` | `oklch(82.8% 0.189 84.429)` | Radarr |
+| `--app-lidarr` | `oklch(76.5% 0.177 163.223)` | Lidarr |
+| `--app-seerr` | `oklch(70.2% 0.183 293.541)` | Seerr |
+| `--app-tracearr` | `oklch(78.9% 0.154 211.53)` | Tracearr |
+| `--media-movie` | `oklch(67.3% 0.182 276.935)` | Movie type chip |
+| `--media-series` | `oklch(71.4% 0.203 305.504)` | Series type chip |
+| `--media-music` | `oklch(71.8% 0.202 349.761)` | Music type chip |
+
+Read an integration's classes from `INTEGRATION_APP_STYLES` (`src/lib/theme/integration-colors.ts`), a media type's from `MEDIA_TYPE_BADGE_COLORS` (`src/lib/theme/media-type-colors.ts`), and a server type's from `SERVER_TYPE_STYLES` (`src/lib/server-styles.ts`) — Plex is orange everywhere, the login button and onboarding included.
+
 ### Sidebar Palette
 
 | Token | OKLCH Value |
@@ -69,13 +115,17 @@ All colors use the **OKLCH color model** for perceptual uniformity. The applicat
 
 ### Chart Colors
 
-| Token | OKLCH Value | Approximate hue |
+| Token | Value | Approximate hue |
 |-|-|-|
-| `--chart-1` | `oklch(0.55 0.26 264)` | Blue |
+| `--chart-1` | `oklch(0.55 0.26 264)` | Blue (follows the accent preset) |
 | `--chart-2` | `oklch(0.72 0.19 162)` | Green |
 | `--chart-3` | `oklch(0.78 0.20 70)` | Amber |
 | `--chart-4` | `oklch(0.65 0.28 304)` | Violet |
 | `--chart-5` | `oklch(0.67 0.26 16)` | Rose |
+| `--chart-6` … `--chart-15` | `#a855f7` `#ef4444` `#06b6d4` `#ec4899` `#f97316` `#14b8a6` `#6366f1` `#84cc16` `#0ea5e9` `#d946ef` | Purple, red, cyan, pink, orange, teal, indigo, lime, sky, fuchsia |
+| `--chart-other` | `#6e7383` | "Other" buckets and hidden series |
+
+Charts take their colours from these tokens only: `AUTO_HEX` / `OTHER_HEX` (`src/components/dashboard/chart-palette.ts`) are `var(--chart-N)` strings, which work in an SVG `fill`/`stroke`, an inline style and `color-mix()`. Axis ticks are `var(--muted-foreground)`, grid lines `var(--border)`, tooltips `var(--popover)`; a heatmap blends its two ends with `color-mix(in oklab, …)`. Never write a hex colour into a chart.
 
 ### Surface Elevation
 
@@ -86,15 +136,17 @@ Background  0.16  ← deepest
 Sidebar     0.18
 Card        0.21
 Popover     0.23
+Surface-2   0.245
 Muted       0.25
-Secondary   0.27  ← lightest surface
+Secondary   0.27
+Surface-3   0.285 ← lightest surface
 ```
 
 All surfaces share a blue hue angle (~270) with very low chroma (0.006–0.015), giving a cohesive navy tint rather than flat grey.
 
 ### Accent Color Presets
 
-Users can choose from 6 accent colors in Settings. Each overrides `--primary`, `--ring`, `--sidebar-primary`, and `--chart-1`:
+Users can choose from 6 accent colors in Settings. Each preset but Default overrides `--primary`, `--primary-foreground`, `--ring`, `--sidebar-primary`, `--sidebar-primary-foreground`, `--chart-1`, `--brand`, `--brand-bright`, `--brand-dim` and `--brand-faint` (Default removes every override):
 
 | Preset | Primary OKLCH | Swatch |
 |-|-|-|
@@ -135,7 +187,7 @@ Don't switch back to `next/font/google`: it downloads the fonts from Google duri
 
 ### JetBrains Mono (Monospace)
 
-**Usage:** System log messages, code blocks, technical data.
+**Usage:** "Mono for data" — the eyebrow label above a figure, sidebar group labels, counts and ranges, timestamps, log lines, bitrates and codecs in chips, keyboard hints, code. Set `tabular-nums` on figures.
 **Weights:** 400, 500
 **CSS variable:** `--font-mono`
 **Tailwind class:** `font-mono`
@@ -146,7 +198,8 @@ Don't switch back to `next/font/google`: it downloads the fonts from Google duri
 |-|-|
 | Page title | `text-2xl sm:text-3xl font-bold font-display tracking-tight` |
 | Card title | `text-lg font-semibold` |
-| Section heading | `text-xl font-bold font-display` |
+| Section heading (`<h2>`) | `text-xl font-bold font-display` — every section heading, settings tab titles included |
+| Eyebrow | `.eyebrow` — JetBrains Mono 10.5px, `0.18em` tracking, uppercase, `text-faint`. Every small uppercase label; never a sans `uppercase tracking-wider` imitation |
 | Body text | `text-sm` (14px) — default |
 | Helper/metadata | `text-xs text-muted-foreground` |
 | Chip and badge text | `text-xs font-medium` |
@@ -160,11 +213,12 @@ Base radius: `0.625rem` (10px). Derived values:
 
 | Token | Value | Usage |
 |-|-|-|
-| `radius-sm` | 6px | Small buttons, inputs |
-| `radius-md` | 8px | Buttons, badges |
-| `radius-lg` | 10px | Cards (inner elements) |
-| `radius-xl` | 14px | Cards (outer) |
-| `radius-full` | 9999px | Badges, avatars |
+| `rounded` | 4px | `ColorChip`, `RatingChip`, checkboxes |
+| `radius-sm` | 6px | Small elements |
+| `radius-md` | 8px | Buttons, inputs, tab triggers, error boxes |
+| `radius-lg` | 10px | Dialogs, the Tabs track, inner card elements |
+| `radius-xl` | 14px | Cards, tiles and media cards (outer) — hand-built surfaces too |
+| `radius-full` | 9999px | Badges (counts), switches, avatars, status dots |
 
 ---
 
@@ -254,7 +308,8 @@ Apply `animate-fade-in-up` for single elements, or `stagger-children` on a paren
 
 | Context | Duration | Easing |
 |-|-|-|
-| Hover effects | 300ms | ease-out |
+| Hover colour changes, nav rows | 150ms | default |
+| Media card lift and artwork zoom | 300ms | `cubic-bezier(0.22, 1, 0.36, 1)` |
 | Button press | 200ms | default |
 | Sidebar collapse | 300ms | ease-in-out |
 | Collapsible expand | 200ms | ease-out |
@@ -263,8 +318,8 @@ Apply `animate-fade-in-up` for single elements, or `stagger-children` on a paren
 ### Micro-Interactions
 
 - **Buttons:** `active:scale-[0.98]` press feedback
-- **Media cards:** `hover:scale-[1.03]` with image `group-hover:scale-105`
-- **Nav items:** `hover:translate-x-0.5` subtle rightward shift
+- **Media cards:** lift `hover:-translate-y-[5px]` with image `group-hover:scale-105`
+- **Nav items:** `hover:translate-x-px` subtle rightward shift
 
 ---
 
@@ -291,7 +346,7 @@ These are plain (unlayered) classes, so they override a padding utility on the s
 
 ### Viewport Heights
 
-Size frames and caps with `dvh`, never `vh`: a phone browser's `100vh` is its height with the toolbars hidden, so a frame sized `h-screen` runs behind the toolbars while they show, and a dialog or sheet capped at `85vh` can be taller than the screen. Use `h-dvh` and `max-h-[85dvh]`. `tests/unit/app/viewport-units.test.ts` refuses `h-screen` and any `max-h-[…vh]`.
+Size frames and caps with `dvh`, never `vh`: a phone browser's `100vh` is its height with the toolbars hidden, so a frame sized `h-screen` or `min-h-screen` runs behind the toolbars while they show, and a dialog or sheet capped at `85vh` can be taller than the screen. Use `h-dvh`, `min-h-dvh`, `h-[55dvh]` and `max-h-[85dvh]`. `tests/unit/app/viewport-units.test.ts` refuses `h-screen`, `min-h-screen` and any `h-[…vh]`, `min-h-[…vh]` or `max-h-[…vh]`.
 
 ### Phone Widths
 
@@ -317,7 +372,7 @@ border border-white/6
 shadow-[0_1px_3px_0_rgb(0_0_0/0.1),inset_0_1px_0_oklch(1_0_0/4%)]
 ```
 
-Cards use an inset top highlight (`inset_0_1px_0`) to simulate a subtle light edge, adding perceived depth.
+Cards use an inset top highlight (`inset_0_1px_0`) to simulate a subtle light edge, adding perceived depth. A surface built by hand instead of with `<Card>` (`bg-card border …`) uses the same `rounded-xl` corner, never `rounded-lg`. A card or row is never marked with a coloured left border; tint it (`bg-green-dim`) or ring it (`ring-1 ring-green/40`) instead, and never add a decorative gradient — the only gradients are the atmosphere, the auth backdrop, the sidebar wash and the scrims that keep text legible over artwork.
 
 ### Buttons
 
@@ -344,10 +399,10 @@ Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `defau
 Poster-forward cards with cinematic hover:
 
 ```
-hover:scale-[1.03]
-hover:shadow-[0_8px_32px_oklch(0_0_0/0.4)]
+hover:-translate-y-[5px]
+hover:shadow-[0_18px_40px_-12px_oklch(0_0_0/0.65)]
 hover:ring-1 hover:ring-white/10
-transition-all duration-300 ease-out
+transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]
 ```
 
 Image zooms on hover: `group-hover:scale-105`
@@ -356,15 +411,16 @@ Image zooms on hover: `group-hover:scale-105`
 
 Border-bottom style tabs with icon support:
 
-- **Active:** `border-primary text-foreground` with 2px bottom border
+- **Active:** `border-brand-bright text-foreground` with 2px bottom border
 - **Inactive:** `border-transparent text-muted-foreground` with hover fade-in
 
 ### Sidebar Navigation
 
-- **Active item:** `bg-sidebar-accent border-l-2 border-sidebar-primary` with inset shadow
-- **Inactive item:** `text-sidebar-foreground/70` with hover to `text-sidebar-foreground`
-- **Group labels:** `text-[11px] font-medium uppercase tracking-widest text-sidebar-foreground/60`
-- **Gradient overlay:** Top gradient from `primary/5` to transparent for atmospheric depth
+- **Width:** 248px open, 72px collapsed to an icon rail
+- **Active item:** `bg-brand-dim text-foreground`, its icon `text-brand-bright`, and a 3px `brand-bright` bar glowing (`shadow-[0_0_12px_var(--brand)]`) on the rail's left edge
+- **Inactive item:** `text-muted-foreground` with hover to `text-foreground` on `bg-surface-2`
+- **Group labels:** `font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-faint`
+- **Gradient overlay:** Top wash from `brand-faint` to transparent for atmospheric depth
 
 ### Dialogs
 
@@ -379,6 +435,7 @@ An "Are you sure?" prompt is a `ConfirmDialog` (`src/components/confirm-dialog.t
 
 ### Forms: Buttons, Errors and Connection Tests
 
+- **Button labels are Title Case** ("New Rule Set", "Reset to Defaults", "Test Connection", "Clear All"); descriptions, toasts and dialog bodies are sentence case.
 - **A button that starts an action is a `LoadingButton`** (`src/components/loading-button.tsx`): its `icon` turns into a spinner of the same size while `loading`, and the button is disabled meanwhile, so the label never moves. Don't write `{busy ? <Loader2 … /> : <Icon … />}` by hand.
 - **A failure message inside a form or a card is an `InlineError`** (`src/components/inline-error.tsx`): the red box with an alert icon. Use `multiline` when the message can wrap, so the icon stays on the first line. A failure that is not tied to a form is a toast.
 - **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2").
@@ -464,7 +521,7 @@ For grouped data sources (series shows, seasons, music artists, albums), metadat
 All authenticated pages share this structure:
 
 ```
-Sidebar (collapsible 64px/256px) | Main content (flex-1, overflow-y-auto)
+Sidebar (collapsible 72px/248px) | Main content (flex-1, overflow-y-auto)
 ```
 
 The main content area includes the atmospheric radial gradient and a 1px `border-l border-white/3` separator.
@@ -489,7 +546,7 @@ All lifecycle pages (Rules, Matches, Pending Actions, Exceptions) include a `Tab
 
 ### Login / Onboarding
 
-Full-screen cinematic gradient background (the `.auth-backdrop` utility — a violet bloom at the horizon over a navy center falloff) with glass-morphism card.
+Full-screen cinematic gradient background (the `.auth-backdrop` utility — a blue bloom at the horizon, `oklch(0.55 0.2 264 / 0.2)`, over a navy center falloff) with glass-morphism card. Frames here use `min-h-dvh`.
 
 ---
 
@@ -526,4 +583,9 @@ Lifecycle action statuses are `ColorChip`s.
 - **Don't use a `Badge` for a status, label or tag** — that is a `ColorChip`; a `Badge` is only a count on a control or heading
 - **Don't edit shadcn/ui primitives** in `src/components/ui/` unless adding project-wide enhancements
 - **Don't use light mode** — the application enforces dark mode only
-- **Don't add emojis** — use Lucide icons for all iconography
+- **Don't add emojis or text glyphs as icons** (`✓`, `⚠`, `👤`) — use Lucide icons for all iconography
+- **Don't write raw Tailwind palette colours** (`text-green-500`, `bg-amber-500/10`, `text-blue-400`) — use the status tokens or an identity token
+- **Don't hand-write a spinner button, a red error box, a connection-test line or an "Are you sure?" dialog** — use `LoadingButton`, `InlineError`, `ConnectionTestResult` and `ConfirmDialog`
+- **Don't write a page `<h1>` by hand** — use `PageHeader`
+- **Don't size anything in `vh`** — use `dvh`
+- **Don't mark a card or row with a coloured left border, and don't add decorative gradients**

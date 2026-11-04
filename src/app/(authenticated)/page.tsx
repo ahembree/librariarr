@@ -32,6 +32,7 @@ import {
 import { CustomCardDialog } from "@/components/custom-card-dialog";
 import { AlertCircle, Check, Film, Music, Pencil, Server, Tv } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/page-header";
 import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
@@ -512,69 +513,68 @@ export default function DashboardPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       {/* ── Header ── */}
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="eyebrow">
-            {(() => {
-              const now = new Date();
-              const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
-              const md = now.toLocaleDateString(undefined, { month: "long", day: "numeric" });
-              const serverPart = servers.length
-                ? ` · ${servers.length} server${servers.length > 1 ? "s" : ""}`
-                : "";
-              return `${weekday} · ${md}${serverPart}`;
-            })()}
-          </p>
-          <h1 className="mt-1.5 text-2xl sm:text-3xl font-bold font-display tracking-tight">
-            {(() => {
-              const hour = new Date().getHours();
-              const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-              return (
-                <>
-                  {greeting}
-                  {userName && (
-                    <>
-                      , <span className="text-brand-bright">{userName}</span>
-                    </>
-                  )}
-                </>
-              );
-            })()}
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Your library, lifecycle pipeline, and activity at a glance.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <SyncIndicator onSyncActive={onSyncActive} onSyncComplete={onUnannouncedSyncEnd} />
-          {servers.length > 1 && (() => {
-            const dupeNames = getDuplicateServerNames(servers);
+      <div className="mb-6">
+        <p className="eyebrow">
+          {(() => {
+            const now = new Date();
+            const weekday = now.toLocaleDateString(undefined, { weekday: "long" });
+            const md = now.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+            const serverPart = servers.length
+              ? ` · ${servers.length} server${servers.length > 1 ? "s" : ""}`
+              : "";
+            return `${weekday} · ${md}${serverPart}`;
+          })()}
+        </p>
+        <PageHeader
+          className="mt-1.5"
+          title={(() => {
+            const hour = new Date().getHours();
+            const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
             return (
-              <Select
-                value={selectedServerId}
-                onValueChange={setSelectedServerId}
-              >
-                <SelectTrigger className="h-9 w-full sm:w-50 text-sm">
-                  <Server className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <SelectValue placeholder="All Servers" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_SERVERS}>All Servers</SelectItem>
-                  {servers.map((server) => (
-                    <SelectItem key={server.id} value={server.id}>
-                      <span className="inline-flex items-center gap-1.5">
-                        {server.name}
-                        {dupeNames.has(server.name) && (
-                          <ServerTypeChip type={server.type} />
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <>
+                {greeting}
+                {userName && (
+                  <>
+                    , <span className="text-brand-bright">{userName}</span>
+                  </>
+                )}
+              </>
             );
           })()}
-        </div>
+          description="Your library, lifecycle pipeline, and activity at a glance."
+          actions={
+            <>
+              <SyncIndicator onSyncActive={onSyncActive} onSyncComplete={onUnannouncedSyncEnd} />
+              {servers.length > 1 && (() => {
+                const dupeNames = getDuplicateServerNames(servers);
+                return (
+                  <Select
+                    value={selectedServerId}
+                    onValueChange={setSelectedServerId}
+                  >
+                    <SelectTrigger className="h-9 w-full sm:w-50 text-sm">
+                      <Server className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <SelectValue placeholder="All Servers" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_SERVERS}>All Servers</SelectItem>
+                      {servers.map((server) => (
+                        <SelectItem key={server.id} value={server.id}>
+                          <span className="inline-flex items-center gap-1.5">
+                            {server.name}
+                            {dupeNames.has(server.name) && (
+                              <ServerTypeChip type={server.type} />
+                            )}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                );
+              })()}
+            </>
+          }
+        />
       </div>
 
       <div className="space-y-8">

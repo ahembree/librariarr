@@ -489,7 +489,7 @@ function MessageSelector({
 
   return (
     <div className="space-y-2">
-      <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+      <Label className="eyebrow">
         Termination Message
       </Label>
       <Select
@@ -550,7 +550,7 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
     <div className="space-y-5">
       {/* Stream Info */}
       <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Stream Info</h4>
+        <h4 className="eyebrow">Stream Info</h4>
         <div className="flex flex-wrap gap-1.5">
           <ColorChip className="gap-1">
             <User className="h-2.5 w-2.5" />
@@ -596,7 +596,7 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
       {/* Media Info */}
       {(session.mediaWidth || session.videoCodec || session.audioCodec || session.container) && (
         <div className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Media Info</h4>
+          <h4 className="eyebrow">Media Info</h4>
           <div className="flex flex-wrap gap-1.5">
             {session.mediaWidth && session.mediaHeight && (
               <ColorChip className="font-mono tabular-nums">
@@ -651,7 +651,7 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
       {/* Transcode Details */}
       {transcoding && (transcoding.videoDecision === "transcode" || transcoding.audioDecision === "transcode") && (
         <div className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
+          <h4 className="eyebrow">Transcode Details</h4>
           <div className="flex flex-wrap gap-1.5">
             {/* Each stream coloured by its decision, as the card's stream
                 chip is: a transcode amber, a copy sky, direct play green. */}
@@ -898,7 +898,7 @@ const SessionCard = memo(function SessionCard({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 shrink-0 bg-destructive/15 text-xs text-destructive hover:bg-destructive hover:text-destructive-foreground"
+            className="h-7 shrink-0 bg-destructive/15 text-xs text-destructive hover:bg-destructive hover:text-white"
             onClick={(e) => {
               e.stopPropagation();
               onTerminate(session);
@@ -1202,7 +1202,7 @@ function ActiveSessionsSection() {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
+            <h2 className="text-xl font-bold font-display flex items-center gap-2">
               <Monitor className="h-5 w-5" />
               Active Sessions
             </h2>
@@ -1363,7 +1363,7 @@ function ActiveSessionsSection() {
                 {/* Overview */}
                 {(sheetSession.tagline || sheetSession.summary || sheetSession.contentRating || sheetSession.studio || sheetSession.genres) && (
                   <div className="space-y-2">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
+                    <h4 className="eyebrow">Overview</h4>
                     {sheetSession.tagline && (
                       <p className="text-xs italic text-muted-foreground">{sheetSession.tagline}</p>
                     )}
@@ -1504,7 +1504,7 @@ function MaintenanceModePanel({ knownUsers }: { knownUsers: string[] }) {
 
   return (
     <div className="space-y-4 min-w-0">
-      <h2 className="text-lg font-semibold flex items-center gap-2">
+      <h2 className="text-xl font-bold font-display flex items-center gap-2">
         <Shield className="h-5 w-5" />
         Maintenance Mode
       </h2>
@@ -1537,7 +1537,7 @@ function MaintenanceModePanel({ knownUsers }: { knownUsers: string[] }) {
         <CardContent className="space-y-4">
           {/* Delay input */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+            <Label className="eyebrow">
               Termination Delay (seconds)
             </Label>
             <Input
@@ -1714,7 +1714,7 @@ function TranscodeManagerPanel({ knownUsers }: { knownUsers: string[] }) {
 
   return (
     <div className="space-y-4 min-w-0">
-      <h2 className="text-lg font-semibold flex items-center gap-2">
+      <h2 className="text-xl font-bold font-display flex items-center gap-2">
         <Radio className="h-5 w-5" />
         Transcode Manager
       </h2>
@@ -1747,7 +1747,7 @@ function TranscodeManagerPanel({ knownUsers }: { knownUsers: string[] }) {
         <CardContent className="space-y-4">
           {/* Delay input */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+            <Label className="eyebrow">
               Termination Delay (seconds)
             </Label>
             <Input
@@ -1768,7 +1768,7 @@ function TranscodeManagerPanel({ knownUsers }: { knownUsers: string[] }) {
 
           {/* Criteria toggles */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+            <Label className="eyebrow">
               Termination Criteria
             </Label>
             <p className="text-[11px] text-muted-foreground pb-1">
@@ -1997,7 +1997,7 @@ function BlackoutSchedulesSection({ knownUsers }: { knownUsers: string[] }) {
     <>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <CalendarClock className="h-5 w-5" />
             Blackout Schedules
           </h2>
@@ -2026,16 +2026,16 @@ function BlackoutSchedulesSection({ knownUsers }: { knownUsers: string[] }) {
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-sm">{schedule.name}</span>
-                        <ColorChip className="text-slate-300 bg-slate-500/15 border-slate-500/30">
+                        <ColorChip className="bg-muted/40 text-muted-foreground">
                           {schedule.scheduleType === "one_time" ? "One-Time" : "Recurring"}
                         </ColorChip>
                         <ColorChip
                           className={
                             schedule.action === "terminate_immediate"
-                              ? "text-red-400 bg-red-500/15 border-red-500/30"
+                              ? "border-red/25 bg-red-dim text-red"
                               : schedule.action === "warn_then_terminate"
-                                ? "text-amber bg-amber/15 border-amber/30"
-                                : "text-blue-400 bg-blue-500/15 border-blue-500/30"
+                                ? "border-amber/25 bg-amber-dim text-amber"
+                                : "border-sky/25 bg-sky-dim text-sky"
                           }
                         >
                           {BLACKOUT_ACTION_LABELS[schedule.action] ?? schedule.action}

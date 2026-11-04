@@ -185,7 +185,7 @@ export function WhatsNewDialog() {
           dismissRef.current?.focus();
         }}
         className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden bg-card p-0 shadow-[0_1px_3px_0_rgb(0_0_0/0.1),inset_0_1px_0_oklch(1_0_0/4%)] sm:max-w-2xl">
-        <DialogHeader className="shrink-0 gap-3 border-b border-white/6 bg-[radial-gradient(ellipse_at_50%_0%,var(--brand-dim)_0%,transparent_70%)] px-6 pt-6 pb-5 text-left">
+        <DialogHeader className="shrink-0 gap-3 border-b border-white/6 px-6 pt-6 pb-5 text-left">
           <div className="flex items-center gap-3 pr-6">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/6 bg-background/60 shadow-[0_0_24px_var(--brand-dim)]">
               <Logo size={28} />

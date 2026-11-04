@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/user-avatar";
 import { formatRelativeDate } from "@/lib/format";
 import { QualityChip } from "@/components/quality-chips";
+import { ColorChip } from "@/components/color-chip";
 
 interface ResolvedRequest {
   seerrId: number;
@@ -74,7 +75,6 @@ type FilterTab = "all" | "movies" | "series" | "watched" | "pending" | "missing"
 interface MediaStatusInfo {
   label: string;
   chipClass: string;
-  borderClass: string;
   icon: typeof Check;
 }
 
@@ -85,50 +85,43 @@ function mediaStatusInfo(s: number): MediaStatusInfo {
     case 5:
       return {
         label: "Available",
-        chipClass: "text-emerald-300 bg-emerald-500/10 ring-emerald-500/20",
-        borderClass: "border-l-emerald-500/60",
+        chipClass: "border-green/25 bg-green-dim text-green",
         icon: Check,
       };
     case 4:
       return {
         label: "Partial",
-        chipClass: "text-sky-300 bg-sky-500/10 ring-sky-500/20",
-        borderClass: "border-l-sky-500/60",
+        chipClass: "border-sky/25 bg-sky-dim text-sky",
         icon: Check,
       };
     case 3:
       return {
         label: "Processing",
-        chipClass: "text-blue-300 bg-blue-500/10 ring-blue-500/20",
-        borderClass: "border-l-blue-500/60",
+        chipClass: "border-sky/25 bg-sky-dim text-sky",
         icon: Clock,
       };
     case 2:
       return {
         label: "Pending",
-        chipClass: "text-amber-300 bg-amber-500/10 ring-amber-500/20",
-        borderClass: "border-l-amber-500/60",
+        chipClass: "border-amber/25 bg-amber-dim text-amber",
         icon: Clock,
       };
     case 6:
       return {
         label: "Blocklisted",
-        chipClass: "text-zinc-300 bg-zinc-500/10 ring-zinc-500/20",
-        borderClass: "border-l-zinc-500/60",
+        chipClass: "bg-muted/40 text-muted-foreground",
         icon: AlertCircle,
       };
     case 7:
       return {
         label: "Deleted",
-        chipClass: "text-rose-300 bg-rose-500/10 ring-rose-500/20",
-        borderClass: "border-l-rose-500/60",
+        chipClass: "border-red/25 bg-red-dim text-red",
         icon: AlertCircle,
       };
     default:
       return {
         label: "Unknown",
-        chipClass: "text-muted-foreground bg-muted/40 ring-border/40",
-        borderClass: "border-l-transparent",
+        chipClass: "bg-muted/40 text-muted-foreground",
         icon: AlertCircle,
       };
   }
@@ -332,10 +325,10 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
                         className={cn(
                           "font-medium",
                           stats.watchedPct >= 75
-                            ? "text-emerald-300"
+                            ? "text-green"
                             : stats.watchedPct >= 40
                               ? "text-foreground"
-                              : "text-amber-300"
+                              : "text-amber"
                         )}
                       >
                         {stats.watchedPct}%
@@ -435,9 +428,9 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
 function WatchProgress({ watched, total }: { watched: number; total: number }) {
   const pct = total > 0 ? Math.round((watched / total) * 100) : 0;
   const tone =
-    pct >= 75 ? "bg-emerald-500/70" : pct >= 40 ? "bg-primary/70" : pct > 0 ? "bg-amber-500/70" : "bg-muted-foreground/30";
+    pct >= 75 ? "bg-green/70" : pct >= 40 ? "bg-primary/70" : pct > 0 ? "bg-amber/70" : "bg-muted-foreground/30";
   const textTone =
-    pct >= 75 ? "text-emerald-300" : pct >= 40 ? "text-foreground" : pct > 0 ? "text-amber-300" : "text-muted-foreground";
+    pct >= 75 ? "text-green" : pct >= 40 ? "text-foreground" : pct > 0 ? "text-amber" : "text-muted-foreground";
   return (
     <div className="flex items-center gap-2">
       <div className="relative h-1.5 w-20 overflow-hidden rounded-full bg-muted/40">
@@ -495,17 +488,12 @@ function RequestRow({ req, onClose }: { req: ResolvedRequest; onClose: () => voi
             </div>
           </div>
           <div className="flex flex-col items-end gap-1.5 shrink-0">
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
-                statusInfo.chipClass
-              )}
-            >
-              <StatusIcon className="h-3 w-3" />
+            <ColorChip className={statusInfo.chipClass}>
+              <StatusIcon className="mr-1 h-3 w-3" />
               {statusInfo.label}
-            </span>
+            </ColorChip>
             {req.watch.correlatable && req.type === "movie" && req.watch.watched && (
-              <span className="inline-flex items-center gap-1 text-xs text-emerald-300">
+              <span className="inline-flex items-center gap-1 text-xs text-green">
                 <Eye className="h-3 w-3" />
                 Watched
               </span>
@@ -531,10 +519,7 @@ function RequestRow({ req, onClose }: { req: ResolvedRequest; onClose: () => voi
     </div>
   );
 
-  const baseClasses = cn(
-    "group block rounded-md border-l-2 bg-card/30 p-3 transition-colors",
-    statusInfo.borderClass
-  );
+  const baseClasses = "group block rounded-md bg-card/30 p-3 transition-colors";
 
   if (isClickable && req.mediaItem) {
     const href =

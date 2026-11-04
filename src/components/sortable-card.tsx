@@ -92,7 +92,7 @@ export function SortableCard({
           variant="ghost"
           size="sm"
           aria-label="Remove card"
-          className="h-6 w-6 rounded-full bg-muted p-0 text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
+          className="h-6 w-6 rounded-full bg-muted p-0 text-muted-foreground hover:bg-destructive hover:text-white"
           onClick={onRemove}
         >
           <X className="h-3.5 w-3.5" />

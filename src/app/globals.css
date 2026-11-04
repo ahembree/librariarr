@@ -64,6 +64,15 @@
   --color-red-dim: var(--red-dim);
   --color-sky: var(--sky);
   --color-sky-dim: var(--sky-dim);
+  --color-excluded: var(--excluded);
+  --color-app-sonarr: var(--app-sonarr);
+  --color-app-radarr: var(--app-radarr);
+  --color-app-lidarr: var(--app-lidarr);
+  --color-app-seerr: var(--app-seerr);
+  --color-app-tracearr: var(--app-tracearr);
+  --color-media-movie: var(--media-movie);
+  --color-media-series: var(--media-series);
+  --color-media-music: var(--media-music);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -106,6 +115,37 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Categorical chart series past the five theme-aware ones above: the
+     dashboard's breakdowns colour up to fifteen values (chart-palette.ts),
+     and "Other" plus hidden series take chart-other. The same in both
+     themes. */
+  --chart-6: #a855f7;
+  --chart-7: #ef4444;
+  --chart-8: #06b6d4;
+  --chart-9: #ec4899;
+  --chart-10: #f97316;
+  --chart-11: #14b8a6;
+  --chart-12: #6366f1;
+  --chart-13: #84cc16;
+  --chart-14: #0ea5e9;
+  --chart-15: #d946ef;
+  --chart-other: #6e7383;
+
+  /* Identity colours — what a thing IS, never how it is doing (that is the
+     status set: green, amber, red, sky). The same in both themes.
+     excluded: an item protected by a lifecycle exception (shield marker).
+     app-*: each integration's own colour (its dot, tile and links).
+     media-*: the Movie / Series / Music type chips. */
+  --excluded: oklch(75% 0.183 55.934);
+  --app-sonarr: oklch(74.6% 0.16 232.661);
+  --app-radarr: oklch(82.8% 0.189 84.429);
+  --app-lidarr: oklch(76.5% 0.177 163.223);
+  --app-seerr: oklch(70.2% 0.183 293.541);
+  --app-tracearr: oklch(78.9% 0.154 211.53);
+  --media-movie: oklch(67.3% 0.182 276.935);
+  --media-series: oklch(71.4% 0.203 305.504);
+  --media-music: oklch(71.8% 0.202 349.761);
 
   /* Overhaul tokens — light. Dark is the shipped default; these keep the
      (currently unused) light path coherent. Bright accent flips toward

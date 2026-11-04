@@ -48,6 +48,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineError } from "@/components/inline-error";
+import { PageHeader } from "@/components/page-header";
 import { LoadingButton } from "@/components/loading-button";
 import { useSetState } from "@/hooks/use-set-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -207,13 +209,13 @@ const STATUS_META: Record<ItemStatus, { label: string; className: string; dot: s
   NEW: { label: "Not added", className: "bg-muted/40 text-muted-foreground", dot: "bg-muted-foreground/50" },
   UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/25 bg-amber-dim text-amber", dot: "bg-amber" },
   MANAGED: { label: "Managed", className: "border-green/25 bg-green-dim text-green", dot: "bg-green" },
-  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/25 bg-blue-400/15 text-blue-400", dot: "bg-blue-400" },
+  MANAGED_OUTDATED: { label: "Update available", className: "border-sky/25 bg-sky-dim text-sky", dot: "bg-sky" },
   MANAGED_MISSING: { label: "Missing in app", className: "border-red/25 bg-red-dim text-red", dot: "bg-destructive" },
 };
 
 const ACTION_META: Record<PlanItem["action"], { label: string; className: string }> = {
   CREATE: { label: "Create", className: "border-green/25 bg-green-dim text-green" },
-  UPDATE: { label: "Update", className: "border-blue-400/25 bg-blue-400/15 text-blue-400" },
+  UPDATE: { label: "Update", className: "border-sky/25 bg-sky-dim text-sky" },
   NOOP: { label: "No change", className: "bg-muted/40 text-muted-foreground" },
   SKIP: { label: "Skipped", className: "border-amber/25 bg-amber-dim text-amber" },
   ERROR: { label: "Error", className: "border-red/25 bg-red-dim text-red" },
@@ -962,16 +964,16 @@ export default function TrashSyncPage() {
   return (
     <TooltipProvider delayDuration={200}>
     <div className="p-4 sm:p-6 lg:p-8 space-y-5">
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
-          <SlidersHorizontal className="h-7 w-7" />
-          TRaSH Guide Sync
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-          Import recommended custom formats, quality profiles, sizes and naming into Sonarr /
-          Radarr. Nothing is written until you assign it — preview every change first.
-        </p>
-      </div>
+      <PageHeader
+        title="TRaSH Guide Sync"
+        icon={SlidersHorizontal}
+        description={
+          <>
+            Import recommended custom formats, quality profiles, sizes and naming into Sonarr /
+            Radarr. Nothing is written until you assign it — preview every change first.
+          </>
+        }
+      />
 
       {/* Toolbar: pick the target app, guide meta, refresh */}
       {loadingInstances ? (
@@ -986,7 +988,7 @@ export default function TrashSyncPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border bg-card/60 px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card/60 px-3 py-2.5">
           <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
           <Select value={selectedKey} onValueChange={setSelectedKey}>
             <SelectTrigger className="h-9 w-64">
@@ -1030,12 +1032,9 @@ export default function TrashSyncPage() {
       )}
 
       {selected && !loadingStatus && status && !status.reachable && (
-        <Card className="border-destructive/40">
-          <CardContent className="flex items-center gap-2 py-4 text-sm text-destructive">
-            <AlertTriangle className="h-4 w-4" />
-            Couldn&apos;t reach {status.instanceName}: {status.error}
-          </CardContent>
-        </Card>
+        <InlineError multiline>
+          Couldn&apos;t reach {status.instanceName}: {status.error}
+        </InlineError>
       )}
 
       {/* The Arr is reachable but the TRaSH guide catalog couldn't be loaded
@@ -1066,7 +1065,7 @@ export default function TrashSyncPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
               <CountPill dot="bg-green" label="managed" value={counts.managed} />
-              {counts.outdated > 0 && <CountPill dot="bg-blue-400" label="update" value={counts.outdated} plural />}
+              {counts.outdated > 0 && <CountPill dot="bg-sky" label="update" value={counts.outdated} plural />}
               <CountPill dot="bg-amber" label="unmanaged" value={counts.conflict} />
               <CountPill dot="bg-muted-foreground/50" label="not added" value={counts.new} />
               {counts.missing > 0 && <CountPill dot="bg-destructive" label="missing" value={counts.missing} />}
@@ -1086,7 +1085,7 @@ export default function TrashSyncPage() {
                 iconClassName="mr-1.5 h-4 w-4"
                 disabled={syncing || counts.managed === 0 || busyIds.size > 0}
               >
-                Dry run
+                Dry Run
               </LoadingButton>
               <LoadingButton
                 size="sm"
@@ -1096,7 +1095,7 @@ export default function TrashSyncPage() {
                 iconClassName="mr-1.5 h-4 w-4"
                 disabled={counts.managed === 0 || busyIds.size > 0}
               >
-                Sync managed
+                Sync Managed
               </LoadingButton>
             </div>
           </div>
@@ -1198,7 +1197,7 @@ export default function TrashSyncPage() {
             version. You can preview the exact changes before syncing.
           </>
         }
-        confirmLabel={<>Manage &amp; allow overwrite</>}
+        confirmLabel={<>Manage &amp; Allow Overwrite</>}
         onConfirm={() => {
           if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
           setConfirmTarget(null);
@@ -1411,7 +1410,7 @@ function ResourceList({
                 else expandedActions.replace(grouped.map((g) => g.name));
               }}
             >
-              {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
+              {expanded.size >= grouped.length ? "Collapse All" : "Expand All"}
             </Button>
           )}
         </div>
@@ -1486,7 +1485,7 @@ function ResourceList({
             versions. Nothing changes in the app until you sync.
           </>
         }
-        confirmLabel={<>Manage &amp; allow overwrite</>}
+        confirmLabel={<>Manage &amp; Allow Overwrite</>}
         onConfirm={() => {
           void doManage();
         }}
@@ -1564,21 +1563,24 @@ function ResourceRow({
               <Eye className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Preview diff</TooltipContent>
+          <TooltipContent>Preview Diff</TooltipContent>
         </Tooltip>
 
         {item.managed ? (
           <>
-            <Button
+            <LoadingButton
               variant="secondary"
               size="sm"
               className="w-20"
               onClick={onSync}
               disabled={busy}
               title="Sync just this item"
+              loading={busy}
+              icon={Play}
+              iconClassName="mr-1 h-3.5 w-3.5"
             >
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Play className="mr-1 h-3.5 w-3.5" /> Sync</>}
-            </Button>
+              Sync
+            </LoadingButton>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8" disabled={busy}>
@@ -1595,13 +1597,13 @@ function ResourceRow({
                   </>
                 )}
                 <DropdownMenuItem onSelect={() => onManage()}>
-                  <X className="mr-2 h-4 w-4" /> Stop managing
+                  <X className="mr-2 h-4 w-4" /> Stop Managing
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </>
         ) : (
-          <Button
+          <LoadingButton
             variant={item.existsInArr ? "outline" : "default"}
             size="sm"
             onClick={onManage}
@@ -1612,19 +1614,12 @@ function ResourceRow({
                 ? "Take over management — the next sync overwrites the app copy"
                 : "Add this to the app now"
             }
+            loading={busy}
+            icon={item.existsInArr ? ShieldCheck : Plus}
+            iconClassName="mr-1 h-3.5 w-3.5"
           >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : item.existsInArr ? (
-              <>
-                <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Manage
-              </>
-            ) : (
-              <>
-                <Plus className="mr-1 h-3.5 w-3.5" /> Add
-              </>
-            )}
-          </Button>
+            {item.existsInArr ? "Manage" : "Add"}
+          </LoadingButton>
         )}
       </div>
     </div>
@@ -1660,17 +1655,23 @@ function SingletonCard({
       </CardHeader>
       <CardContent className="flex items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onPreview} disabled={busy}>
-          <Eye className="mr-1 h-3.5 w-3.5" /> Preview diff
+          <Eye className="mr-1 h-3.5 w-3.5" /> Preview Diff
         </Button>
         {item.managed && (
-          <Button variant="secondary" size="sm" onClick={onSync} disabled={busy}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
-            Sync now
-          </Button>
+          <LoadingButton variant="secondary" size="sm" onClick={onSync} disabled={busy} loading={busy} icon={Play} iconClassName="mr-1 h-3.5 w-3.5">
+            Sync Now
+          </LoadingButton>
         )}
-        <Button variant={item.managed ? "outline" : "default"} size="sm" onClick={onManage} disabled={busy}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.managed ? "Stop managing" : "Manage sizes"}
-        </Button>
+        <LoadingButton
+          variant={item.managed ? "outline" : "default"}
+          size="sm"
+          onClick={onManage}
+          disabled={busy}
+          loading={busy}
+          iconClassName="mr-1 h-3.5 w-3.5"
+        >
+          {item.managed ? "Stop Managing" : "Manage Sizes"}
+        </LoadingButton>
       </CardContent>
     </Card>
   );
@@ -1764,21 +1765,19 @@ function NamingCard({
         )}
         <div className="flex items-center gap-2 pt-1">
           <Button variant="ghost" size="sm" onClick={() => onPreview(sel)} disabled={busy || !hasSelection}>
-            <Eye className="mr-1 h-3.5 w-3.5" /> Preview diff
+            <Eye className="mr-1 h-3.5 w-3.5" /> Preview Diff
           </Button>
-          <Button size="sm" onClick={() => onManage(sel)} disabled={busy || !hasSelection}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1 h-3.5 w-3.5" />}
-            {item.managed ? "Update selection" : "Manage naming"}
-          </Button>
+          <LoadingButton size="sm" onClick={() => onManage(sel)} disabled={busy || !hasSelection} loading={busy} icon={ShieldCheck} iconClassName="mr-1 h-3.5 w-3.5">
+            {item.managed ? "Update Selection" : "Manage Naming"}
+          </LoadingButton>
           {item.managed && (
-            <Button variant="secondary" size="sm" onClick={onSync} disabled={busy}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1 h-3.5 w-3.5" />}
-              Sync now
-            </Button>
+            <LoadingButton variant="secondary" size="sm" onClick={onSync} disabled={busy} loading={busy} icon={Play} iconClassName="mr-1 h-3.5 w-3.5">
+              Sync Now
+            </LoadingButton>
           )}
           {item.managed && (
             <Button variant="outline" size="sm" onClick={onUnmanage} disabled={busy}>
-              Stop managing
+              Stop Managing
             </Button>
           )}
         </div>
@@ -2325,7 +2324,7 @@ function ProfileFormatsTab({
             <Loader2 className="h-4 w-4 animate-spin" /> Loading quality profiles…
           </div>
         ) : error ? (
-          <p className="text-sm text-destructive">{error}</p>
+          <InlineError multiline>{error}</InlineError>
         ) : profiles.length === 0 ? (
           <p className="text-sm text-muted-foreground">No quality profiles found on this instance.</p>
         ) : (
@@ -2409,7 +2408,7 @@ function ProfileFormatsTab({
                           {isDirty && addableMissing.length > 0 && " Save or discard your changes first to add them."}
                         </span>
                         {addableMissing.length > 0 && (
-                          <Button
+                          <LoadingButton
                             size="sm"
                             variant="outline"
                             className="h-7 shrink-0 border-amber/40 text-amber hover:text-amber"
@@ -2420,10 +2419,12 @@ function ProfileFormatsTab({
                                 ? "Save or discard your changes first"
                                 : "Add the missing custom formats to the app and apply their scores"
                             }
+                            loading={busy}
+                            icon={Plus}
+                            iconClassName="mr-1 h-3.5 w-3.5"
                           >
-                            {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
-                            Add all &amp; apply ({addableMissing.length})
-                          </Button>
+                            Add All &amp; Apply ({addableMissing.length})
+                          </LoadingButton>
                         )}
                       </div>
                     )}
@@ -2557,12 +2558,11 @@ function ProfileFormatsTab({
                 {/* Actions */}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="ghost" size="sm" onClick={() => runSync(true)} disabled={busy || formats.length === 0}>
-                    <Eye className="mr-1 h-3.5 w-3.5" /> Preview diff
+                    <Eye className="mr-1 h-3.5 w-3.5" /> Preview Diff
                   </Button>
-                  <Button size="sm" onClick={save} disabled={busy}>
-                    {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1 h-3.5 w-3.5" />}
+                  <LoadingButton size="sm" onClick={save} disabled={busy} loading={busy} icon={ShieldCheck} iconClassName="mr-1 h-3.5 w-3.5">
                     Save
-                  </Button>
+                  </LoadingButton>
                   <Button
                     variant="secondary"
                     size="sm"
@@ -2591,7 +2591,7 @@ function ProfileFormatsTab({
                   )}
                   {currentAssignment && (
                     <Button variant="outline" size="sm" onClick={unmanage} disabled={busy}>
-                      Stop managing
+                      Stop Managing
                     </Button>
                   )}
                 </div>
@@ -2617,8 +2617,8 @@ function ProfileFormatsTab({
             <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
           </>
         }
-        cancelLabel="Keep editing"
-        confirmLabel={<>Discard &amp; switch</>}
+        cancelLabel="Keep Editing"
+        confirmLabel={<>Discard &amp; Switch</>}
         onConfirm={() => {
           if (pendingProfile !== null) selectProfile(pendingProfile);
           setPendingProfile(null);
@@ -2764,10 +2764,9 @@ function OptionsForm({
         <Button variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
-        <Button onClick={submit} disabled={busy}>
-          {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1.5 h-4 w-4" />}
-          Save options
-        </Button>
+        <LoadingButton onClick={submit} disabled={busy} loading={busy} icon={ShieldCheck} iconClassName="mr-1.5 h-4 w-4">
+          Save Options
+        </LoadingButton>
       </DialogFooter>
     </>
   );
@@ -2809,7 +2808,10 @@ function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
               </div>
               {item.error && <p className="text-xs text-destructive">{item.error}</p>}
               {item.warnings.map((w, idx) => (
-                <p key={idx} className="text-xs text-amber">⚠ {w}</p>
+                <p key={idx} className="flex items-start gap-1 text-xs text-amber">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                  <span>{w}</span>
+                </p>
               ))}
               {item.diff.length > 0 && (
                 <div className="mt-2 space-y-1">
