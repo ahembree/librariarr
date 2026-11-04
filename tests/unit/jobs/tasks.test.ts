@@ -205,7 +205,7 @@ describe("taskList", () => {
       { serverId: "server-1", libraryKey: "lib-1", skipWatchHistory: true },
       helpers,
     );
-    expect(syncMediaServer).toHaveBeenCalledWith("server-1", "lib-1", { skipWatchHistory: true });
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", "lib-1", { skipWatchHistory: true, adoptUnclaimedRow: true });
   });
 
   it("sync task passes the job's trigger through to the sync", async () => {
@@ -215,7 +215,24 @@ describe("taskList", () => {
       { serverId: "server-1", trigger: "scheduled sync" },
       helpers,
     );
-    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { trigger: "scheduled sync" });
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { trigger: "scheduled sync", adoptUnclaimedRow: true });
+  });
+
+  it("sync task lets only a payload without a row adopt an unclaimed one", async () => {
+    // A payload naming its row lost nothing to a jobKey collision: it must
+    // never take another request's PENDING row.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncMediaServer).toHaveBeenLastCalledWith("server-1", undefined, { syncJobId: "route-row" });
+
+    // One without may have had its id replaced by a keyed enqueue.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncMediaServer).toHaveBeenLastCalledWith("server-1", undefined, { trigger: "scheduled sync", adoptUnclaimedRow: true });
   });
 
   it("sync task names the trigger when it skips an already-running sync", async () => {

@@ -180,11 +180,13 @@ const syncServer: Task = async (payload) => {
 
   // The trigger rides along so the sync's own "Starting sync" line says why it
   // ran — the job payload is the only place that knowledge survives the hop
-  // through the queue.
+  // through the queue. A payload without a `syncJobId` may have replaced a
+  // requested sync's under the same jobKey, so only this queued run may adopt
+  // the row that request left unclaimed (see `claimSyncJob`).
   await syncMediaServer(serverId, libraryKey, {
     ...(skipWatchHistory ? { skipWatchHistory: true } : {}),
     ...(trigger ? { trigger } : {}),
-    ...(syncJobId ? { syncJobId } : {}),
+    ...(syncJobId ? { syncJobId } : { adoptUnclaimedRow: true }),
   });
 };
 

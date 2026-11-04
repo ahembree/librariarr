@@ -724,6 +724,13 @@ interface SyncMediaServerOptions {
   trigger?: string;
   /** The PENDING row the requester created at enqueue time; see `claimSyncJob`. */
   syncJobId?: string;
+  /**
+   * Set only by the `TASK_SYNC_SERVER` handler, for a queued run whose payload
+   * carries no `syncJobId`: that payload may have replaced a requested sync's
+   * under the same jobKey, and the requested row is then this run's to claim.
+   * See `claimSyncJob`.
+   */
+  adoptUnclaimedRow?: boolean;
 }
 
 /**
@@ -737,15 +744,27 @@ interface SyncMediaServerOptions {
  * forever. So, in order:
  *  - the requested row, while still PENDING;
  *  - nothing, if that row was CANCELLED — Stop was pressed while it queued;
- *  - any other PENDING row for the server, because a jobKey collision (the
- *    dispatcher or realtime layer enqueuing `sync:<id>` while a manual one
- *    waits) replaces the payload and drops `syncJobId`, and this run is then
- *    the one that row was waiting for;
+ *  - for a queued run whose payload carries no `syncJobId` (`adoptUnclaimed`),
+ *    the server's oldest unclaimed PENDING row, because a jobKey collision
+ *    (the dispatcher or realtime layer enqueuing `sync:<id>` while a manual
+ *    one waits) replaces the payload and drops `syncJobId`, and this run is
+ *    then the one that row was waiting for;
  *  - a fresh row. A requested row that is FAILED lands here too: a previous
  *    attempt of this job threw, or a restart's cleanup closed it, and the
  *    retry should still run.
+ *
+ * Adoption is for that collision only. A run that names its row lost nothing
+ * to a collision, and an inline caller (`PostDeleteResync`) was never queued:
+ * adopting let either take another request's PENDING row — the user's Settings
+ * Sync, or one library job's row on the library pages — report into it and
+ * mark it COMPLETED, so that request read as settled before it ran and its own
+ * job then reported into a row of its own (or another job's).
  */
-async function claimSyncJob(serverId: string, requestedId: string | undefined): Promise<{ id: string } | null> {
+async function claimSyncJob(
+  serverId: string,
+  requestedId: string | undefined,
+  adoptUnclaimed: boolean,
+): Promise<{ id: string } | null> {
   if (requestedId) {
     const requested = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
       `SELECT "id","status"::text AS "status" FROM "SyncJob" WHERE "id"=$1`, requestedId,
@@ -755,13 +774,14 @@ async function claimSyncJob(serverId: string, requestedId: string | undefined): 
       logger.info("Sync", `Sync for server ${serverId} was stopped before it started — skipping`);
       return null;
     }
+  } else if (adoptUnclaimed) {
+    const unclaimed = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
+      `SELECT "id","status"::text AS "status" FROM "SyncJob"
+        WHERE "mediaServerId"=$1 AND "status"='PENDING' ORDER BY "startedAt" ASC LIMIT 1`,
+      serverId,
+    );
+    if (unclaimed[0]) return { id: unclaimed[0].id };
   }
-  const unclaimed = await prisma.$queryRawUnsafe<{ id: string; status: string }[]>(
-    `SELECT "id","status"::text AS "status" FROM "SyncJob"
-      WHERE "mediaServerId"=$1 AND "status"='PENDING' ORDER BY "startedAt" ASC LIMIT 1`,
-    serverId,
-  );
-  if (unclaimed[0]) return { id: unclaimed[0].id };
   const inserted = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `INSERT INTO "SyncJob" ("id","mediaServerId","status","startedAt") VALUES ($1,$2,$3,$4) RETURNING "id"`,
     randomUUID(), serverId, "PENDING", new Date(),
@@ -770,7 +790,7 @@ async function claimSyncJob(serverId: string, requestedId: string | undefined): 
 }
 
 export async function syncMediaServer(serverId: string, libraryKey?: string, options?: SyncMediaServerOptions) {
-  const syncJob = await claimSyncJob(serverId, options?.syncJobId);
+  const syncJob = await claimSyncJob(serverId, options?.syncJobId, options?.adoptUnclaimedRow === true);
   if (!syncJob) return;
 
   let syncUserId: string | undefined;
