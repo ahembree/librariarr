@@ -79,7 +79,7 @@ All three server types are supported, and each connected server gets its own ind
 
 - **Self-healing.** If a connection drops, Librariarr reconnects automatically with exponential backoff (1s up to 60s). On reconnect it re-reads current state so nothing is missed.
 - **Debounced and deduplicated.** A library scan that emits hundreds of change events is coalesced — the changed item IDs are accumulated, deduplicated and applied in a single incremental pass; a burst of playback progress events is throttled so your server isn't hammered. A server typically reports the same item several times as it walks it through scanning, analysing and loading; that is one change, not several.
-- **Reconciled.** Adding, editing, enabling/disabling, or removing a server immediately opens or closes its connection. A safety re-check also runs every minute.
+- **Reconciled.** Adding, editing, enabling/disabling, or removing a server immediately opens or closes its connection. Changing a server's URL, token or certificate setting reconnects it, and first applies any library or watch changes it had already reported. A safety re-check also runs every minute.
 
 ## Enabling / disabling
 

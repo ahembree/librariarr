@@ -135,6 +135,11 @@ export class RealtimeManager {
       for (const [id, managed] of this.connections) {
         const want = wanted.get(id);
         if (!want || connectionSignature(want) !== managed.signature) {
+          // Only its connection changed: the library changes it already
+          // reported, and a watch refresh already armed, are still owed —
+          // apply them now rather than cancel them with their debouncers.
+          // They are dropped only for a server that is removed or disabled.
+          if (want) this.flushPendingWork(id);
           managed.conn.stop();
           this.connections.delete(id);
           this.disposeDebouncers(id);
@@ -460,6 +465,12 @@ export class RealtimeManager {
       this.watchDebouncers.set(serverId, debouncer);
     }
     return debouncer;
+  }
+
+  /** Fire the server's armed library sync and watch refresh now. */
+  private flushPendingWork(serverId: string): void {
+    this.syncDebouncers.get(serverId)?.flush();
+    this.watchDebouncers.get(serverId)?.flush();
   }
 
   private disposeDebouncers(serverId: string): void {
