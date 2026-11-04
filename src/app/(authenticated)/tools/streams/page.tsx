@@ -1380,7 +1380,7 @@ function ActiveSessionsSection() {
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {sheetSession.genres.map(g => (
-                          <ColorChip key={g} className="bg-white/10 text-white/80 border-white/20">{g}</ColorChip>
+                          <ColorChip key={g}>{g}</ColorChip>
                         ))}
                       </div>
                     )}

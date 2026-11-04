@@ -339,7 +339,7 @@ function MatchItemsTableView({
                       {exceptedItemIds.has(item.id) && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                            <ShieldOff className="h-3.5 w-3.5 text-excluded shrink-0" />
                           </TooltipTrigger>
                           <TooltipContent>Excluded from lifecycle actions</TooltipContent>
                         </Tooltip>
@@ -367,21 +367,19 @@ function MatchItemsTableView({
                 )}
                 {columnVisibility.action && (
                   <td className="px-2 py-2 text-center" style={{ width: columnWidths.action }}>
-                    <button
-                      className="inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 hover:border-orange-500/60 transition-colors disabled:opacity-50"
+                    <LoadingButton
+                      variant="ghost"
+                      className="h-7 gap-1.5 border border-excluded/40 px-2 text-xs text-excluded hover:border-excluded/60 hover:bg-excluded/10 hover:text-excluded dark:hover:bg-excluded/10"
                       onClick={(e) => {
                         e.stopPropagation();
                         onExclude(item);
                       }}
-                      disabled={excludingItems.has(item.id)}
+                      loading={excludingItems.has(item.id)}
+                      icon={ShieldOff}
+                      iconClassName="h-3.5 w-3.5"
                     >
-                      {excludingItems.has(item.id) ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <ShieldOff className="h-3.5 w-3.5" />
-                      )}
                       Exclude
-                    </button>
+                    </LoadingButton>
                   </td>
                 )}
               </tr>
@@ -440,28 +438,27 @@ const MatchCard = memo(function MatchCard({
     <div className="relative group">
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            className="absolute top-2 right-2 z-20 h-7 w-7 rounded-md bg-background/80 backdrop-blur-sm flex items-center justify-center text-muted-foreground hover:text-orange-400 hover:bg-background/90 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50"
+          <LoadingButton
+            variant="ghost"
+            size="icon"
+            aria-label="Exclude from lifecycle actions"
+            className="absolute top-2 right-2 z-20 h-7 w-7 bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-all group-hover:opacity-100 hover:bg-background/90 hover:text-excluded disabled:opacity-50 dark:hover:bg-background/90"
             onClick={(e) => {
               e.stopPropagation();
               onExclude(item);
             }}
-            disabled={excluding}
-          >
-            {excluding ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ShieldOff className="h-3.5 w-3.5" />
-            )}
-          </button>
+            loading={excluding}
+            icon={ShieldOff}
+            iconClassName="h-3.5 w-3.5"
+          />
         </TooltipTrigger>
         <TooltipContent>Exclude from lifecycle actions</TooltipContent>
       </Tooltip>
       {excepted && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-excluded/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-background" />
             </div>
           </TooltipTrigger>
           <TooltipContent>Excluded from lifecycle actions</TooltipContent>

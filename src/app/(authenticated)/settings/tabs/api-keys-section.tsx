@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObjec
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  AlertCircle,
   AlertTriangle,
   Check,
   Copy,
@@ -20,6 +19,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
+import { InlineError } from "@/components/inline-error";
 import { ColorChip } from "@/components/color-chip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -39,16 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { formatDate, formatRelativeDate } from "@/lib/format";
 import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
@@ -244,7 +236,7 @@ export function ApiKeysSection({
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         toast.error("Couldn't delete API key", { description: data?.error });
-        return;
+        return false;
       }
       setKeys((prev) => prev?.filter((k) => k.id !== target.id) ?? prev);
       // Also supersedes a load still in flight from before the delete, which
@@ -257,6 +249,7 @@ export function ApiKeysSection({
       setDeleteOpen(false);
     } catch {
       toast.error("Couldn't delete API key");
+      return false;
     } finally {
       setDeleting(false);
     }
@@ -297,13 +290,11 @@ export function ApiKeysSection({
       contentClassName="space-y-3"
     >
       {loadError && (
-        <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{loadError}</span>
-          <Button variant="outline" size="sm" className="ml-auto" onClick={retry} disabled={retrying}>
-            {retrying && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+        <div className="flex flex-wrap items-center gap-2">
+          <InlineError className="min-w-0 flex-1">{loadError}</InlineError>
+          <LoadingButton variant="outline" size="sm" onClick={retry} loading={retrying} iconClassName="mr-1.5 h-4 w-4">
             Retry
-          </Button>
+          </LoadingButton>
         </div>
       )}
 
@@ -344,45 +335,29 @@ export function ApiKeysSection({
         onListStale={() => void load()}
       />
 
-      <AlertDialog
+      <ConfirmDialog
         open={deleteOpen}
-        onOpenChange={(open) => {
-          if (!open && deleting) return;
-          setDeleteOpen(open);
+        onOpenChange={setDeleteOpen}
+        title={<>Delete API key &ldquo;{deleteTarget?.name}&rdquo;?</>}
+        description={
+          <>
+            Any application using this key loses access immediately. This
+            cannot be undone &mdash; to restore access, create a new key and
+            give it to the application.
+          </>
+        }
+        confirmLabel="Delete Key"
+        confirmIcon={Trash2}
+        destructive
+        pending={deleting}
+        onConfirm={handleDelete}
+        onCloseAutoFocus={(e) => {
+          if (!refocusCreate.current) return;
+          refocusCreate.current = false;
+          e.preventDefault();
+          createButtonRef.current?.focus();
         }}
-      >
-        <AlertDialogContent
-          onCloseAutoFocus={(e) => {
-            if (!refocusCreate.current) return;
-            refocusCreate.current = false;
-            e.preventDefault();
-            createButtonRef.current?.focus();
-          }}
-        >
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete API key &ldquo;{deleteTarget?.name}&rdquo;?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Any application using this key loses access immediately. This
-              cannot be undone &mdash; to restore access, create a new key and
-              give it to the application.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleting}
-              onClick={(e) => {
-                e.preventDefault();
-                void handleDelete();
-              }}
-            >
-              {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-              Delete Key
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      />
     </SettingsSection>
   );
 }
@@ -869,7 +844,7 @@ function CreateApiKeyDialog({
                   <div className="space-y-3 rounded-md border border-border p-3">
                     {API_SCOPE_GROUPS.map((group) => (
                       <div key={group.label} className="space-y-2">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        <p className="eyebrow">
                           {group.label}
                         </p>
                         {group.scopes.map((scope) => {
@@ -1017,10 +992,7 @@ function CreateApiKeyDialog({
               )}
 
               {error && (
-                <div role="alert" className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{error}</span>
-                </div>
+                <InlineError multiline>{error}</InlineError>
               )}
             </div>
 
@@ -1028,10 +1000,9 @@ function CreateApiKeyDialog({
               <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={saving}>
                 Cancel
               </Button>
-              <Button onClick={handleCreate} disabled={!canCreate}>
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeySquare className="mr-2 h-4 w-4" />}
+              <LoadingButton onClick={handleCreate} disabled={!canCreate} loading={saving} icon={KeySquare}>
                 Create Key
-              </Button>
+              </LoadingButton>
             </DialogFooter>
           </>
         )}

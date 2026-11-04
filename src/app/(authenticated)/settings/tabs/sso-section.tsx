@@ -21,16 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineError } from "@/components/inline-error";
+import { LoadingButton } from "@/components/loading-button";
+import { ConnectionTestResult, type ConnectionTestOutcome } from "@/components/connection-test-result";
 import {
   AlertCircle,
   CheckCircle,
@@ -111,7 +105,7 @@ export function SsoSection({
   const [error, setError] = useState<string | null>(null);
 
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<ConnectionTestOutcome | null>(null);
 
   const [linkSubject, setLinkSubject] = useState("");
   const [linking, setLinking] = useState(false);
@@ -277,14 +271,14 @@ export function SsoSection({
       });
       const data = await res.json();
       if (data.ok) {
-        setTestResult({ ok: true, message: `Discovery succeeded. Issuer: ${data.issuer}` });
+        setTestResult({ ok: true, appName: data.issuer });
         toast.success("OIDC discovery succeeded");
       } else {
-        setTestResult({ ok: false, message: data.error || "Discovery failed" });
+        setTestResult({ ok: false, error: data.error || "Discovery failed" });
         toast.error("OIDC discovery failed", { description: data.error });
       }
     } catch {
-      setTestResult({ ok: false, message: "Network error" });
+      setTestResult({ ok: false, error: "Network error" });
       toast.error("OIDC discovery failed");
     } finally {
       setTesting(false);
@@ -536,25 +530,17 @@ export function SsoSection({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button
+              <LoadingButton
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={testing || !config.oidcIssuer}
+                disabled={!config.oidcIssuer}
                 onClick={handleTestDiscovery}
+                loading={testing}
               >
-                {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Test Discovery
-              </Button>
-              {testResult && (
-                <span
-                  className={
-                    testResult.ok ? "text-xs text-green" : "text-xs text-destructive"
-                  }
-                >
-                  {testResult.message}
-                </span>
-              )}
+              </LoadingButton>
+              {testResult && <ConnectionTestResult result={testResult} variant="badge" />}
             </div>
             <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
               Register a confidential client at your IdP and set the redirect
@@ -611,30 +597,22 @@ export function SsoSection({
                 </div>
               </div>
             ) : (
-              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <p className="font-medium">Proxy secret required</p>
-                  <p className="text-xs">
-                    Forward auth trusts the identity in these headers, so a request
-                    has to prove it came through your proxy. Set{" "}
-                    <code className={codeClass}>FORWARD_AUTH_SECRET</code> on the
-                    Librariarr container, have the proxy send it as the{" "}
-                    <code className={codeClass}>X-Librariarr-Proxy-Secret</code> header,
-                    and restart. Forward-auth login cannot be turned on until it is set.
-                  </p>
-                </div>
-              </div>
+              <InlineError multiline>
+                <span className="block font-medium">Proxy secret required</span>
+                <span className="block text-xs">
+                  Forward auth trusts the identity in these headers, so a request
+                  has to prove it came through your proxy. Set{" "}
+                  <code className={codeClass}>FORWARD_AUTH_SECRET</code> on the
+                  Librariarr container, have the proxy send it as the{" "}
+                  <code className={codeClass}>X-Librariarr-Proxy-Secret</code> header,
+                  and restart. Forward-auth login cannot be turned on until it is set.
+                </span>
+              </InlineError>
             )}
           </div>
         )}
 
-        {error && (
-          <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {error}
-          </div>
-        )}
+        {error && <InlineError>{error}</InlineError>}
         {savedAt && (
           <div className="flex items-center gap-2 rounded-md bg-green/10 p-3 text-sm text-green">
             <CheckCircle className="h-4 w-4 shrink-0" />
@@ -643,25 +621,20 @@ export function SsoSection({
         )}
 
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" disabled={saving || !hasRequiredFields(config)} onClick={handleSaveConfig}>
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+          <LoadingButton size="sm" disabled={!hasRequiredFields(config)} onClick={handleSaveConfig} loading={saving} icon={Save}>
             Save Configuration
-          </Button>
+          </LoadingButton>
           {config.hasPreviousConfig && (
-            <Button
+            <LoadingButton
               type="button"
               variant="outline"
               size="sm"
-              disabled={reverting}
               onClick={() => setConfirmRevertOpen(true)}
+              loading={reverting}
+              icon={History}
             >
-              {reverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <History className="mr-2 h-4 w-4" />
-              )}
               Revert to Previous
-            </Button>
+            </LoadingButton>
           )}
         </div>
       </StepCard>
@@ -725,18 +698,15 @@ export function SsoSection({
                     avoid getting locked out by a typo &mdash; bad credentials
                     fail <em>here</em>, before SSO is activated.
                   </p>
-                  <Button
+                  <LoadingButton
                     size="sm"
-                    disabled={oidcLinkStarting || !step1Complete}
+                    disabled={!step1Complete}
                     onClick={handleLinkViaOidc}
+                    loading={oidcLinkStarting}
+                    icon={ExternalLink}
                   >
-                    {oidcLinkStarting ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                    )}
                     Verify &amp; Link via OIDC
-                  </Button>
+                  </LoadingButton>
                 </div>
 
                 {/* Fallback path: paste sub manually. Useful when the OIDC
@@ -769,17 +739,15 @@ export function SsoSection({
                         onChange={(e) => setLinkSubject(e.target.value)}
                         disabled={!step1Complete}
                       />
-                      <Button
+                      <LoadingButton
                         size="sm"
                         variant="outline"
-                        disabled={linking || !linkSubject.trim() || !step1Complete}
+                        disabled={!linkSubject.trim() || !step1Complete}
                         onClick={handleLink}
+                        loading={linking}
                       >
-                        {linking ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : null}
                         Link Manually
-                      </Button>
+                      </LoadingButton>
                     </div>
                   </div>
                 )}
@@ -795,14 +763,14 @@ export function SsoSection({
                     onChange={(e) => setLinkSubject(e.target.value)}
                     disabled={!step1Complete}
                   />
-                  <Button
+                  <LoadingButton
                     size="sm"
-                    disabled={linking || !linkSubject.trim() || !step1Complete}
+                    disabled={!linkSubject.trim() || !step1Complete}
                     onClick={handleLink}
+                    loading={linking}
                   >
-                    {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     Link Identity
-                  </Button>
+                  </LoadingButton>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Enter the username your reverse proxy will inject as the
@@ -812,12 +780,7 @@ export function SsoSection({
             )}
           </div>
         )}
-        {linkError && (
-          <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {linkError}
-          </div>
-        )}
+        {linkError && <InlineError>{linkError}</InlineError>}
         {linkNotice && (
           <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -855,79 +818,50 @@ export function SsoSection({
             onCheckedChange={handleToggleSsoEnabled}
           />
         </div>
-        {enableError && (
-          <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {enableError}
-          </div>
-        )}
+        {enableError && <InlineError>{enableError}</InlineError>}
       </StepCard>
 
       {/* Unlink confirmation — destructive action. */}
-      <AlertDialog open={confirmUnlinkOpen} onOpenChange={setConfirmUnlinkOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Unlink SSO identity?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This clears your linked SSO subject. If SSO login is currently
-              enabled, it will also be turned off automatically — otherwise
-              the local form would stay hidden on the login page with no way
-              back in. Other active sessions for your account will be
-              invalidated.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={linking}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmUnlinkOpen(false);
-                handleUnlink();
-              }}
-              disabled={linking}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {linking ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ShieldOff className="mr-2 h-4 w-4" />
-              )}
-              Unlink
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmUnlinkOpen}
+        onOpenChange={setConfirmUnlinkOpen}
+        title="Unlink SSO identity?"
+        description="This clears your linked SSO subject. If SSO login is currently enabled, it will also be turned off automatically — otherwise the local form would stay hidden on the login page with no way back in. Other active sessions for your account will be invalidated."
+        confirmLabel="Unlink"
+        confirmIcon={ShieldOff}
+        destructive
+        pending={linking}
+        onConfirm={() => {
+          void handleUnlink();
+        }}
+      />
 
       {/* Revert-config confirmation. Restores the snapshot from before the
           last SSO config save. Single-step undo — no history beyond that. */}
-      <AlertDialog open={confirmRevertOpen} onOpenChange={setConfirmRevertOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Revert SSO configuration?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This restores the SSO connection settings that were active
-              before your most recent save (issuer URL, client ID, client
-              secret, scopes, etc.). SSO login will stay turned off after
-              the revert — you&rsquo;ll need to re-enable it in step 3
-              after confirming the restored config still works.
-              <br /><br />
-              This is single-step undo: only the immediately-previous state
-              is kept. Reverting clears the snapshot, so you can&rsquo;t
-              re-revert this revert.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={reverting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleRevert} disabled={reverting}>
-              {reverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <History className="mr-2 h-4 w-4" />
-              )}
-              Revert
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmRevertOpen}
+        onOpenChange={setConfirmRevertOpen}
+        title="Revert SSO configuration?"
+        description={
+          <>
+            This restores the SSO connection settings that were active
+            before your most recent save (issuer URL, client ID, client
+            secret, scopes, etc.). SSO login will stay turned off after
+            the revert — you&rsquo;ll need to re-enable it in step 3
+            after confirming the restored config still works.
+            <br /><br />
+            This is single-step undo: only the immediately-previous state
+            is kept. Reverting clears the snapshot, so you can&rsquo;t
+            re-revert this revert.
+          </>
+        }
+        confirmLabel="Revert"
+        confirmIcon={History}
+        pending={reverting}
+        onConfirm={() => {
+          void handleRevert();
+        }}
+      />
     </div>
   );
 }

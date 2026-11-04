@@ -148,7 +148,7 @@ const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   // Tracearr stream facts. `streamResolution` maps to its own API sort key
   // rather than reusing `resolution`, which sorts the FILE's resolution on the
   // MediaItem — the two disagree on any transcoded play.
-  transcode: "isTranscode",
+  transcode: "decision",
   completion: "percentComplete",
   player: "player",
   streamResolution: "streamResolution",
@@ -474,9 +474,13 @@ export default function HistoryPage() {
           </ColorChip>
         );
       },
-      // Sorting is server-side (see COLUMN_TO_SORT_FIELD → isTranscode);
-      // sortValue only has to exist for DataTable to make the header sortable.
-      sortValue: (item) => (item.isTranscode == null ? null : item.isTranscode ? 1 : 0),
+      // Sorting is server-side (see COLUMN_TO_SORT_FIELD → decision, the same
+      // verdict as the chip); sortValue only has to exist for DataTable to make
+      // the header sortable, and ranks rows the way the server does.
+      sortValue: (item) => {
+        const kind = streamDecision(item)?.kind;
+        return kind === undefined ? null : kind === "transcode" ? 2 : kind === "direct-stream" ? 1 : 0;
+      },
     },
     {
       id: "completion",
@@ -914,7 +918,7 @@ export default function HistoryPage() {
               above the empty state, so the "Sync Now" path gets the same
               control. */}
           {syncing && (
-            <div className="mb-4 flex items-center gap-3 rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+            <div className="mb-4 flex items-center gap-3 rounded-xl border border-border/60 bg-card/40 px-4 py-3">
               <div className="min-w-0 flex-1">
                 {syncProgress.phases.length > 0 ? (
                   <QueryProgress state={syncProgress} />
@@ -1073,7 +1077,7 @@ export default function HistoryPage() {
                   if (groupCols.length === 0) return null;
                   return (
                     <div key={groupKey} className="mb-2">
-                      <div className="px-2 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+                      <div className="eyebrow px-2 py-1">
                         {groupLabel}
                       </div>
                       {groupCols.map((col) => (

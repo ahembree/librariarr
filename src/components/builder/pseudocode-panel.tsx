@@ -35,9 +35,9 @@ function PseudocodeLineItem({
   const paddingLeft = `${line.depth * 1.25}rem`;
 
   const highlightClass = green
-    ? "bg-green/20 border-l-2 border-green rounded-sm px-2"
+    ? "bg-green/20 ring-1 ring-inset ring-green/40 rounded-sm px-2"
     : hovered
-      ? "bg-primary/15 border-l-2 border-primary rounded-sm px-2"
+      ? "bg-primary/15 ring-1 ring-inset ring-primary/40 rounded-sm px-2"
       : "";
 
   if (line.type === "connector") {
@@ -387,9 +387,9 @@ function renderSegments(
       if (seg.color === "eval-pass" || seg.color === "eval-fail" || seg.color === "eval") {
         const evalClass =
           seg.color === "eval-pass"
-            ? "bg-gradient-to-r from-green/10 to-transparent border-2 border-green/30"
+            ? "bg-green-dim border-2 border-green/30"
             : seg.color === "eval-fail"
-              ? "bg-gradient-to-r from-red/10 to-transparent border-2 border-red/30"
+              ? "bg-red-dim border-2 border-red/30"
               : "border-2 border-muted-foreground/20";
         return (
           <div
@@ -404,15 +404,16 @@ function renderSegments(
       // the neutral palette — test-match colors take precedence)
       const groupHovered =
         seg.color === "neutral" && !!seg.groupId && seg.groupId === hoveredGroupId;
+      // A tint with an inset ring on every side — never a coloured left bar.
       const bgClass = groupHovered
-        ? "bg-primary/10 border-l-2 border-primary"
+        ? "bg-primary/10 ring-1 ring-inset ring-primary/40"
         : seg.color === "neutral"
-          ? "bg-muted-foreground/5 border-l-2 border-muted-foreground/20"
+          ? "bg-muted-foreground/5 ring-1 ring-inset ring-muted-foreground/20"
           : seg.color === "green"
-            ? "bg-green/15 border-l-2 border-green"
+            ? "bg-green/15 ring-1 ring-inset ring-green/40"
             : seg.color === "yellow"
-              ? "bg-yellow-500/15 border-l-2 border-yellow-500"
-              : "bg-red/15 border-l-2 border-red";
+              ? "bg-amber-dim ring-1 ring-inset ring-amber/40"
+              : "bg-red/15 ring-1 ring-inset ring-red/40";
       return (
         <div key={seg.key} className={`${bgClass} rounded-sm px-2 space-y-0.5`}>
           {renderSegments(seg.segments, actualValues, hoveredRuleId, hoveredGroupId)}

@@ -388,7 +388,7 @@ export function TestMediaDialog({
                 {/* Matched criteria badges */}
                 {result.matchedCriteria.length > 0 && (
                   <div className="space-y-2">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Matched Criteria</h4>
+                    <h4 className="eyebrow">Matched Criteria</h4>
                     <TooltipProvider>
                       <div className="flex flex-wrap gap-1.5">
                         {result.matchedCriteria.map((criterion, i) => {
@@ -419,7 +419,7 @@ export function TestMediaDialog({
 
                 {/* Logic preview */}
                 <div className="space-y-2">
-                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Logic Preview</h4>
+                  <h4 className="eyebrow">Logic Preview</h4>
                   <PseudocodePanel
                     groups={groups}
                     config={ruleBuilderConfig}
