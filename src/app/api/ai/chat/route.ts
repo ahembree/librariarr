@@ -5,17 +5,15 @@ import { aiRateLimiter, checkRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressEmit } from "@/lib/progress/types";
 import { asProvider, getStoredAiSettings, resolveAiConfig } from "@/lib/ai/config";
-import { runAnalyst } from "@/lib/ai/analyst";
+import { CHAT_MAX_LIFETIME_MS, runAnalyst } from "@/lib/ai/analyst";
 import type { AiStreamEvent } from "@/lib/ai/types";
 
 // Streaming + potentially slow (local models, multi-tool loops). Force dynamic
 // and cap the duration so a request can't pin a function forever.
 export const dynamic = "force-dynamic";
-export const maxDuration = 1800;
-
-// Total wall-clock for one question: up to MAX_ITERATIONS + 1 model turns,
-// each of which a slow local model may spend minutes on.
-const CHAT_MAX_LIFETIME_MS = 30 * 60_000;
+// At least CHAT_MAX_LIFETIME_MS (must be a literal for Next.js;
+// tests/integration/ai/chat.test.ts keeps them in step).
+export const maxDuration = 4800;
 
 export async function POST(request: Request) {
   const rateLimited = checkRateLimit(request, aiRateLimiter, "ai-chat");

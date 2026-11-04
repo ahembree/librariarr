@@ -22,7 +22,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { AxiosError } from "axios";
-import { createProvider, TEST_TIMEOUT_MS } from "@/lib/ai/provider";
+import { createProvider, TEST_TIMEOUT_MS, MAX_TOKENS, FALLBACK_MAX_TOKENS } from "@/lib/ai/provider";
 import { IntegrationError } from "@/lib/integration-error";
 import type { AiConfig } from "@/lib/ai/types";
 
@@ -124,8 +124,9 @@ describe("provider HTTP setup", () => {
   });
 
   it("reports the model on a successful Anthropic test", async () => {
-    respond({ content: [] });
+    respond({ content: [{ type: "text", text: "OK" }] });
     expect(await createProvider(ANTHROPIC).testConnection()).toEqual({ ok: true, model: "claude-sonnet-4-5" });
+    expect(lastRequest().body.tools).toHaveLength(1);
     expect(lastRequest().url).toBe("/v1/messages");
   });
 });
@@ -240,5 +241,40 @@ describe("Anthropic message mapping and parsing", () => {
       content: "",
       toolCalls: [],
     });
+  });
+});
+
+describe("output cap fallback", () => {
+  const refuse = (data: unknown) =>
+    adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError("Request failed with status code 400", "ERR_BAD_REQUEST", config, null, {
+        data, status: 400, statusText: "Bad Request", headers: {}, config,
+      });
+    });
+  const sentCaps = () =>
+    adapter.mock.calls.map((c) => JSON.parse(String((c[0] as InternalAxiosRequestConfig).data)).max_tokens);
+
+  // Claude 3 Haiku/Opus and GPT-4-Turbo cap output at 4096 and refuse more.
+  it("retries a refused output size at the fallback cap and keeps it for the run", async () => {
+    refuse({ type: "error", error: { type: "invalid_request_error", message: "max_tokens: 8192 > 4096, which is the maximum allowed number of output tokens for claude-3-haiku-20240307" } });
+    respond({ content: [{ type: "text", text: "a" }] });
+    respond({ content: [{ type: "text", text: "b" }] });
+    const client = createProvider({ ...ANTHROPIC, model: "claude-3-haiku-20240307" });
+    expect((await client.chat([{ role: "user", content: "q" }], [])).content).toBe("a");
+    expect((await client.chat([{ role: "user", content: "q" }], [])).content).toBe("b");
+    expect(sentCaps()).toEqual([MAX_TOKENS, FALLBACK_MAX_TOKENS, FALLBACK_MAX_TOKENS]);
+  });
+
+  it("does the same for an OpenAI-compatible refusal", async () => {
+    refuse({ error: { message: "max_tokens is too large: 8192. This model supports at most 4096 completion tokens.", type: "invalid_request_error" } });
+    respond({ choices: [{ message: { content: "ok" } }] });
+    expect((await createProvider(OPENAI).chat([{ role: "user", content: "q" }], [])).content).toBe("ok");
+    expect(sentCaps()).toEqual([MAX_TOKENS, FALLBACK_MAX_TOKENS]);
+  });
+
+  it("does not retry any other 400", async () => {
+    refuse({ error: { message: "model 'nope' not found" } });
+    await expect(createProvider(OPENAI).chat([{ role: "user", content: "q" }], [])).rejects.toThrow("not found");
+    expect(sentCaps()).toEqual([MAX_TOKENS]);
   });
 });

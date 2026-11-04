@@ -1,4 +1,4 @@
-import { createProvider } from "./provider";
+import { createProvider, REQUEST_TIMEOUT_MS } from "./provider";
 import { getAiToolMap, getAiTools } from "./tools";
 import { buildSystemPrompt } from "./system-prompt";
 import type {
@@ -11,22 +11,13 @@ import type {
 } from "./types";
 
 // Hard cap on the tool-calling loop so a misbehaving model can't spin forever.
-const MAX_ITERATIONS = 6;
+export const MAX_ITERATIONS = 6;
 
-// While a model is generating, nothing is written to the stream; reverse
-// proxies drop a response that stays idle (often 60–100 s), which cut slow
-// local models off mid-answer. A heartbeat line keeps the stream alive.
-export const HEARTBEAT_INTERVAL_MS = 15_000;
-
-/** Await `work`, emitting a heartbeat every HEARTBEAT_INTERVAL_MS until it settles. */
-async function withHeartbeat<T>(work: Promise<T>, emit: (event: AiStreamEvent) => void): Promise<T> {
-  const timer = setInterval(() => emit({ type: "heartbeat" }), HEARTBEAT_INTERVAL_MS);
-  try {
-    return await work;
-  } finally {
-    clearInterval(timer);
-  }
-}
+// Total wall-clock for one question: room for every model turn the loop can
+// make (MAX_ITERATIONS + the final answer) to run to its own request timeout,
+// plus slack for the tools in between. A shorter cap aborted slow runs partway
+// and threw their work away.
+export const CHAT_MAX_LIFETIME_MS = (MAX_ITERATIONS + 1) * REQUEST_TIMEOUT_MS + 5 * 60_000;
 
 const TOOL_LABELS: Record<string, string> = {
   get_library_overview: "Summarizing your library",
@@ -72,7 +63,7 @@ export async function runAnalyst(
     if (signal?.aborted) break;
     emit({ type: "status", label: i === 0 ? "Analyzing your question" : "Reviewing the results" });
 
-    const result = await withHeartbeat(provider.chat(messages, toolDefs, signal), emit);
+    const result = await provider.chat(messages, toolDefs, signal);
 
     if (result.toolCalls.length === 0) {
       answer = result.content.trim();
@@ -106,7 +97,7 @@ export async function runAnalyst(
   if (!answer && !signal?.aborted) {
     emit({ type: "status", label: "Writing the answer" });
     try {
-      const final = await withHeartbeat(provider.chat(
+      const final = await provider.chat(
         [
           ...messages,
           {
@@ -117,7 +108,7 @@ export async function runAnalyst(
         ],
         [],
         signal,
-      ), emit);
+      );
       answer = final.content.trim();
     } catch {
       // fall through to the fallback message

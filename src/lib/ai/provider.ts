@@ -20,18 +20,82 @@ export const TEST_TIMEOUT_MS = 3 * 60_000;
 // spend output tokens on reasoning before the answer or tool call; a small cap
 // ended the turn mid-thought with an empty answer.
 export const MAX_TOKENS = 8192;
+// Older models cap output lower (Claude 3 Haiku/Opus, GPT-4-Turbo,
+// GPT-3.5: 4096) and refuse a request asking for more; the client retries once
+// at this cap and keeps it for the rest of the run.
+export const FALLBACK_MAX_TOKENS = 4096;
+
+/** A 400 refusing the requested output size (each provider words it its own way). */
+function isMaxTokensRefusal(error: unknown): boolean {
+  return (
+    error instanceof IntegrationError &&
+    error.status === 400 &&
+    /max_tokens|max_completion_tokens|max_output_tokens|output tokens|maximum.*tokens/i.test(error.detail ?? "")
+  );
+}
+
+/**
+ * POST a completion request with `max_tokens` at the client's current cap,
+ * retrying once at FALLBACK_MAX_TOKENS when the model refuses the size. The
+ * lowered cap is returned so the client keeps using it.
+ */
+async function postWithTokenCap(
+  http: AxiosInstance,
+  url: string,
+  body: Record<string, unknown>,
+  cap: number,
+  options: { signal?: AbortSignal; timeout?: number },
+): Promise<{ data: unknown; cap: number }> {
+  try {
+    const { data } = await http.post(url, { ...body, max_tokens: cap }, options);
+    return { data, cap };
+  } catch (error) {
+    if (cap <= FALLBACK_MAX_TOKENS || !isMaxTokensRefusal(error)) throw error;
+    const { data } = await http.post(url, { ...body, max_tokens: FALLBACK_MAX_TOKENS }, options);
+    return { data, cap: FALLBACK_MAX_TOKENS };
+  }
+}
+
+// The connection test sends one harmless tool so a model or server that
+// can't do tool calling fails the test, as it would fail every question.
+const TEST_TOOL: AiToolDefinition = {
+  name: "ping",
+  description: "Not needed for this request. Do not call it.",
+  parameters: { type: "object", properties: {} },
+};
+const TEST_PROMPT = "Reply with the single word: OK";
+const EMPTY_TEST_ANSWER =
+  "The model returned an empty answer. A thinking model may have spent its whole output budget on reasoning, or the model can't answer through this endpoint.";
+
+/** Shared connection test: a real turn with a tool attached must produce an answer or a tool call. */
+async function runConnectionTest(
+  complete: (timeout: number) => Promise<AiChatResult>,
+  model: string,
+): Promise<{ ok: boolean; error?: string; model?: string }> {
+  try {
+    const result = await complete(TEST_TIMEOUT_MS);
+    if (!result.content.trim() && result.toolCalls.length === 0) return { ok: false, error: EMPTY_TEST_ANSWER };
+    return { ok: true, model };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Connection failed" };
+  }
+}
 
 /**
  * Drop the reasoning a thinking model inlines in its content
  * (`<think>…</think>`, as some OpenAI-compatible servers return it) so only the
- * answer reaches the user. An unterminated block (output cut off mid-thought)
- * leaves no answer.
+ * answer reaches the user. A bare closing tag (opening tag in the prompt)
+ * drops everything before it; an unterminated block (output cut off
+ * mid-thought) leaves no answer.
  */
 export function stripThinking(content: string): string {
-  return content
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<think>[\s\S]*$/i, "")
-    .trim();
+  let out = content.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  // Qwen3 / DeepSeek-R1 chat templates put the opening <think> in the prompt,
+  // so the generated text is "reasoning…</think>answer": everything up to the
+  // last closing tag is reasoning.
+  const close = out.toLowerCase().lastIndexOf("</think>");
+  if (close !== -1) out = out.slice(close + "</think>".length);
+  return out.replace(/<think>[\s\S]*$/i, "").trim();
 }
 
 function makeHttp(config: AiConfig, headers: Record<string, string>): AxiosInstance {
@@ -75,6 +139,7 @@ function safeParseArgs(raw: unknown): Record<string, unknown> {
 
 class OpenAiCompatibleClient implements AiProviderClient {
   private http: AxiosInstance;
+  private maxTokens = MAX_TOKENS;
   constructor(private config: AiConfig) {
     // Local endpoints usually need no key; only send Authorization when set.
     this.http = makeHttp(
@@ -109,15 +174,19 @@ class OpenAiCompatibleClient implements AiProviderClient {
     });
   }
 
-  async chat(
+  chat(messages: AiMessage[], tools: AiToolDefinition[], signal?: AbortSignal): Promise<AiChatResult> {
+    return this.complete(messages, tools, signal);
+  }
+
+  private async complete(
     messages: AiMessage[],
     tools: AiToolDefinition[],
     signal?: AbortSignal,
+    timeout?: number,
   ): Promise<AiChatResult> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages: this.toOpenAiMessages(messages),
-      max_tokens: MAX_TOKENS,
     };
     if (tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -127,8 +196,10 @@ class OpenAiCompatibleClient implements AiProviderClient {
       body.tool_choice = "auto";
     }
 
-    const { data } = await this.http.post("/chat/completions", body, { signal });
-    const message = data?.choices?.[0]?.message ?? {};
+    const sent = await postWithTokenCap(this.http, "/chat/completions", body, this.maxTokens, { signal, timeout });
+    this.maxTokens = sent.cap;
+    const data = sent.data as { choices?: { message?: Record<string, unknown> }[] } | undefined;
+    const message = (data?.choices?.[0]?.message ?? {}) as { content?: unknown; tool_calls?: unknown };
     const toolCalls: AiToolCall[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
           .filter((tc: unknown) => tc && typeof tc === "object")
@@ -142,22 +213,13 @@ class OpenAiCompatibleClient implements AiProviderClient {
     return { content: typeof message.content === "string" ? stripThinking(message.content) : "", toolCalls };
   }
 
-  async testConnection(signal?: AbortSignal): Promise<{ ok: boolean; error?: string; model?: string }> {
-    try {
-      await this.http.post(
-        "/chat/completions",
-        {
-          model: this.config.model,
-          messages: [{ role: "user", content: "Reply with the single word: OK" }],
-          max_tokens: 5,
-        },
-        { signal, timeout: TEST_TIMEOUT_MS },
-      );
-      return { ok: true, model: this.config.model };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Connection failed" };
-    }
+  testConnection(signal?: AbortSignal): Promise<{ ok: boolean; error?: string; model?: string }> {
+    return runConnectionTest(
+      (timeout) => this.complete([{ role: "user", content: TEST_PROMPT }], [TEST_TOOL], signal, timeout),
+      this.config.model,
+    );
   }
+
 }
 
 // ─── Anthropic (native Claude Messages API) ─────────────────────────────
@@ -172,6 +234,7 @@ interface AnthropicBlock {
 
 class AnthropicClient implements AiProviderClient {
   private http: AxiosInstance;
+  private maxTokens = MAX_TOKENS;
   constructor(private config: AiConfig) {
     this.http = makeHttp(config, {
       "x-api-key": config.apiKey,
@@ -222,15 +285,19 @@ class AnthropicClient implements AiProviderClient {
     return { system: systemParts.join("\n\n"), messages: out };
   }
 
-  async chat(
+  chat(messages: AiMessage[], tools: AiToolDefinition[], signal?: AbortSignal): Promise<AiChatResult> {
+    return this.complete(messages, tools, signal);
+  }
+
+  private async complete(
     messages: AiMessage[],
     tools: AiToolDefinition[],
     signal?: AbortSignal,
+    timeout?: number,
   ): Promise<AiChatResult> {
     const { system, messages: anthropicMessages } = this.toAnthropic(messages);
     const body: Record<string, unknown> = {
       model: this.config.model,
-      max_tokens: MAX_TOKENS,
       messages: anthropicMessages,
     };
     if (system) body.system = system;
@@ -242,8 +309,10 @@ class AnthropicClient implements AiProviderClient {
       }));
     }
 
-    const { data } = await this.http.post("/v1/messages", body, { signal });
-    const blocks: AnthropicBlock[] = Array.isArray(data?.content) ? data.content : [];
+    const sent = await postWithTokenCap(this.http, "/v1/messages", body, this.maxTokens, { signal, timeout });
+    this.maxTokens = sent.cap;
+    const data = sent.data as { content?: unknown } | undefined;
+    const blocks: AnthropicBlock[] = Array.isArray(data?.content) ? (data.content as AnthropicBlock[]) : [];
     const content = blocks
       .filter((b) => b.type === "text" && typeof b.text === "string")
       .map((b) => b.text)
@@ -259,22 +328,13 @@ class AnthropicClient implements AiProviderClient {
     return { content, toolCalls };
   }
 
-  async testConnection(signal?: AbortSignal): Promise<{ ok: boolean; error?: string; model?: string }> {
-    try {
-      await this.http.post(
-        "/v1/messages",
-        {
-          model: this.config.model,
-          max_tokens: 5,
-          messages: [{ role: "user", content: "Reply with the single word: OK" }],
-        },
-        { signal, timeout: TEST_TIMEOUT_MS },
-      );
-      return { ok: true, model: this.config.model };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Connection failed" };
-    }
+  testConnection(signal?: AbortSignal): Promise<{ ok: boolean; error?: string; model?: string }> {
+    return runConnectionTest(
+      (timeout) => this.complete([{ role: "user", content: TEST_PROMPT }], [TEST_TOOL], signal, timeout),
+      this.config.model,
+    );
   }
+
 }
 
 /** Build the provider client for a resolved config. */

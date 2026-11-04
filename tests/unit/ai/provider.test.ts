@@ -16,7 +16,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { createProvider, MAX_TOKENS, stripThinking } from "@/lib/ai/provider";
+import { createProvider, MAX_TOKENS, TEST_TIMEOUT_MS, stripThinking } from "@/lib/ai/provider";
 import type { AiConfig, AiMessage } from "@/lib/ai/types";
 
 const OPENAI: AiConfig = {
@@ -85,11 +85,29 @@ describe("ai/provider — OpenAI-compatible", () => {
     expect(result.toolCalls).toEqual([{ id: "c1", name: "x", arguments: {} }]);
   });
 
-  it("testConnection returns ok on success and error on failure", async () => {
-    mockPost.mockResolvedValueOnce({ data: {} });
+  it("testConnection returns ok on an answer and error on failure", async () => {
+    mockPost.mockResolvedValueOnce({ data: { choices: [{ message: { content: "OK" } }] } });
     expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-4o-mini" });
     mockPost.mockRejectedValueOnce(new Error("refused"));
     expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: false, error: "refused" });
+  });
+
+  // A thinking model that spends the whole budget reasoning (or a server that
+  // drops the answer) passed the old 5-token test and then failed every chat.
+  it("testConnection fails an empty answer, and sends a tool so missing tool support fails too", async () => {
+    mockPost.mockResolvedValueOnce({ data: { choices: [{ message: { content: "<think>hmm" } }] } });
+    const result = await createProvider(OPENAI).testConnection();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/empty answer/);
+    const [, body, options] = mockPost.mock.calls[0];
+    expect(body.tools).toHaveLength(1);
+    expect(body.max_tokens).toBe(MAX_TOKENS);
+    expect(options.timeout).toBe(TEST_TIMEOUT_MS);
+
+    mockPost.mockResolvedValueOnce({
+      data: { choices: [{ message: { content: "", tool_calls: [{ id: "1", function: { name: "ping", arguments: "{}" } }] } }] },
+    });
+    expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-4o-mini" });
   });
 });
 
@@ -172,5 +190,7 @@ describe("ai/provider — model names and thinking output", () => {
     expect(stripThinking("Plain answer")).toBe("Plain answer");
     expect(stripThinking("<THINK>a</THINK>b<think>c</think>d")).toBe("bd");
     expect(stripThinking("<think>ran out of tokens")).toBe("");
+    // Opening tag in the prompt (Qwen3 / DeepSeek-R1 templates): only the close is generated.
+    expect(stripThinking("Let me count.\nMany.\n</think>\n\nYou have 12 movies.")).toBe("You have 12 movies.");
   });
 });
