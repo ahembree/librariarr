@@ -25,6 +25,7 @@ import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
+import { withGroupParentTitle } from "@/lib/conditions/series-aggregates";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
@@ -239,14 +240,15 @@ export const POST = withSession(async (session, request: NextRequest) => {
       )
     );
 
-    group = {
+    // The show or artist, named by `title`; "Artist / Series" reads that name
+    // too (withGroupParentTitle), as detection evaluates a group.
+    group = withGroupParentTitle({
       ...item,
       ...foldCrossSystemData(allItems.map((ep) => ep.id), await crossSystemFor(allItems.map((ep) => ep.id))),
       title: groupField,
       ...(type === "SERIES"
         ? { summary: item.parentSummary ?? item.summary }
         : {}),
-      parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
       playCount: totalPlays,
@@ -267,7 +269,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
       lastEpisodeAiredAt: latestEpisodeAired?.toISOString() ?? null,
       streams: allStreams,
       watchedByUsers,
-    };
+    });
   }
 
   // What the criteria and values are reported for: the group in group scope;

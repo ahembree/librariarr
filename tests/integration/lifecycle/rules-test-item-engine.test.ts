@@ -202,4 +202,29 @@ describe("POST /api/lifecycle/rules/test-item — real engine", () => {
       }),
     ).toBe(true);
   });
+
+  // "Artist / Series" names the show or the artist, so a group answers it with
+  // its own name — as detection evaluates it. Read as NULL it matched nothing
+  // with equals and everything with Not Equals.
+  it("answers Artist / Series with the group's name in series and artist scope", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const shows = await createTestLibrary(server.id, { type: "SERIES" });
+    const episode = await createTestMediaItem(shows.id, {
+      title: "Pilot", parentTitle: "Alpha Show", type: "SERIES", seasonNumber: 1, episodeNumber: 1,
+    });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    const track = await createTestMediaItem(music.id, {
+      title: "Opening", parentTitle: "Alpha Band", type: "MUSIC", albumTitle: "First",
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const show = { type: "SERIES", seriesScope: true, mediaItemId: episode.id, serverIds: [server.id] };
+    expect(await testItem({ ...show, rules: group("parentTitle", "equals", "Alpha Show") })).toBe(true);
+    expect(await testItem({ ...show, rules: group("parentTitle", "notEquals", "Alpha Show") })).toBe(false);
+
+    const artist = { type: "MUSIC", seriesScope: true, mediaItemId: track.id, serverIds: [server.id] };
+    expect(await testItem({ ...artist, rules: group("parentTitle", "equals", "Alpha Band") })).toBe(true);
+    expect(await testItem({ ...artist, rules: group("parentTitle", "notEquals", "Alpha Band") })).toBe(false);
+  });
 });

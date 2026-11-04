@@ -151,6 +151,8 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       // Use series-level summary instead of episode summary.
       summary: representative.parentSummary ?? representative.summary,
       // Clear episode-specific fields — this is a series-level aggregate.
+      // Evaluation reads the show's name as its parentTitle
+      // (serializeSeriesAggregateForEval → withGroupParentTitle).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -173,15 +175,45 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
 }
 
 /**
+ * A group record — a show rolled up from its episodes, an artist from its
+ * tracks — as rule evaluation reads it.
+ *
+ * The group is stored and shown as itself: `title` is the show or the artist
+ * and `parentTitle` is cleared. Every match snapshot consumer relies on that
+ * shape (`matchIdentityChange`, `isGroupSnapshot`, the action's title
+ * snapshot), so the records the engines return keep it. "Artist / Series"
+ * (`parentTitle`) means the series name or the artist, though, so a group
+ * answers it with its own name. Read as NULL it made `parentTitle equals "X"`
+ * match no show, and every negated form (Not Equals, Not Contains, a NOT group)
+ * match every show and artist — on a Delete from Sonarr / Lidarr rule set,
+ * everything else the rules selected.
+ */
+export function withGroupParentTitle<T extends { title?: unknown }>(
+  record: T,
+): T & { parentTitle: string | null } {
+  return { ...record, parentTitle: typeof record.title === "string" ? record.title : null };
+}
+
+/**
+ * Whether a record the engines returned is a group record (see
+ * `withGroupParentTitle`): a show or artist that carries its members, with the
+ * name as its title and no parent.
+ */
+export function isGroupRecord(record: Record<string, unknown>): boolean {
+  return Array.isArray(record.memberIds) && record.parentTitle == null && typeof record.title === "string";
+}
+
+/**
  * Convert a `SeriesAggregate` into the plain object shape that the in-memory
  * rule evaluator expects (ISO date strings, computed `watchedEpisodePercentage`,
- * `availableEpisodeCount` alias for `episodeCount`, flattened `streams`).
+ * `availableEpisodeCount` alias for `episodeCount`, flattened `streams`, and
+ * the show's name as its `parentTitle` — `withGroupParentTitle`).
  */
 export function serializeSeriesAggregateForEval(
   series: SeriesAggregate<AggregableEpisode>,
 ): Record<string, unknown> {
   return {
-    ...series,
+    ...withGroupParentTitle(series),
     fileSize: series.fileSize,
     lastPlayedAt: toIsoOrNull(series.lastPlayedAt),
     addedAt: toIsoOrNull(series.addedAt),

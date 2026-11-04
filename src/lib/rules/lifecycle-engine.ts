@@ -35,6 +35,8 @@ import {
   matchArrayField,
   matchExternalIdField,
   matchNameListField,
+  withGroupParentTitle,
+  isGroupRecord,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -1438,6 +1440,19 @@ const OPERATOR_SYMBOLS: Record<string, string> = {
  * Items must already be confirmed matches from evaluateLifecycleRules().
  */
 
+/**
+ * The record a match's criteria and values are reported from, read as the
+ * engine evaluated it: a show or artist matched as a group answers "Artist /
+ * Series" with its own name (`withGroupParentTitle`), while the record itself
+ * keeps the cleared `parentTitle` its snapshot is stored with.
+ */
+function asEvaluated(
+  item: Record<string, unknown>,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+): Record<string, unknown> {
+  return type !== "MOVIE" && isGroupRecord(item) ? withGroupParentTitle(item) : item;
+}
+
 /** Extract the actual item value for a rule field, formatted for display */
 function getActualValueForField(
   field: RuleField,
@@ -1628,7 +1643,8 @@ export function getMatchedCriteriaForItems(
   const streamQueryGroups = collectStreamQueryGroups(rules);
   const result = new Map<string, MatchedCriterion[]>();
 
-  for (const item of items) {
+  for (const record of items) {
+    const item = asEvaluated(record, type);
     const criteria: MatchedCriterion[] = [];
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
@@ -1695,7 +1711,8 @@ export function getActualValuesForAllRules(
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const result = new Map<string, Map<string, string>>();
 
-  for (const item of items) {
+  for (const record of items) {
+    const item = asEvaluated(record, type);
     const values = new Map<string, string>();
     const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
@@ -1962,7 +1979,9 @@ export async function evaluateSeriesScope(
       title: representative.parentTitle ?? representative.title,
       // Use series-level summary instead of episode summary
       summary: representative.parentSummary ?? representative.summary,
-      // Clear episode-specific fields — this is a series-level aggregate
+      // Clear episode-specific fields — this is a series-level aggregate, and
+      // the match's group snapshot. Rules read the show's name as its
+      // parentTitle (withGroupParentTitle, below).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -1998,7 +2017,8 @@ export async function evaluateSeriesScope(
     const cross = foldCrossSystemData(series.memberIds, crossSystem);
     // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
-      ...series,
+      // The show's name answers "Artist / Series" (withGroupParentTitle).
+      ...withGroupParentTitle(series),
       ...cross,
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
@@ -2228,7 +2248,9 @@ export async function evaluateMusicScope(
       ...representative,
       // Use artist name as title so "title" rules match against the artist
       title: representative.parentTitle ?? representative.title,
-      // Clear track-specific fields — this is an artist-level aggregate
+      // Clear track-specific fields — this is an artist-level aggregate, and
+      // the match's group snapshot. Rules read the artist's name as its
+      // parentTitle (withGroupParentTitle, below).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -2256,7 +2278,8 @@ export async function evaluateMusicScope(
     // Also carried on the returned record (see evaluateSeriesScope).
     const cross = foldCrossSystemData(artist.memberIds, crossSystem);
     const item: Record<string, unknown> = {
-      ...artist,
+      // The artist's name answers "Artist / Series" (withGroupParentTitle).
+      ...withGroupParentTitle(artist),
       ...cross,
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
@@ -2477,7 +2500,10 @@ export function groupSeriesResults<
 
   return [...groups.values()].map(({ representative, count, totalPlays, totalSize, latestPlayed, memberIds }) => ({
     ...representative,
-    // Use series name as title, clear episode-specific fields
+    // Use series name as title, clear episode-specific fields. The rules were
+    // already evaluated per episode, against each episode's own parentTitle;
+    // this is the match's group snapshot, whose criteria are reported with the
+    // show's name as its parentTitle (asEvaluated → withGroupParentTitle).
     title: representative.parentTitle ?? representative.title,
     parentTitle: null,
     seasonNumber: null,

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
+  withGroupParentTitle,
+  isGroupRecord,
   type AggregableEpisode,
 } from "@/lib/conditions/series-aggregates";
 
@@ -244,5 +246,35 @@ describe("serializeSeriesAggregateForEval", () => {
     const [series] = aggregateEpisodesIntoSeries(episodes);
     const item = serializeSeriesAggregateForEval(series);
     expect(item.availableEpisodeCount).toBe(2);
+  });
+
+  // "Artist / Series" is the series name. Read as NULL off the aggregate it
+  // matched no show for `equals` and every show for its negations.
+  it("answers parentTitle with the show's name, leaving the aggregate's own record cleared", () => {
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "e1", parentTitle: "Show A", libraryId: "L", title: "Pilot" }),
+    ];
+    const [series] = aggregateEpisodesIntoSeries(episodes);
+    const item = serializeSeriesAggregateForEval(series);
+    expect(item.parentTitle).toBe("Show A");
+    expect(item.title).toBe("Show A");
+    expect(series.parentTitle).toBeNull();
+  });
+});
+
+describe("withGroupParentTitle / isGroupRecord", () => {
+  it("names a group's parentTitle after its title", () => {
+    expect(withGroupParentTitle({ id: "a", title: "Artist", parentTitle: null })).toEqual({
+      id: "a", title: "Artist", parentTitle: "Artist",
+    });
+    expect(withGroupParentTitle({ id: "a", title: undefined }).parentTitle).toBeNull();
+  });
+
+  it("recognises a group record by its members, its title and its cleared parent", () => {
+    expect(isGroupRecord({ id: "a", title: "Show", parentTitle: null, memberIds: ["a", "b"] })).toBe(true);
+    // A single episode or track carries its parent and no members.
+    expect(isGroupRecord({ id: "a", title: "Pilot", parentTitle: "Show" })).toBe(false);
+    expect(isGroupRecord({ id: "a", title: "Pilot", parentTitle: "Show", memberIds: ["a"] })).toBe(false);
+    expect(isGroupRecord({ id: "a", title: "Film", parentTitle: null })).toBe(false);
   });
 });

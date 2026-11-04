@@ -131,7 +131,7 @@ Each table gives the **Label** the rule editor shows and the **Field** name it s
 | Release Date | `originallyAvailableAt` | **Release Date** reported by the media server (a calendar day) | before, after, inLastDays |
 | Is Watchlisted | `isWatchlisted` | On your Plex watchlist (Plex) or marked favourite (Jellyfin/Emby) | equals, notEquals |
 | Title | `title` | Media title | equals, contains, matchesWildcard |
-| Artist / Series | `parentTitle` | **Artist / Series** — the series name for an episode, the artist for a track | equals, contains, matchesWildcard |
+| Artist / Series | `parentTitle` | **Artist / Series** — the series name for an episode, the artist for a track. A show or artist evaluated as a whole (series scope, artist scope, or a rule with a series criterion) reads its own name, so *Artist / Series Not Equals "Doctor Who"* leaves out Doctor Who and nothing else | equals, contains, matchesWildcard |
 | Album | `albumTitle` | Album (music) | equals, contains, matchesWildcard |
 | Year | `year` | Release year | equals, greaterThan, lessThan, etc. |
 | Content Rating | `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
