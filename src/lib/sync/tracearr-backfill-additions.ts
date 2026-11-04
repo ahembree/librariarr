@@ -320,6 +320,10 @@ export async function recoverHistoryForNewItems(
         continue;
       }
 
+      // A recovered play can be newer than every stored one (a re-added film
+      // watched again since the last forward pass). The importer then records
+      // the forward watermark first, so the next forward pass still reads the
+      // plays between the two — see `holdForwardWatermark`.
       const written = await importTracearrRecords(
         serverId,
         own,

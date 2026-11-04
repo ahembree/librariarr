@@ -84,7 +84,8 @@ vi.mock("@/lib/cache/invalidate", () => ({
 }));
 
 import { logger } from "@/lib/logger";
-import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
+import { importTracearrRecords, syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
+import type { TracearrJoinIndex } from "@/lib/sync/tracearr-join";
 
 const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
 const HOUR_MS = 60 * 60 * 1000;
@@ -3502,6 +3503,100 @@ describe("syncTracearrHistory", () => {
         "WatchHistory",
         expect.stringContaining('from "B"'),
       );
+    });
+  });
+
+  describe("a targeted import holds the forward watermark", () => {
+    const index = {
+      serverId: "server-1",
+      byRatingKey: new Map(),
+      byExternalId: new Map(),
+      itemCount: 0,
+      externalIdCount: 0,
+    } as unknown as TracearrJoinIndex;
+    const accounts = new Map([["srv-user-1", "weingart"]]);
+    const newestStored = new Date("2025-07-01T20:00:00.000Z");
+
+    /** The `tracearrForwardResumeAt` writes, with their place in the call order. */
+    function resumeWrites() {
+      return mockPrisma.mediaServer.updateMany.mock.calls
+        .map(([arg], i) => ({ arg, order: mockPrisma.mediaServer.updateMany.mock.invocationCallOrder[i] }))
+        .filter(({ arg }) => "tracearrForwardResumeAt" in arg.data);
+    }
+
+    beforeEach(() => {
+      watermark = { maxWatchedAt: newestStored, minWatchedAt: new Date("2025-01-01T00:00:00Z"), oldestOpenChain: null };
+    });
+
+    it("records the old watermark before writing a play newer than every stored one", async () => {
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      const writes = resumeWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0].arg).toEqual({
+        where: {
+          id: "server-1",
+          tracearrServerId: TRACEARR_SERVER_ID,
+          OR: [
+            { tracearrForwardResumeAt: null },
+            { tracearrForwardResumeAt: { gt: new Date(newestStored.getTime() - HOUR_MS) } },
+          ],
+        },
+        data: { tracearrForwardResumeAt: new Date(newestStored.getTime() - HOUR_MS) },
+      });
+      // Before the write's transaction: a crash between the two must leave the
+      // point, not the play without it.
+      expect(insertCalls()).toHaveLength(1);
+      expect(writes[0].order).toBeLessThan(mockPrisma.$transaction.mock.invocationCallOrder[0]);
+    });
+
+    it("reaches back to an open chain, as the forward window would", async () => {
+      const openChain = new Date(newestStored.getTime() - 2 * DAY_MS);
+      watermark = { ...watermark, oldestOpenChain: openChain };
+
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()[0].arg.data).toEqual({ tracearrForwardResumeAt: openChain });
+    });
+
+    it("records nothing for plays no newer than the newest stored one", async () => {
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: newestStored.toISOString() })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()).toEqual([]);
+      expect(insertCalls()).toHaveLength(1);
+    });
+
+    it("records nothing on a server holding no Tracearr rows, whose recorded point is its watermark", async () => {
+      watermark = { maxWatchedAt: null, minWatchedAt: null, oldestOpenChain: null };
+
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()).toEqual([]);
+      expect(insertCalls()).toHaveLength(1);
     });
   });
 });

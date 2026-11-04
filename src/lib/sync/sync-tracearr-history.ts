@@ -1935,8 +1935,8 @@ async function recordForwardResume(
   serverId: string,
   tracearrServerId: string,
   since: Date,
-): Promise<void> {
-  await prisma.mediaServer.updateMany({
+): Promise<boolean> {
+  const { count } = await prisma.mediaServer.updateMany({
     where: {
       id: serverId,
       tracearrServerId,
@@ -1944,6 +1944,65 @@ async function recordForwardResume(
     },
     data: { tracearrForwardResumeAt: since },
   });
+  return count > 0;
+}
+
+/**
+ * Keep the forward pass's starting point where it is before a targeted write
+ * stores a play newer than every stored one.
+ *
+ * The forward `since` is read off the newest stored play (`resolveSince`), and
+ * only a forward walk reads the plays above it. A targeted write — the
+ * re-added-item recovery — stores a few items' plays wherever they fall, so
+ * one newer than the newest stored play moves that `since` past the plays in
+ * between, which nothing has read: the next forward pass would start above
+ * them, and the backfill only walks older than the oldest row. So before such
+ * a write the current row-derived `since` is recorded as an unfinished forward
+ * window (`recordForwardResume`: kept at the oldest, cleared only by a forward
+ * walk that runs to its end from at or before it), and the next forward pass
+ * starts there. Recorded BEFORE the write, as the walk records before a page
+ * commit: a crash in between leaves a point the next forward pass merely reads
+ * from again, never a gap.
+ *
+ * A play no newer than the newest stored one moves nothing, so the steady
+ * state writes nothing. A server holding no Tracearr rows needs nothing
+ * either: its forward watermark is the recorded point itself
+ * (`rowlessForwardStart`), which the next window keeps as the earlier bound.
+ */
+async function holdForwardWatermark(
+  serverId: string,
+  tracearrServerId: string,
+  rows: PendingRow[],
+): Promise<void> {
+  let newest: Date | null = null;
+  for (const { row } of rows) {
+    const watchedAt = row.watchedAt as Date;
+    if (!newest || watchedAt > newest) newest = watchedAt;
+  }
+  if (!newest) return;
+
+  const [agg] = await prisma.$queryRawUnsafe<
+    { maxWatchedAt: Date | null; oldestOpenChain: Date | null }[]
+  >(
+    // Two of `resolveImportWindow`'s subqueries, split for the same reason.
+    `SELECT (SELECT MAX("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR') AS "maxWatchedAt",
+            (SELECT MIN("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR'
+                AND ("watched" IS NOT TRUE OR "state" <> 'stopped')) AS "oldestOpenChain"`,
+    serverId,
+  );
+  if (!agg?.maxWatchedAt || newest <= agg.maxWatchedAt) return;
+
+  const since = resolveSince(agg.maxWatchedAt, agg.oldestOpenChain);
+  if (since && (await recordForwardResume(serverId, tracearrServerId, since))) {
+    logger.info(
+      "WatchHistory",
+      `Holding the Tracearr forward watermark of server ${serverId} at ` +
+        `${since.toISOString()} — a targeted import is storing a play newer than every ` +
+        `stored one, and the plays in between are still to be read by the forward pass`,
+    );
+  }
 }
 
 /**
@@ -1978,7 +2037,9 @@ async function clearForwardResume(
  * `isTranscode` latches) are the difference between a re-delivered chain merging
  * correctly and a fully-watched play being overwritten as 12% watched, which
  * `watch-reconcile.ts` would then stop counting. A copy of them would drift, and
- * the drift would be silent.
+ * the drift would be silent. Nor may it skip `holdForwardWatermark`: a play it
+ * stores newer than every stored one would otherwise move the forward pass's
+ * starting point past plays nothing has read.
  *
  * The caller has already scoped the records to this server (`server_id`), so
  * that filter is not repeated here; everything else — the per-statement chain-id
@@ -2024,6 +2085,9 @@ export async function importTracearrRecords(
       buildRow(record, resolved.mediaItemId, serverId, watchedAt, now, accountNames),
     );
   }
+
+  // Before the first write, never after it: see `holdForwardWatermark`.
+  await holdForwardWatermark(serverId, tracearrServerId, rows);
 
   let inserted = 0;
   let updated = 0;
