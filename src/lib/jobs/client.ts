@@ -32,10 +32,21 @@ let workerUtilsPromise: Promise<WorkerUtils> | undefined;
 async function getWorkerUtils(): Promise<WorkerUtils> {
   if (workerUtils) return workerUtils;
   if (!workerUtilsPromise) {
-    workerUtilsPromise = makeWorkerUtils({ pgPool: getJobsPool() }).then((utils) => {
-      workerUtils = utils;
-      return utils;
-    });
+    const pending: Promise<WorkerUtils> = makeWorkerUtils({ pgPool: getJobsPool() }).then(
+      (utils) => {
+        workerUtils = utils;
+        return utils;
+      },
+      (error: unknown) => {
+        // Never cache a failure. Kept, a database that was briefly unreachable
+        // at the first enqueue failed every later `enqueueJob` of this bundle
+        // until a restart; cleared, the next call tries again. The callers
+        // already waiting on this attempt see its error.
+        if (workerUtilsPromise === pending) workerUtilsPromise = undefined;
+        throw error;
+      },
+    );
+    workerUtilsPromise = pending;
   }
   return workerUtilsPromise;
 }
@@ -168,7 +179,6 @@ export async function queuedSyncJobIds(jobKeys: string[]): Promise<Map<string, s
   }
 }
 
-/** Release pooled resources. Primarily used by tests. */
 /**
  * Whether the job under `jobKey` failed and is waiting out graphile-worker's
  * retry backoff (attempted, not yet exhausted, not running).
@@ -197,6 +207,7 @@ export async function isJobRetrying(jobKey: string): Promise<boolean> {
   }
 }
 
+/** Release pooled resources. Primarily used by tests. */
 export async function releaseJobsClient(): Promise<void> {
   if (workerUtils) {
     await Promise.resolve(workerUtils.release()).catch(() => {});

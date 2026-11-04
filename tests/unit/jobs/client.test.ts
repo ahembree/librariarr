@@ -58,6 +58,36 @@ describe("jobs client", () => {
     expect(addJob).toHaveBeenCalledWith("task-b", { y: 2 }, undefined);
   });
 
+  it("tries again on the next enqueue after the worker utils could not be made", async () => {
+    // The database was briefly unreachable at the first enqueue. Caching that
+    // failure made every later enqueue of the bundle fail until a restart.
+    makeWorkerUtils.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await expect(enqueueJob("task-a", {})).resolves.toBe(false);
+    expect(error).toHaveBeenCalledWith("Jobs", 'Failed to enqueue job "task-a"', { error: "Error: ECONNREFUSED" });
+
+    await expect(enqueueJob("task-b", { y: 2 })).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+    expect(addJob).toHaveBeenCalledWith("task-b", { y: 2 }, undefined);
+
+    // ...and once made, the utils are cached again.
+    await expect(enqueueJob("task-c", {})).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives every enqueue waiting on a failed attempt its error, then retries once", async () => {
+    let rejectAttempt!: (error: Error) => void;
+    makeWorkerUtils.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAttempt = reject; }));
+    const first = enqueueJob("task-a", {});
+    const second = enqueueJob("task-b", {});
+    await vi.waitFor(() => expect(makeWorkerUtils).toHaveBeenCalledTimes(1));
+    rejectAttempt(new Error("ECONNREFUSED"));
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(false);
+
+    await expect(enqueueJob("task-c", {})).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+  });
+
   it("logs enqueue errors and resolves false (never throws)", async () => {
     addJob.mockRejectedValueOnce(new Error("db down"));
     await expect(enqueueJob("task-c", {})).resolves.toBe(false);
