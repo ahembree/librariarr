@@ -16,6 +16,7 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST } from "@/app/api/sync/cancel/route";
 import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 
 async function cancel(serverId: string) {
   return callRoute(POST, { url: "/api/sync/cancel", method: "POST", body: { serverId } });
@@ -88,6 +89,7 @@ describe("POST /api/sync/cancel", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const job = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "RUNNING" } });
+    beginSyncRun(job.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
 
     const events: AppEvent[] = [];
@@ -97,6 +99,7 @@ describe("POST /api/sync/cancel", () => {
       expect(await expectJson(response, 200)).toEqual({ success: true });
     } finally {
       unsubscribe();
+      endSyncRun(job.id);
     }
 
     const row = await prisma.syncJob.findUniqueOrThrow({ where: { id: job.id } });
@@ -117,6 +120,7 @@ describe("POST /api/sync/cancel", () => {
       data: { mediaServerId: server.id, status: "RUNNING", startedAt: new Date(Date.now() - 60_000) },
     });
     const queued = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+    beginSyncRun(running.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
 
     const events: AppEvent[] = [];
@@ -125,6 +129,7 @@ describe("POST /api/sync/cancel", () => {
       await expectJson(await cancel(server.id), 200);
     } finally {
       unsubscribe();
+      endSyncRun(running.id);
     }
 
     const runningRow = await prisma.syncJob.findUniqueOrThrow({ where: { id: running.id } });

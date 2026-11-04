@@ -51,6 +51,7 @@ vi.mock("@/lib/dedup/recompute-canonical", () => ({ recomputeCanonical: sideEffe
 
 // Import after mocks
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 
 const movieMeta = (ratingKey: string, over: Record<string, unknown> = {}) => ({
   ratingKey,
@@ -375,11 +376,17 @@ describe("syncMediaServerItems", () => {
 
   it("skips when a full sync is already running for the server", async () => {
     const { server } = await seed();
-    await getTestPrisma().syncJob.create({
+    const running = await getTestPrisma().syncJob.create({
       data: { mediaServerId: server.id, status: "RUNNING" },
     });
+    beginSyncRun(running.id);
 
-    const result = await syncMediaServerItems(server.id, ["m1"], []);
+    let result;
+    try {
+      result = await syncMediaServerItems(server.id, ["m1"], []);
+    } finally {
+      endSyncRun(running.id);
+    }
 
     expect(result).toEqual({ status: "skipped", upserted: 0, deleted: 0, reason: "full sync in progress" });
     expect(mockGetItemMetadata).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   syncJobFindFirst: vi.fn(),
   appSettingsUpdate: vi.fn(),
   enqueueJob: vi.fn(),
+  closeDeadSyncJobs: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -15,6 +16,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: m.enqueueJob }));
+vi.mock("@/lib/sync/cleanup-orphaned-syncs", () => ({ closeDeadSyncJobs: m.closeDeadSyncJobs }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -34,9 +36,20 @@ describe("runJobNow", () => {
     vi.clearAllMocks();
     m.enqueueJob.mockResolvedValue(true);
     m.syncJobFindFirst.mockResolvedValue(null);
+    m.closeDeadSyncJobs.mockResolvedValue(0);
   });
 
   describe("sync", () => {
+    it("closes a server's RUNNING rows whose run has died before reading its active sync", async () => {
+      m.userFindUnique.mockResolvedValue({ mediaServers: [{ id: "s1", name: "One", enabled: true }] });
+
+      await runJobNow("u1", "sync", SOURCE);
+
+      // A dead RUNNING row read as "already syncing" skipped the server.
+      expect(m.closeDeadSyncJobs).toHaveBeenCalledWith("s1");
+      expect(m.closeDeadSyncJobs.mock.invocationCallOrder[0]).toBeLessThan(m.syncJobFindFirst.mock.invocationCallOrder[0]);
+    });
+
     it("queues each enabled, idle server with the source in its trigger", async () => {
       m.userFindUnique.mockResolvedValue({
         mediaServers: [

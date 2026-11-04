@@ -20,6 +20,7 @@ import { eventBus } from "@/lib/events/event-bus";
 import { emitSyncProgress, clearSyncProgressThrottle } from "./sync-progress";
 import { watchForCancel } from "./cancel-watch";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { loadLibraryWatchCountsFromHistory, reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
@@ -844,6 +845,11 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
   };
 
   await acquireSyncSlot();
+  // Live from before the RUNNING flip until after the last write to the row
+  // (the outer `finally`). A RUNNING row this run leaves behind — its terminal
+  // update threw — is then known to be dead, and the next guard that reads it
+  // closes it (`closeDeadSyncJobs`) instead of skipping until a restart.
+  beginSyncRun(syncJob.id);
   try {
   try {
     // Transition from PENDING → RUNNING now that we have the slot. Inside the
@@ -1633,6 +1639,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     await settleDataset();
   }
   } finally {
+    endSyncRun(syncJob.id);
     releaseSyncSlot();
   }
 }

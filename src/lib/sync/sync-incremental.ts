@@ -14,6 +14,7 @@ import { eventBus } from "@/lib/events/event-bus";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
+import { closeDeadSyncJobs } from "@/lib/sync/cleanup-orphaned-syncs";
 
 /**
  * Incremental sync: apply just the items a real-time `library-changed` event
@@ -157,6 +158,8 @@ export async function syncMediaServerItems(
   if (!server.enabled) return skipped("server disabled");
 
   // A full sync already running/queued covers these changes — don't double up.
+  // A RUNNING row whose run has died covers nothing; close it first.
+  await closeDeadSyncJobs(serverId);
   const runningSync = await prisma.syncJob.findFirst({
     where: { mediaServerId: serverId, status: { in: ["RUNNING", "PENDING"] } },
     select: { id: true },
