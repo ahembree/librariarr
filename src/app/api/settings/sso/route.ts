@@ -311,9 +311,26 @@ export async function PUT(request: NextRequest) {
     (current.ssoEnabled &&
       writeData.ssoMode === "OIDC" &&
       issuerOf(writeData.oidcIssuer) !== issuerOf(current.oidcIssuer));
+  // The email and name headers name no identity, but the forward-auth login
+  // copies them into the account's email and username, which any signed-in
+  // session reads back. A stale cookie that could point one at a header the
+  // proxy adds for itself (its secret, a Basic `Authorization`) would read that
+  // credential out after the next proxy sign-in, and with the secret forge
+  // sign-ins against a directly reachable port. The schema refuses the known
+  // credential headers; this covers the ones it cannot know.
+  const changesProfileHeaders =
+    writeData.forwardAuthEmailHeader !== current.forwardAuthEmailHeader ||
+    writeData.forwardAuthNameHeader !== current.forwardAuthNameHeader;
   const turnsSsoOn = !!writeData.ssoEnabled && !current.ssoEnabled;
-  if ((changesIdentitySource || turnsSsoOn) && !hasRecentLogin(session)) {
-    return reauthRequired(userId, turnsSsoOn ? "Turning on SSO" : "Changing which identity SSO trusts");
+  if ((changesIdentitySource || changesProfileHeaders || turnsSsoOn) && !hasRecentLogin(session)) {
+    return reauthRequired(
+      userId,
+      turnsSsoOn
+        ? "Turning on SSO"
+        : changesIdentitySource
+          ? "Changing which identity SSO trusts"
+          : "Changing the forward-auth email or name header",
+    );
   }
 
   const updated = await prisma.$transaction(async (tx) => {

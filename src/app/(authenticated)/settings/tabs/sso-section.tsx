@@ -239,8 +239,9 @@ export function SsoSection({
         forwardAuthEmailHeader: config.forwardAuthEmailHeader,
         forwardAuthNameHeader: config.forwardAuthNameHeader,
       };
-      // Turning SSO off gives an existing password its power back, which
-      // needs a recent sign-in: fetchWithReauth prompts for it.
+      // Changing the mode, any forward-auth header or (while SSO is on) the
+      // issuer needs a recent sign-in, as does a save that gives an existing
+      // password its power back: fetchWithReauth prompts for it.
       const res = await fetchWithReauth("/api/settings/sso", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

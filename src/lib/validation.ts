@@ -14,6 +14,7 @@ import {
   passwordByteLength,
 } from "@/lib/auth/password-rules";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
+import { isForwardAuthCredentialHeader } from "@/lib/sso/forward-secret";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -723,6 +724,16 @@ export const apiExceptionDeleteSchema = z.strictObject({
 
 // ─── SSO schemas ───
 
+// A header the proxy uses for credentials would be read back out of the
+// account (`FORWARD_AUTH_CREDENTIAL_HEADERS`, src/lib/sso/forward-secret.ts).
+const forwardAuthHeaderSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (name) => !isForwardAuthCredentialHeader(name),
+    "Cannot be a header that carries a credential (X-Librariarr-Proxy-Secret, Authorization, Proxy-Authorization or Cookie)",
+  );
+
 export const ssoConfigSchema = z.object({
   ssoEnabled: z.boolean().optional(),
   ssoMode: z.enum(["OIDC", "FORWARD_AUTH"]).optional(),
@@ -749,9 +760,9 @@ export const ssoConfigSchema = z.object({
     )
     .optional(),
   oidcUsernameClaim: z.string().min(1).optional(),
-  forwardAuthUserHeader: z.string().min(1).optional(),
-  forwardAuthEmailHeader: z.string().min(1).optional(),
-  forwardAuthNameHeader: z.string().min(1).optional(),
+  forwardAuthUserHeader: forwardAuthHeaderSchema.optional(),
+  forwardAuthEmailHeader: forwardAuthHeaderSchema.optional(),
+  forwardAuthNameHeader: forwardAuthHeaderSchema.optional(),
 });
 
 export const ssoTestSchema = z.object({
