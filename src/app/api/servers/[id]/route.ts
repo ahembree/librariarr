@@ -231,6 +231,16 @@ export const PUT = withSession(async (
   if (enabled !== undefined) {
     await recomputeCanonical(session.userId);
     invalidateMediaCaches();
+  } else if (
+    urlChanged ||
+    (accessToken !== undefined && accessToken !== "" && accessToken !== server.accessToken) ||
+    (tlsSkipVerify !== undefined && tlsSkipVerify !== server.tlsSkipVerify)
+  ) {
+    // The image proxy caches each item's server URL, token and TLS setting
+    // under `image-meta:` for 5 minutes. The edit form never sends `enabled`,
+    // so without this an edited connection kept fetching artwork from the old
+    // address, with the old token, until that cache expired.
+    invalidateMediaCaches();
   }
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS
