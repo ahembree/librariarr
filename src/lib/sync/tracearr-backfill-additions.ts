@@ -7,7 +7,7 @@ import {
   importTracearrRecords,
   resolveInstanceForServer,
 } from "@/lib/sync/sync-tracearr-history";
-import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import { TracearrClient, type TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 import { IntegrationError } from "@/lib/integration-error";
 import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
@@ -143,10 +143,12 @@ interface RecoverNewItemHistoryResult {
   imported: number;
 }
 
-/** One candidate: a recently added item with no Tracearr plays of its own. */
+/** One candidate: a recently added item with no Tracearr play from before it was added. */
 interface CandidateItem {
   id: string;
   ratingKey: string;
+  /** When this row was created — what "played before it was added" is measured against. */
+  createdAt: Date;
   tmdbId: string | null;
   imdbId: string | null;
   // What names it in a log line: an episode by its show and SxxExx.
@@ -213,9 +215,9 @@ export async function recoverHistoryForNewItems(
   // This pass REFUSES to run without the map, exactly as the archive walk and
   // the forward pass do, and for the same reason: the rows it writes are old
   // plays that nothing will ever re-deliver. `findCandidates` excludes any item
-  // that already has a TRACEARR row, the forward pass reaches back only
-  // `OVERLAP_MS`, and `tracearrBackfillComplete` is already true by the time
-  // this runs — so a row written under a Tracearr identity label ("Nick W")
+  // that already has a TRACEARR row from before it was added, the forward pass
+  // reaches back only `OVERLAP_MS`, and `tracearrBackfillComplete` is already
+  // true by the time this runs — so a row written under a Tracearr identity label ("Nick W")
   // sits permanently beside rows written under the media server's account name
   // ("weingart"), and a `watchedByUser` rule sees one person as two.
   //
@@ -269,11 +271,18 @@ export async function recoverHistoryForNewItems(
         { signal },
       );
 
-      // Nothing under the rating key. That is the NORMAL answer for the case
-      // this pass exists to serve: Plex mints a new rating key when an item is
-      // removed and added back, so a re-added item's old plays live under a key
-      // that no longer exists anywhere. The provider id is the identity that
-      // survives, and the API filters on it.
+      // No play of this server's from before the item was added under the
+      // rating key. That is the NORMAL answer for the case this pass exists to
+      // serve: Plex mints a new rating key when an item is removed and added
+      // back, so a re-added item's old plays live under a key that no longer
+      // exists anywhere. The provider id is the identity that survives, and the
+      // API filters on it.
+      //
+      // "From before it was added", not "any": a re-added film is often played
+      // again before this pass reaches it, and the forward pass has then
+      // already imported that new play under the new key — whose plays are
+      // all newer than the row. Asking the key alone would find that play and
+      // stop, and the earlier plays (and earlier watchers) would stay lost.
       //
       // Only TMDB and IMDB, and never for an episode — the same rule as the
       // resolver's own fallback (`resolveMediaItemId`), which these records go
@@ -282,16 +291,20 @@ export async function recoverHistoryForNewItems(
       // return plays of whatever else happens to carry that number, and the
       // two catalogues disagree about a film's TVDB id. Deduped per run so two
       // copies of one film cost one request.
-      if (records.length === 0) {
+      const addedAt = new Date(candidate.createdAt).getTime();
+      if (!holdsPlayBefore(records, tracearrServerId, addedAt)) {
         const providerKey = providerIdentityKey(candidate);
         if (providerKey && !queriedProviders.has(providerKey)) {
           queriedProviders.add(providerKey);
-          records = await client.getHistoryForItem(
+          const byProvider = await client.getHistoryForItem(
             tracearrServerId,
             { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
             { signal },
           );
-          if (records.length > 0) recoveredByProviderId++;
+          if (holdsPlayBefore(byProvider, tracearrServerId, addedAt)) recoveredByProviderId++;
+          // Both answers: the provider lookup returns the new key's plays too,
+          // and the shared importer de-duplicates a chain within one call.
+          records = [...records, ...byProvider];
         }
       }
 
@@ -398,14 +411,23 @@ export async function recoverHistoryForNewItems(
 }
 
 /**
- * Recently added items on this server that hold no Tracearr play of their own.
+ * Recently added items on this server that hold no Tracearr play from before
+ * they were added.
+ *
+ * A play from BEFORE the row was created can only have come from the archive
+ * walk or an earlier recovery, so the item's history was found. A play from
+ * after is not evidence of that: a re-added item played again before this pass
+ * reaches it holds exactly that newer play, imported by the forward pass, while
+ * its earlier plays are still missing. Such an item stays a candidate until
+ * Tracearr has been asked about it — see `answeredItems`, which excludes the
+ * ones it has answered for.
  *
  * `NOT EXISTS` rather than a join so an item with many plays is not multiplied,
  * and scoped to `source = 'TRACEARR'` on purpose: a leftover NATIVE row is not
  * evidence that the Tracearr import has seen this item (the importer deletes
  * that stratum once it writes, and a server's history is single-source by
  * construction), so an item carrying only native rows is still worth asking
- * about. Items Tracearr already answered for are excluded — see `answeredItems`.
+ * about.
  */
 async function findCandidates(
   serverId: string,
@@ -417,8 +439,8 @@ async function findCandidates(
   const answered = liveAnsweredIds(now);
 
   return prisma.$queryRawUnsafe<CandidateItem[]>(
-    `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
-            mi."seasonNumber", mi."episodeNumber",
+    `SELECT mi."id", mi."ratingKey", mi."createdAt", mi."title", mi."type"::text AS "type",
+            mi."parentTitle", mi."seasonNumber", mi."episodeNumber",
             MAX(CASE WHEN UPPER(e."source") = 'TMDB' THEN e."externalId" END) AS "tmdbId",
             MAX(CASE WHEN UPPER(e."source") = 'IMDB' THEN e."externalId" END) AS "imdbId"
        FROM "MediaItem" mi
@@ -431,6 +453,7 @@ async function findCandidates(
                 FROM "WatchHistory" wh
                WHERE wh."mediaItemId" = mi."id"
                  AND wh."source" = 'TRACEARR'
+                 AND wh."watchedAt" < mi."createdAt"
             )
         AND NOT (mi."id" = ANY($4::text[]))
       -- Newest first: when there are more candidates than the cap allows, the
@@ -451,6 +474,23 @@ function indexCovers(index: TracearrJoinIndex, candidates: CandidateItem[]): boo
   return candidates.every((candidate) =>
     index.byRatingKey.get(candidate.ratingKey)?.some((row) => row.id === candidate.id) ?? false,
   );
+}
+
+/**
+ * Whether `records` hold a play on this Tracearr server that started before
+ * `addedAt` — one of the plays the re-added item lost. A record of another
+ * server, or with no readable start, is not one.
+ */
+function holdsPlayBefore(
+  records: TracearrHistoryRecord[],
+  tracearrServerId: string,
+  addedAt: number,
+): boolean {
+  return records.some((record) => {
+    if (record.server_id !== tracearrServerId || !record.started_at) return false;
+    const startedAt = new Date(record.started_at).getTime();
+    return Number.isFinite(startedAt) && startedAt < addedAt;
+  });
 }
 
 /**
