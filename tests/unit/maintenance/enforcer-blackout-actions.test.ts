@@ -379,7 +379,7 @@ describe("maintenance loop edge cases", () => {
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores a tick that starts while one is still running", async () => {
+  it("does not overlap a tick that starts while one is still running; it runs once the first ends", async () => {
     let release!: (v: never[]) => void;
     vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
     const first = runEnforcerTick();
@@ -387,6 +387,35 @@ describe("maintenance loop edge cases", () => {
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
     release([]);
     await first;
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("acts on a stream that starts mid-pass in a catch-up pass, coalescing every request into one", async () => {
+    // A realtime session-changed landing while a pass runs used to be dropped,
+    // so a stream that pass had not seen played on until the next 30 s tick.
+    setBlackouts([blackout({ excludedUsers: [] })]);
+    let release!: (v: never[]) => void;
+    const getSessions = vi
+      .fn()
+      .mockReturnValueOnce(new Promise((r) => (release = r)))
+      .mockResolvedValue([session("late")]);
+    const c = client({ getSessions });
+
+    const first = runEnforcerTick();
+    await vi.waitFor(() => expect(getSessions).toHaveBeenCalledTimes(1));
+    // The new stream's session-changed (and two more frames) arrive mid-pass.
+    await runEnforcerTick();
+    await runEnforcerTick();
+    await runEnforcerTick();
+    release([]);
+    await first;
+
+    expect(getSessions).toHaveBeenCalledTimes(2);
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("late", DEFAULT_BLACKOUT_MSG);
+
+    // Nothing left owed: the next tick is an ordinary single pass.
+    await runEnforcerTick();
+    expect(getSessions).toHaveBeenCalledTimes(3);
   });
 });
 

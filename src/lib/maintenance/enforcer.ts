@@ -19,6 +19,11 @@ import type { MediaServerType } from "@/generated/prisma/client";
 
 let initialized = false;
 let isRunning = false;
+// A tick asked for while a pass runs (a realtime `session-changed`, or the 30 s
+// interval). That pass may already have read its sessions, so the request is
+// remembered and answered by one more pass when it ends — never by overlapping
+// it, and however many requests arrive meanwhile, by one pass.
+let tickRequested = false;
 let prerollRunning = false;
 
 // Tracks when a session was first seen for pending termination.
@@ -323,11 +328,31 @@ function createTickSessions() {
   };
 }
 
-/** Single enforcement tick — exported for direct testing. */
+/**
+ * Single enforcement tick — exported for direct testing. A tick requested while
+ * one runs is not dropped: a stream that started after the running pass read
+ * its sessions would otherwise play on until the next 30 s pass (a blackout's
+ * `terminate_immediate`, a maintenance grace period starting late). It runs as
+ * one coalesced catch-up pass, like the realtime manager's `reconcile()`.
+ */
 export async function runEnforcerTick() {
-  if (isRunning) return;
+  if (isRunning) {
+    tickRequested = true;
+    return;
+  }
   isRunning = true;
+  try {
+    do {
+      tickRequested = false;
+      await runEnforcerPass();
+    } while (tickRequested);
+  } finally {
+    isRunning = false;
+  }
+}
 
+/** One pass over every enforcer, with a fresh read of each server's sessions. */
+async function runEnforcerPass() {
   const tick = createTickSessions();
 
   try {
@@ -779,8 +804,6 @@ export async function runEnforcerTick() {
 
     } catch (error) {
       logger.error("Enforcer", "Error in enforcer", { error: String(error) });
-    } finally {
-      isRunning = false;
     }
 }
 
@@ -809,6 +832,7 @@ export function _resetForTesting() {
   initialized = false;
   prerollInitialized = false;
   isRunning = false;
+  tickRequested = false;
   prerollRunning = false;
   pendingTerminations.clear();
   knownBlackoutSessions.clear();
