@@ -18,7 +18,7 @@ vi.mock("@/lib/ai/tools", () => {
   };
 });
 
-import { runAnalyst } from "@/lib/ai/analyst";
+import { runAnalyst, HEARTBEAT_INTERVAL_MS } from "@/lib/ai/analyst";
 import type { AiConfig, AiStreamEvent } from "@/lib/ai/types";
 
 const config: AiConfig = { provider: "openai-compatible", baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3.1:8b" };
@@ -125,5 +125,28 @@ describe("ai/analyst — runAnalyst", () => {
       "I gathered the data but couldn't compose a written summary — see the results below.",
     );
     expect(result.evidence).toHaveLength(6);
+  });
+
+  // A slow model writes nothing for minutes; the heartbeat keeps proxies from
+  // dropping the idle stream, and stops once the turn settles.
+  it("emits heartbeats while a model turn is slow, and none after", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveTurn!: (v: { content: string; toolCalls: [] }) => void;
+      mockChat.mockReturnValueOnce(new Promise((r) => { resolveTurn = r; }));
+      const events: AiStreamEvent[] = [];
+      const run = runAnalyst(
+        { userId: "u", config, messages: [{ role: "user", content: "q" }] },
+        (e) => events.push(e),
+      );
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      expect(events.filter((e) => e.type === "heartbeat")).toHaveLength(3);
+      resolveTurn({ content: "done", toolCalls: [] });
+      expect((await run).answer).toBe("done");
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      expect(events.filter((e) => e.type === "heartbeat")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

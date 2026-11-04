@@ -89,7 +89,9 @@ export interface AiTool {
 /** Intermediate events emitted while the assistant works (live "thinking"). */
 export type AiStreamEvent =
   | { type: "status"; label: string }
-  | { type: "tool"; tool: string; label: string };
+  | { type: "tool"; tool: string; label: string }
+  // Sent while waiting on a slow model so proxies don't drop the idle stream.
+  | { type: "heartbeat" };
 
 /** Terminal payload (delivered as the stream's `{ type: "result", result }`). */
 export interface AiChatResponse {

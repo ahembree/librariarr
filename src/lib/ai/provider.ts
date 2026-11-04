@@ -10,12 +10,29 @@ import type {
   AiToolDefinition,
 } from "./types";
 
-// Local models can be slow to first token; give a generous per-request timeout.
-// The chat route additionally caps total wall-clock via the progress stream.
-const REQUEST_TIMEOUT_MS = 120_000;
-const TEST_TIMEOUT_MS = 30_000;
-// Bounded output per turn: analytical answers and tool-call args are short.
-const MAX_TOKENS = 1500;
+// Local models (and thinking models) can take minutes to answer one turn on
+// modest hardware; a shorter cap aborted them mid-generation. The chat route
+// caps the run's total wall-clock via the progress stream's lifetime.
+export const REQUEST_TIMEOUT_MS = 10 * 60_000;
+// The test may cold-load a local model into memory before it answers.
+export const TEST_TIMEOUT_MS = 3 * 60_000;
+// Output cap per turn. Thinking models (Qwen 3.x, DeepSeek-R1, gpt-oss, …)
+// spend output tokens on reasoning before the answer or tool call; a small cap
+// ended the turn mid-thought with an empty answer.
+export const MAX_TOKENS = 8192;
+
+/**
+ * Drop the reasoning a thinking model inlines in its content
+ * (`<think>…</think>`, as some OpenAI-compatible servers return it) so only the
+ * answer reaches the user. An unterminated block (output cut off mid-thought)
+ * leaves no answer.
+ */
+export function stripThinking(content: string): string {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "")
+    .trim();
+}
 
 function makeHttp(config: AiConfig, headers: Record<string, string>): AxiosInstance {
   const http = axios.create({
@@ -122,7 +139,7 @@ class OpenAiCompatibleClient implements AiProviderClient {
           }))
           .filter((tc: AiToolCall) => tc.name)
       : [];
-    return { content: typeof message.content === "string" ? message.content : "", toolCalls };
+    return { content: typeof message.content === "string" ? stripThinking(message.content) : "", toolCalls };
   }
 
   async testConnection(signal?: AbortSignal): Promise<{ ok: boolean; error?: string; model?: string }> {

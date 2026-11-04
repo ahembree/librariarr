@@ -11,7 +11,11 @@ import type { AiStreamEvent } from "@/lib/ai/types";
 // Streaming + potentially slow (local models, multi-tool loops). Force dynamic
 // and cap the duration so a request can't pin a function forever.
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 1800;
+
+// Total wall-clock for one question: up to MAX_ITERATIONS + 1 model turns,
+// each of which a slow local model may spend minutes on.
+const CHAT_MAX_LIFETIME_MS = 30 * 60_000;
 
 export async function POST(request: Request) {
   const rateLimited = checkRateLimit(request, aiRateLimiter, "ai-chat");
@@ -57,6 +61,6 @@ export async function POST(request: Request) {
         signal,
       ),
     // `request`: its signal, and gzip when the client accepts it.
-    { request },
+    { request, maxLifetimeMs: CHAT_MAX_LIFETIME_MS },
   );
 }

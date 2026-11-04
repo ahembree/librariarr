@@ -16,7 +16,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { createProvider } from "@/lib/ai/provider";
+import { createProvider, MAX_TOKENS, stripThinking } from "@/lib/ai/provider";
 import type { AiConfig, AiMessage } from "@/lib/ai/types";
 
 const OPENAI: AiConfig = {
@@ -66,7 +66,7 @@ describe("ai/provider — OpenAI-compatible", () => {
     expect(body).toEqual({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: "q" }],
-      max_tokens: 1500,
+      max_tokens: MAX_TOKENS,
       tools: [
         {
           type: "function",
@@ -118,7 +118,7 @@ describe("ai/provider — Anthropic", () => {
     expect(url).toBe("/v1/messages");
     expect(body).toEqual({
       model: "claude-sonnet-4-5",
-      max_tokens: 1500,
+      max_tokens: MAX_TOKENS,
       messages: [{ role: "user", content: [{ type: "text", text: "q" }] }],
       tools: [{ name: "get_cross_tab", description: "d", input_schema: { type: "object" } }],
     });
@@ -150,5 +150,27 @@ describe("ai/provider — Anthropic", () => {
       { type: "tool_result", tool_use_id: "tc1", content: "res1" },
       { type: "tool_result", tool_use_id: "tc2", content: "res2" },
     ]);
+  });
+});
+
+describe("ai/provider — model names and thinking output", () => {
+  it("sends a model name with dots and a tag verbatim", async () => {
+    mockPost.mockResolvedValue({ data: { choices: [{ message: { content: "ok" } }] } });
+    await createProvider({ ...OPENAI, model: "qwen3.5:8b" }).chat([{ role: "user", content: "q" }], []);
+    expect(mockPost.mock.calls[0][1].model).toBe("qwen3.5:8b");
+  });
+
+  it("drops inlined <think> reasoning from the answer", async () => {
+    mockPost.mockResolvedValue({
+      data: { choices: [{ message: { content: "<think>Let me count.\nMany.</think>\n\nYou have 12 movies." } }] },
+    });
+    const result = await createProvider(OPENAI).chat([{ role: "user", content: "q" }], []);
+    expect(result.content).toBe("You have 12 movies.");
+  });
+
+  it("stripThinking leaves plain answers alone and empties a cut-off thought", () => {
+    expect(stripThinking("Plain answer")).toBe("Plain answer");
+    expect(stripThinking("<THINK>a</THINK>b<think>c</think>d")).toBe("bd");
+    expect(stripThinking("<think>ran out of tokens")).toBe("");
   });
 });

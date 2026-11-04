@@ -22,7 +22,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { AxiosError } from "axios";
-import { createProvider } from "@/lib/ai/provider";
+import { createProvider, TEST_TIMEOUT_MS } from "@/lib/ai/provider";
 import { IntegrationError } from "@/lib/integration-error";
 import type { AiConfig } from "@/lib/ai/types";
 
@@ -84,7 +84,7 @@ describe("provider HTTP setup", () => {
 
     const result = await client.testConnection();
     expect(result).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/chat/completions)" });
-    expect(lastRequest().config.timeout).toBe(30_000);
+    expect(lastRequest().config.timeout).toBe(TEST_TIMEOUT_MS);
 
     const anthropic = await createProvider(ANTHROPIC).testConnection();
     expect(anthropic).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/v1/messages)" });

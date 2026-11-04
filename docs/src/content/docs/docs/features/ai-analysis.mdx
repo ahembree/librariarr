@@ -32,7 +32,9 @@ When you ask a question, the model translates it into calls to a small set of va
 
 4. Enter an **API key** if your provider needs one. Local models usually don't. The key is stored on your server and masked in every response — it is never shown again.
 
-5. Enter the **Model** identifier your provider expects (e.g. `gpt-4o-mini`, `claude-sonnet-5`, `llama3.1`). The model must support **tool / function calling**.
+5. Enter the **Model** identifier your provider expects, exactly as the provider lists it (e.g. `gpt-4o-mini`, `claude-sonnet-5`, `llama3.1`, `qwen3.5:8b`). The model must support **tool / function calling**. Thinking models work too: their `<think>` reasoning is removed from the answer, and each turn may use up to 8,192 output tokens so the reasoning doesn't use up the answer's budget.
+
+   Slow local models are fine: each model turn may take up to 10 minutes (the connection test up to 3), a whole question up to 30 minutes, and the response stream sends a keep-alive every 15 seconds so a reverse proxy doesn't close it while the model is thinking.
 
 6. Turn on **Enable AI assistant**, click **Test connection**, then **Save** — the switch is saved with the rest of the form.
 
