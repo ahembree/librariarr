@@ -24,7 +24,9 @@ import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-complet
  *   is treated as a deletion. A **transient** fetch failure (unreachable / 5xx /
  *   timeout) never guesses a delete — it returns `"fell-back"` so the caller
  *   runs a full sync that reconciles everything.
- * - `removedIds` are deleted directly.
+ * - `removedIds` are deleted directly — unless the same id is also in
+ *   `changedIds` and its fetch finds present media: the server's answer is
+ *   authoritative, so that id is upserted and kept.
  *
  * It deliberately does NOT run the server-wide play-count / watch-history scans
  * or stale-item detection — those belong to the full sync, which remains the
@@ -252,6 +254,16 @@ export async function syncMediaServerItems(
       toDelete.add(id);
       skippedNonMedia++;
     } else {
+      // The server just answered that this id is present media, and that
+      // answer outranks a `removedIds` entry for the same id. The realtime
+      // manager collects changed and removed ids independently over one quiet
+      // window, so a Jellyfin/Emby `ItemsRemoved:[X]` plus `ItemsAdded:[X]`
+      // (or `ItemsUpdated:[X]`) arrives here with X in both lists. Left in
+      // `toDelete`, X would be upserted below and then deleted by the delete
+      // step — cascading its watch history, rule matches and exceptions for
+      // media the server still holds.
+      toDelete.delete(id);
+      toDelete.delete(item.ratingKey);
       fetched.push(item);
     }
   }
