@@ -507,6 +507,99 @@ describe("preroll edge cases", () => {
     expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
   });
 
+  describe("tracked per server", () => {
+    const A = { ...SERVER, id: "a", url: "http://plex-a" };
+    const B = { ...SERVER, id: "b", url: "http://plex-b" };
+
+    /** One client per server, told apart by URL. */
+    function clientsFor(...servers: (typeof SERVER)[]) {
+      let preroll: Record<string, string> = {};
+      const byUrl = Object.fromEntries(
+        servers.map((s) => [
+          s.url,
+          {
+            getPrerollSetting: vi.fn(async () => preroll[s.url] ?? ""),
+            setPrerollPath: vi.fn(async (path: string) => { preroll = { ...preroll, [s.url]: path }; }),
+            clearPreroll: vi.fn(async () => { preroll = { ...preroll, [s.url]: "" }; }),
+          },
+        ]),
+      );
+      vi.mocked(createMediaServerClient).mockImplementation(
+        (_type, url) => byUrl[url] as unknown as Client,
+      );
+      return byUrl;
+    }
+    const withServers = (...servers: (typeof SERVER)[]) =>
+      vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([
+        prerollSchedule({ user: { id: "u1", mediaServers: servers } }),
+      ] as never);
+
+    it("applies the active preroll to a Plex server added while the schedule runs", async () => {
+      const c = clientsFor(A, B);
+      withServers(A);
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledWith("/pre.mp4");
+
+      // Keyed per user, B was skipped: the user's path was "already applied".
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledExactlyOnceWith("/pre.mp4");
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-applies it to a server re-enabled mid-schedule, without touching it while disabled", async () => {
+      const c = clientsFor(A, B);
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(1);
+
+      withServers(A); // B disabled
+      await processPrerollSchedules();
+      expect(c[B.url].getPrerollSetting).not.toHaveBeenCalled();
+      expect(c[B.url].clearPreroll).not.toHaveBeenCalled();
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+
+      withServers(A, B); // B re-enabled
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(2);
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries only the server that failed", async () => {
+      const c = clientsFor(A, B);
+      c[B.url].setPrerollPath.mockRejectedValueOnce(new Error("down"));
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(vi.mocked(logger.error)).toHaveBeenCalledWith("Enforcer", "Preroll: could not update server", {
+        error: "Error: down",
+      });
+
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears every server it set once no enabled schedule remains", async () => {
+      const c = clientsFor(A, B);
+      withServers(A, B);
+      await processPrerollSchedules();
+
+      vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({ mediaServers: [A, B] } as never);
+      await processPrerollSchedules();
+      expect(c[A.url].clearPreroll).toHaveBeenCalledTimes(1);
+      expect(c[B.url].clearPreroll).toHaveBeenCalledTimes(1);
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+
+      await processPrerollSchedules();
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("logs a failed run and does not overlap runs", async () => {
     vi.mocked(prisma.prerollSchedule.findMany).mockRejectedValueOnce(new Error("db"));
     await processPrerollSchedules();
