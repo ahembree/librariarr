@@ -3,6 +3,7 @@ import {
   DIMENSION_REGISTRY,
   breakdownValueLabel,
   canCrossTabulate,
+  customCardTitle,
   getDimensionMeta,
   isSubmittableCustomCard,
   supportsTimelineBreakdown,
@@ -84,5 +85,29 @@ describe("isSubmittableCustomCard", () => {
     expect(isSubmittableCustomCard("timeline", "addedAt", "resolution")).toBe(true);
     expect(isSubmittableCustomCard("timeline", "addedAt", "genre")).toBe(false);
     expect(isSubmittableCustomCard("timeline", "addedAt", "audioLanguage")).toBe(false);
+  });
+});
+
+describe("customCardTitle", () => {
+  const label = (id: string) => meta(id).label;
+
+  it("uses the title the user gave the card", () => {
+    expect(customCardTitle({ chartType: "bar", dimension: "resolution", title: "My chart" })).toBe("My chart");
+  });
+
+  it("names the card after its chart and dimensions otherwise", () => {
+    expect(customCardTitle({ chartType: "bar", dimension: "resolution" })).toBe(`${label("resolution")} Breakdown`);
+    expect(customCardTitle({ chartType: "pie", dimension: "videoCodec", title: "" })).toBe(`${label("videoCodec")} Breakdown`);
+    expect(customCardTitle({ chartType: "count", dimension: "resolution" })).toBe(`${label("resolution")} Count`);
+    expect(customCardTitle({ chartType: "heatmap", dimension: "resolution", dimension2: "videoCodec" }))
+      .toBe(`${label("resolution")} vs ${label("videoCodec")}`);
+    expect(customCardTitle({ chartType: "timeline", dimension: "addedAt" })).toBe(`${label("addedAt")} Timeline`);
+    expect(customCardTitle({ chartType: "timeline", dimension: "addedAt", dimension2: "resolution" }))
+      .toBe(`${label("addedAt")} by ${label("resolution")}`);
+  });
+
+  it("falls back to a breakdown title for a heatmap missing its second dimension, and a generic one for an unknown dimension", () => {
+    expect(customCardTitle({ chartType: "heatmap", dimension: "resolution" })).toBe(`${label("resolution")} Breakdown`);
+    expect(customCardTitle({ chartType: "bar", dimension: "nope" as never })).toBe("Custom Chart");
   });
 });

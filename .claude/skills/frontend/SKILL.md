@@ -68,6 +68,7 @@ The dashboard has its own skill (`dashboard`); realtime subscriptions and fallba
   - `useSetState`, `useStoredSet(key, defaults)` (over `useLocalStorageJSON`); `useHashTab`, `useHydrated`; `useCronScheduleSetting({ endpoint, bodyKey, … })` (one Settings → Scheduling schedule).
   - `useRuleEditorData()` — the rule editor's tab-independent data, loaded once by `/lifecycle/rules` and passed to each tab's `LifecycleRulePage` as `data`; dialogs in `lifecycle-rule-dialogs.tsx`.
   - `useLifecycleExceptions({ announce? })` (excepted ids via `?idsOnly=1`, exclude POST, `ExcludeReasonDialog`); `useRuleSetTypeFilter` and `RuleSetGroupCard` for Matches/Pending.
+  - `useDashboardCardDisplay(display, onChange, filterType)` — an Insights card's saved display choices (`dashboard` skill); not to be confused with `useCardDisplay`, the library grids' badge/metadata toggles.
   - `use-live-session-count.ts` — the Stream Manager publishes its count (`publishLiveSessionCount`) and the sidebar badge uses it instead of reading `/api/tools/sessions`.
   - Plus `useLibraryList`, `useLibraryListState`, `useLibrarySyncRefetch`, `useFilterPanelReset`, `useVirtualPosterGrid`, `useMediaDetailRecord`, `useBackOverride`, `useDetailChildren` (above), and `useFallbackPoll` (`realtime-events` skill).
 

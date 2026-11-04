@@ -65,9 +65,10 @@ describe("validateRequest / validateOptionalRequest", () => {
 });
 
 describe("dashboardLayoutSchema", () => {
-  it("refuses a layout over 10,000 characters", () => {
+  it("refuses a layout over 32,000 characters", () => {
     expect(dashboardLayoutSchema.safeParse({ layout: { a: 1 } }).success).toBe(true);
-    const r = dashboardLayoutSchema.safeParse({ layout: { a: "x".repeat(10_001) } });
+    expect(dashboardLayoutSchema.safeParse({ layout: { a: "x".repeat(31_000) } }).success).toBe(true);
+    const r = dashboardLayoutSchema.safeParse({ layout: { a: "x".repeat(32_001) } });
     expect(r.success).toBe(false);
     expect(r.error?.issues[0].message).toBe("Layout data exceeds maximum size");
   });

@@ -3,6 +3,7 @@
 import { BarChart3 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AUTO_HEX, OTHER_HEX } from "@/components/dashboard/chart-palette";
+import type { CardDisplay } from "@/lib/dashboard/card-display";
 import {
   BreakdownCard,
   type BreakdownEntry,
@@ -23,6 +24,9 @@ interface BreakdownChartProps {
   availableTypes?: string[];
   /** Transform labels for display. Defaults to toUpperCase. */
   labelTransform?: (value: string) => string;
+  /** The card's saved display choices (see `BreakdownCard`). */
+  display?: CardDisplay;
+  onDisplayChange?: (next: CardDisplay | undefined) => void;
 }
 
 /** Generic categorical distribution card (codecs, ratings, genres, …) —
@@ -39,6 +43,8 @@ export function BreakdownChart({
   lockedFilterType,
   availableTypes,
   labelTransform = (v) => v.toUpperCase(),
+  display,
+  onDisplayChange,
 }: BreakdownChartProps) {
   const aggregated = new Map<string, BreakdownEntry>();
   for (const item of breakdown) {
@@ -80,6 +86,8 @@ export function BreakdownChart({
       filterType={filterType}
       lockedFilterType={lockedFilterType}
       availableTypes={availableTypes}
+      display={display}
+      onDisplayChange={onDisplayChange}
     />
   );
 }

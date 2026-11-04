@@ -101,6 +101,47 @@ describe("PUT /api/settings/dashboard-layout", () => {
     expect(await storedLayout(user.id)).toEqual(VALID_LAYOUT);
   });
 
+  it("saves each card's display choices with the layout", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const layout = {
+      ...EMPTY_LAYOUT,
+      main: [
+        { id: "quality-breakdown", size: 6, display: { view: "donut", topN: null, type: "MOVIE", hidden: ["4K"] } },
+        {
+          id: "custom-1",
+          size: 6,
+          config: { chartType: "bar", dimension: "year" },
+          display: { type: "ALL", hidden: ["1999"] },
+        },
+      ],
+    };
+    const res = await callRoute(PUT, { method: "PUT", body: { layout } });
+    expect((await expectJson<{ layout: unknown }>(res)).layout).toEqual(layout);
+    expect(await storedLayout(user.id)).toEqual(layout);
+  });
+
+  it.each([
+    ["an unknown view", { view: "pie" }],
+    ["a Top N the card does not offer", { topN: 7 }],
+    ["an unknown type pick", { type: "PODCAST" }],
+    ["an unknown key", { colour: "red" }],
+    ["too many hidden values", { hidden: Array.from({ length: 31 }, (_, i) => `v${i}`) }],
+    ["an over-long hidden value", { hidden: ["x".repeat(101)] }],
+    ["a display that is not an object", ["donut"]],
+  ])("returns 400 for a card display with %s", async (_label, display) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { layout: { ...EMPTY_LAYOUT, main: [{ id: "quality-breakdown", size: 6, display }] } },
+    });
+    expect((await expectJson<{ error: string }>(res, 400)).error).toBe("Invalid dashboard layout");
+    expect(await storedLayout(user.id)).toBeUndefined();
+  });
+
   it("saves an empty layout (all tabs empty)", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
@@ -165,13 +206,13 @@ describe("PUT /api/settings/dashboard-layout", () => {
     expect(await storedLayout(user.id)).toBeUndefined();
   });
 
-  it("returns 400 for a layout over 10,000 characters", async () => {
+  it("returns 400 for a layout over 32,000 characters", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
-      body: { layout: { ...EMPTY_LAYOUT, padding: "x".repeat(10_000) } },
+      body: { layout: { ...EMPTY_LAYOUT, padding: "x".repeat(32_000) } },
     });
     const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.details).toEqual(["layout: Layout data exceeds maximum size"]);

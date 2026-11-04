@@ -32,7 +32,7 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from "recharts";
-import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
+import { customCardTitle, getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
 import { FALLBACK_HEX, type ChipColorCategory } from "@/lib/theme/chip-colors";
@@ -93,6 +93,9 @@ interface CustomChartCardProps {
   /** The card's own type selector, and its change handler (`CustomCardSlot` holds it). */
   localFilter: string;
   onLocalFilterChange: (value: string) => void;
+  /** Values clicked off in the legend, and their change handler (saved with the layout by `CustomCardSlot`). */
+  hidden: readonly string[];
+  onToggleHidden: (label: string) => void;
   /** The data for the current request is still on its way. */
   loading: boolean;
   /**
@@ -118,6 +121,8 @@ export function CustomChartCard({
   availableTypes,
   localFilter,
   onLocalFilterChange,
+  hidden,
+  onToggleHidden,
   loading,
   failed,
   data,
@@ -127,32 +132,17 @@ export function CustomChartCard({
   const breakdown: BreakdownRow[] = data?.kind === "custom" ? data.breakdown : NO_BREAKDOWN;
   const heatmapRaw: CrossTabRow[] = data?.kind === "crossTab" ? data.rows : NO_CROSS_TAB;
   const timelineData: TimelineData | null = data?.kind === "timeline" ? data.timeline : null;
-  const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
+  const hiddenItems = useMemo(() => new Set(hidden), [hidden]);
 
   const isHeatmap = config.chartType === "heatmap";
   const isCount = config.chartType === "count";
   const isTimeline = config.chartType === "timeline";
 
-  const toggleHidden = (label: string) => {
-    setHiddenItems((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
-  };
+  const toggleHidden = onToggleHidden;
 
   const meta = getDimensionMeta(config.dimension);
   const meta2 = config.dimension2 ? getDimensionMeta(config.dimension2) : null;
-  const cardTitle = config.title || (
-    isTimeline && meta && meta2
-      ? `${meta.label} by ${meta2.label}`
-      : isTimeline && meta ? `${meta.label} Timeline`
-      : isHeatmap && meta && meta2
-      ? `${meta.label} vs ${meta2.label}`
-      : isCount && meta ? `${meta.label} Count`
-      : meta ? `${meta.label} Breakdown` : "Custom Chart"
-  );
+  const cardTitle = customCardTitle(config);
 
   // Heatmap data processing
   const heatmapData = useMemo(() => {
@@ -190,8 +180,10 @@ export function CustomChartCard({
 
   return (
     <Card className="h-full flex flex-col gap-3">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <div className="flex min-w-0 items-center gap-2.5">
+      {/* The title truncates down to 8rem before the controls wrap below it,
+          so a narrow card keeps them inside its border. */}
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+        <div className="flex min-w-0 flex-[1_1_8rem] items-center gap-2.5">
           <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[8px] border border-border bg-surface-2 text-muted-foreground">
             {(() => {
               const Icon =
@@ -206,11 +198,11 @@ export function CustomChartCard({
             <p className="truncate font-mono text-[10.5px] text-faint">custom chart</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 max-w-full shrink-0 items-center gap-2">
           {/* Type filter (only if not locked) */}
           {!lockedFilterType && availableTypes && availableTypes.length > 1 && (
             <Select value={localFilter} onValueChange={onLocalFilterChange}>
-              <SelectTrigger className="h-7 w-24 text-xs">
+              <SelectTrigger className="h-7 w-24 min-w-0 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
