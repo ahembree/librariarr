@@ -19,10 +19,12 @@ import type { MediaServerType } from "@/generated/prisma/client";
 
 let initialized = false;
 let isRunning = false;
-// A tick asked for while a pass runs (a realtime `session-changed`, or the 30 s
-// interval). That pass may already have read its sessions, so the request is
-// remembered and answered by one more pass when it ends — never by overlapping
-// it, and however many requests arrive meanwhile, by one pass.
+// A realtime `session-changed` tick asked for while a pass runs. That pass may
+// already have read its sessions, so the request is remembered and answered by
+// one more pass when it ends — never by overlapping it, and however many
+// requests arrive meanwhile, by one pass. The 30 s interval's tick does not
+// set it: a pass slower than the interval would otherwise run the next one
+// back to back, polling every media server continuously.
 let tickRequested = false;
 let prerollRunning = false;
 
@@ -343,15 +345,17 @@ function createTickSessions() {
 }
 
 /**
- * Single enforcement tick — exported for direct testing. A tick requested while
- * one runs is not dropped: a stream that started after the running pass read
- * its sessions would otherwise play on until the next 30 s pass (a blackout's
- * `terminate_immediate`, a maintenance grace period starting late). It runs as
- * one coalesced catch-up pass, like the realtime manager's `reconcile()`.
+ * Single enforcement tick — exported for direct testing. A realtime tick
+ * requested while one runs is not dropped: a stream that started after the
+ * running pass read its sessions would otherwise play on until the next 30 s
+ * pass (a blackout's `terminate_immediate`, a maintenance grace period starting
+ * late). It runs as one coalesced catch-up pass, like the realtime manager's
+ * `reconcile()`. The interval's own tick passes `catchUp: false` and is simply
+ * skipped while a pass runs, as before.
  */
-export async function runEnforcerTick() {
+export async function runEnforcerTick({ catchUp = true }: { catchUp?: boolean } = {}) {
   if (isRunning) {
-    tickRequested = true;
+    if (catchUp) tickRequested = true;
     return;
   }
   isRunning = true;
@@ -836,7 +840,7 @@ export function initializeMaintenanceEnforcer() {
   if (initialized) return;
   initialized = true;
 
-  setInterval(runEnforcerTick, 30000);
+  setInterval(() => void runEnforcerTick({ catchUp: false }), 30000);
 
   logger.info("Enforcer", "Maintenance enforcer initialized — polling every 30 seconds");
 }

@@ -417,6 +417,18 @@ describe("maintenance loop edge cases", () => {
     await runEnforcerTick();
     expect(getSessions).toHaveBeenCalledTimes(3);
   });
+
+  it("skips the interval's own tick mid-pass instead of chaining a catch-up pass", async () => {
+    // A pass slower than the 30 s interval must not make passes run back to
+    // back; only a realtime tick is owed a catch-up.
+    let release!: (v: never[]) => void;
+    vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
+    const first = runEnforcerTick();
+    await runEnforcerTick({ catchUp: false });
+    release([]);
+    await first;
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("preroll edge cases", () => {
@@ -719,6 +731,17 @@ describe("initializers", () => {
     await vi.advanceTimersByTimeAsync(30000);
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.prerollSchedule.findMany).toHaveBeenCalledTimes(1);
+
+    // An interval tick that lands while a pass is still running is skipped,
+    // not queued as a catch-up pass.
+    let release!: (v: never[]) => void;
+    vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30000);
+    release([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
     vi.clearAllTimers();
     spy.mockRestore();
   });
