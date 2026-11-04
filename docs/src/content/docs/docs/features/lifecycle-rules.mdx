@@ -47,6 +47,8 @@ A **Stream Query** group tests an item's individual audio, video or subtitle tra
 | **NO** | no track of that type meets them (an item with no track of that type matches) |
 | **ALL** | it has at least one track of that type, and every one of them meets the conditions |
 
+A stream query inside a group with **NOT** is inverted exactly: under NOT, **ANY** becomes **NO** and **NO** becomes **ANY**, and **ALL** becomes "some track of that type fails a condition" — `NOT (ALL audio stream where Language is English)` matches an item with at least one audio track that is not English. An item with no track of that type matches neither **ALL** nor its NOT.
+
 Each stream type offers only the fields its tracks carry:
 
 | Label | Field | Stream types |
