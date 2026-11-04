@@ -48,8 +48,18 @@ export const POST = withSession(async (session, request: NextRequest) => {
           // stats) no longer correspond to the restored dataset.
           await clearImageCache().catch(() => {});
 
-          // The restore revoked every session (`revokeRestoredSessions`), this
-          // one included; clear its cookie so the browser goes to sign-in.
+          // The restore revoked every session, this one included:
+          // `revokeRestoredSessions` raised every restored user's
+          // `sessionVersion`, so `getSession()` refuses this browser's cookie
+          // from its next request on. That is what signs it out; on
+          // "complete" the settings page navigates to /login.
+          //
+          // The save below does not reach the browser. Next.js copies cookies
+          // a route handler sets into the response only when the handler
+          // returns (`finalizeResponse`), and this one has already returned
+          // the streaming Response, so the Set-Cookie is dropped. It only
+          // marks this request's session object signed out, which the
+          // integration tests (they mock the session) read.
           // Widened from the checked session type, which pins it signed in.
           const cookie: IronSession<SessionData> = session;
           cookie.isLoggedIn = false;
