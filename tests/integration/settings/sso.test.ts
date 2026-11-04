@@ -496,6 +496,58 @@ describe("PUT /api/settings/sso", () => {
     expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
   });
 
+  // The same refusal in forward-auth mode, while SSO is on.
+  it("refuses to disable forward-auth SSO when admin has no Plex and no local credentials", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { plexId: null, plexToken: null, ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "FORWARD_AUTH",
+        ssoEnabled: true,
+        forwardAuthUserHeader: "Remote-User",
+        localAuthEnabled: false,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const body = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      400,
+    );
+    expect(body.error).toMatch(/Cannot disable SSO/);
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+  });
+
+  // With SSO already off there is nothing to disable, so a save of the
+  // forward-auth settings must not meet the lockout refusal — as it did not
+  // in OIDC mode. The state follows an SSO revert (which turns SSO off and
+  // unlinks) on an install whose Plex login is off and has no local login.
+  it("saves forward-auth settings while SSO is off even when no other sign-in method is usable", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.id }, data: { plexId: null, plexToken: null } });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "FORWARD_AUTH",
+        ssoEnabled: false,
+        forwardAuthUserHeader: "Remote-User",
+        plexLoginEnabled: false,
+        localAuthEnabled: false,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    for (const body of [{ forwardAuthUserHeader: "X-Forwarded-User" }, { ssoEnabled: false }]) {
+      const saved = await expectJson<{ ssoEnabled: boolean }>(await callRoute(PUT, { method: "PUT", body }), 200);
+      expect(saved.ssoEnabled).toBe(false);
+    }
+    expect((await prisma.appSettings.findFirstOrThrow()).forwardAuthUserHeader).toBe("X-Forwarded-User");
+  });
+
   it("allows disabling SSO when Plex login is usable", async () => {
     const user = await createTestUser({ plexId: "p1" });
     await prisma.user.update({

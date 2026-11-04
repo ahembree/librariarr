@@ -187,12 +187,16 @@ export async function PUT(request: NextRequest) {
   // will be usable afterwards. Without this, an admin who set up SSO-only
   // login (plexLoginEnabled=false, localAuthEnabled=false) could disable
   // SSO and end up with no login methods at all.
+  // Parenthesised: without them `&&` bound only to the OIDC test, so in
+  // forward-auth mode a stored user header read as "SSO was usable" even with
+  // SSO off, and any save then hit the lockout refusal below.
   const wasSsoUsable =
-    !!current.ssoEnabled && current.ssoMode === "OIDC"
+    !!current.ssoEnabled &&
+    (current.ssoMode === "OIDC"
       ? !!current.oidcIssuer && !!current.oidcClientId
       : current.ssoMode === "FORWARD_AUTH"
         ? !!current.forwardAuthUserHeader
-        : false;
+        : false);
   const isDisablingSso = wasSsoUsable && next.ssoEnabled === false;
   if (isDisablingSso) {
     const userData = await prisma.user.findUnique({
