@@ -36,6 +36,8 @@ When you ask a question, the model translates it into calls to a small set of va
 
    **Test** sends a real question with one tool attached, so it fails when the model returns an empty answer (for example a thinking model that spends its whole budget reasoning) or the model or server doesn't support tool calling.
 
+   If the model server answers with an error (HTTP 5xx), the request is retried twice. Some servers fail when they can't parse a model's own tool call; Ollama, for example, answers `AI HTTP 500: invalid character '\x00' looking for beginning of value` with some Qwen 3.5 builds. If that keeps happening, update the server or try a different model or quantization. The model name itself (dots and `:tag` included) is passed through unchanged.
+
    Slow local models are fine: each model turn may take up to 10 minutes (the connection test up to 3), a whole question up to 75 minutes, and the response stream sends a keep-alive every 15 seconds so a reverse proxy doesn't close it while the model is thinking.
 
 6. Turn on **Enable AI assistant**, click **Test connection**, then **Save** — the switch is saved with the rest of the form.

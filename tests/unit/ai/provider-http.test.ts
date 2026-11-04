@@ -22,7 +22,14 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { AxiosError } from "axios";
-import { createProvider, TEST_TIMEOUT_MS, MAX_TOKENS, FALLBACK_MAX_TOKENS } from "@/lib/ai/provider";
+import {
+  createProvider,
+  TEST_TIMEOUT_MS,
+  MAX_TOKENS,
+  FALLBACK_MAX_TOKENS,
+  MODEL_ERROR_RETRIES,
+  MODEL_OUTPUT_PARSE_HINT,
+} from "@/lib/ai/provider";
 import { IntegrationError } from "@/lib/integration-error";
 import type { AiConfig } from "@/lib/ai/types";
 
@@ -276,5 +283,46 @@ describe("output cap fallback", () => {
     refuse({ error: { message: "model 'nope' not found" } });
     await expect(createProvider(OPENAI).chat([{ role: "user", content: "q" }], [])).rejects.toThrow("not found");
     expect(sentCaps()).toEqual([MAX_TOKENS]);
+  });
+});
+
+// Ollama answers 500 with a Go JSON error when it can't parse the model's own
+// tool call (seen with qwen3.5:9b); the output is sampled, so a retry usually works.
+describe("model server errors", () => {
+  const fail500 = (data: unknown) =>
+    adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError("Request failed with status code 500", "ERR_BAD_RESPONSE", config, null, {
+        data, status: 500, statusText: "Internal Server Error", headers: {}, config,
+      });
+    });
+  const PARSE_ERROR = { error: { message: "invalid character '\x00' looking for beginning of value", type: "api_error" } };
+  const QWEN: AiConfig = { ...OPENAI, model: "qwen3.5:9b" };
+
+  it("retries a 5xx and returns the answer that follows", async () => {
+    fail500(PARSE_ERROR);
+    respond({ choices: [{ message: { content: "ok" } }] });
+    expect((await createProvider(QWEN).chat([{ role: "user", content: "q" }], [])).content).toBe("ok");
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(lastRequest().body.model).toBe("qwen3.5:9b");
+  });
+
+  it("gives up after MODEL_ERROR_RETRIES and explains a parse failure", async () => {
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500(PARSE_ERROR);
+    const failure = createProvider(QWEN).chat([{ role: "user", content: "q" }], []);
+    await expect(failure).rejects.toThrow(MODEL_OUTPUT_PARSE_HINT);
+    expect(adapter).toHaveBeenCalledTimes(MODEL_ERROR_RETRIES + 1);
+
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500(PARSE_ERROR);
+    const result = await createProvider(QWEN).testConnection();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("invalid character");
+    expect(result.error).toContain(MODEL_OUTPUT_PARSE_HINT);
+  });
+
+  it("does not add the hint to an unrelated 5xx", async () => {
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500({ error: { message: "out of memory" } });
+    const failure = createProvider(OPENAI).chat([{ role: "user", content: "q" }], []);
+    await expect(failure).rejects.toThrow("AI HTTP 500: out of memory (/chat/completions)");
+    await expect(failure).rejects.not.toThrow(MODEL_OUTPUT_PARSE_HINT);
   });
 });

@@ -34,10 +34,35 @@ function isMaxTokensRefusal(error: unknown): boolean {
   );
 }
 
+// A model server answers 5xx when it can't parse the model's own output: Ollama
+// returns `500: invalid character '\x00' looking for beginning of value` (a Go
+// JSON error) when a model such as Qwen 3.5 emits a malformed tool call. The
+// output is sampled, so the same request usually succeeds on a retry.
+export const MODEL_ERROR_RETRIES = 2;
+
+function isServerError(error: unknown): boolean {
+  return error instanceof IntegrationError && error.status !== null && error.status >= 500;
+}
+
+/** The server's JSON decoder choked on what the model generated (a tool call, as a rule). */
+function isModelOutputParseFailure(error: unknown): boolean {
+  return (
+    isServerError(error) &&
+    /looking for beginning of value|invalid character|error parsing tool call|unexpected end of JSON/i.test(
+      (error as IntegrationError).detail ?? "",
+    )
+  );
+}
+
+export const MODEL_OUTPUT_PARSE_HINT =
+  "The model server couldn't parse the model's own output (usually a malformed tool call). This is a model or model-server issue, not the model name: update the server (e.g. Ollama), or try a different model or quantization.";
+
 /**
  * POST a completion request with `max_tokens` at the client's current cap,
- * retrying once at FALLBACK_MAX_TOKENS when the model refuses the size. The
- * lowered cap is returned so the client keeps using it.
+ * retrying once at FALLBACK_MAX_TOKENS when the model refuses the size, and up
+ * to MODEL_ERROR_RETRIES times when the server answers 5xx. The lowered cap is
+ * returned so the client keeps using it. A final parse failure carries
+ * MODEL_OUTPUT_PARSE_HINT in its message.
  */
 async function postWithTokenCap(
   http: AxiosInstance,
@@ -46,13 +71,26 @@ async function postWithTokenCap(
   cap: number,
   options: { signal?: AbortSignal; timeout?: number },
 ): Promise<{ data: unknown; cap: number }> {
-  try {
-    const { data } = await http.post(url, { ...body, max_tokens: cap }, options);
-    return { data, cap };
-  } catch (error) {
-    if (cap <= FALLBACK_MAX_TOKENS || !isMaxTokensRefusal(error)) throw error;
-    const { data } = await http.post(url, { ...body, max_tokens: FALLBACK_MAX_TOKENS }, options);
-    return { data, cap: FALLBACK_MAX_TOKENS };
+  let serverErrors = 0;
+  for (;;) {
+    try {
+      const { data } = await http.post(url, { ...body, max_tokens: cap }, options);
+      return { data, cap };
+    } catch (error) {
+      if (cap > FALLBACK_MAX_TOKENS && isMaxTokensRefusal(error)) {
+        cap = FALLBACK_MAX_TOKENS;
+        continue;
+      }
+      if (isServerError(error) && serverErrors < MODEL_ERROR_RETRIES && !options.signal?.aborted) {
+        serverErrors++;
+        logger.debug("AI", `Model server error, retrying (${serverErrors}/${MODEL_ERROR_RETRIES})`, {
+          message: (error as Error).message,
+        });
+        continue;
+      }
+      if (isModelOutputParseFailure(error)) (error as Error).message += ` — ${MODEL_OUTPUT_PARSE_HINT}`;
+      throw error;
+    }
   }
 }
 
