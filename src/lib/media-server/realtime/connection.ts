@@ -169,12 +169,18 @@ export class ServerRealtimeConnection {
       return; // Non-JSON frame — ignore.
     }
 
-    // Jellyfin/Emby: reply to keepalive prompts and never surface them as events.
+    // Jellyfin/Emby keepalives are never surfaced as events. Only the server's
+    // `ForceKeepAlive` prompt is answered: an inbound `KeepAlive` is the
+    // server's reply to one of ours (Jellyfin's WebSocketConnection answers
+    // every `KeepAlive` it receives with a `KeepAlive`), so answering it too
+    // started a ping-pong at network speed from the first prompt. The
+    // interval in `startKeepalive` keeps the socket alive on its own.
     if (this.config.type === "JELLYFIN" || this.config.type === "EMBY") {
-      if (isRecord(parsed) && (parsed.MessageType === "ForceKeepAlive" || parsed.MessageType === "KeepAlive")) {
+      if (isRecord(parsed) && parsed.MessageType === "ForceKeepAlive") {
         this.sendKeepAlive();
         return;
       }
+      if (isRecord(parsed) && parsed.MessageType === "KeepAlive") return;
       // The SessionsStart subscription pushes a full frame on a fixed period even
       // when nothing changed (and position ticks every frame). Drop frames whose
       // meaningful session state is unchanged, so the enforcer/sessions consumers
