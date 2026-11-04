@@ -430,9 +430,10 @@ interface TracearrImportOptions {
    * Checked at the top of every page and passed into the HTTP call, so a cancel
    * takes effect within one page and interrupts a rate-limit backoff rather
    * than waiting it out. Stopping early is a normal outcome, not a failure: the
-   * import only appends and upserts, and both boundaries are derived from the
-   * rows already written, so the next run resumes exactly where this one
-   * stopped.
+   * import only appends and upserts, the backfill boundary is derived from the
+   * rows already written and its cursor, and a forward window left unfinished
+   * is recorded (`tracearrForwardResumeAt`), so the next run resumes where this
+   * one stopped in both directions.
    */
   signal?: AbortSignal;
   /**
@@ -554,6 +555,7 @@ async function runTracearrImport(
       tracearrBackfillComplete: true,
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
+      tracearrForwardResumeAt: true,
       userId: true,
     },
   });
@@ -633,6 +635,7 @@ async function runTracearrImport(
     serverId,
     server.tracearrBackfillComplete,
     server.tracearrBackfillCursorAt,
+    server.tracearrForwardResumeAt,
   );
   const client = new TracearrClient(instance.url, instance.apiKey);
 
@@ -657,9 +660,18 @@ async function runTracearrImport(
     await persistMappedState(serverId, mappedServerId, serverName, {
       tracearrBackfillComplete: false,
       tracearrBackfillCursorAt: null,
+      // An unfinished forward window describes rows that are gone too; the
+      // walk from the newest play covers it.
+      tracearrForwardResumeAt: null,
     });
     cursorAtStart = null;
   }
+
+  // The forward resume point as this run found it. A stale reset just cleared
+  // it, and the window below already ignores it on a server with no rows.
+  const forwardResumeAtStart = window.staleBackfillState
+    ? null
+    : (server.tracearrForwardResumeAt ?? null);
 
   // Which passes can run at all, decided before anything expensive. The
   // backfill task is queued after every forward sync and, once the archive is
@@ -801,7 +813,16 @@ async function runTracearrImport(
    */
   async function walk(
     pass: ImportPass,
-    options: { since?: Date; until?: Date },
+    options: {
+      since?: Date;
+      until?: Date;
+      /**
+       * Run before committing a page that stores rows while more pages follow
+       * it — the first point at which stopping would leave a gap below what is
+       * stored. See `recordForwardResume`.
+       */
+      beforeUnfinishedCommit?: () => Promise<void>;
+    },
   ): Promise<WalkOutcome> {
     let cursor: string | undefined;
     /** Pages fetched by THIS walk — see the deadline guard below. */
@@ -880,8 +901,8 @@ async function runTracearrImport(
       for (;;) {
         // Cancelled (client disconnected, user hit Stop, or the stream's lifetime
         // cap fired). Break rather than throw: everything written so far is
-        // committed and correct, and the watermark it establishes is what makes
-        // the next run resume from here.
+        // committed and correct, and the backfill cursor or the recorded
+        // forward resume point is what makes the next run resume from here.
         // Slice exhausted. Like a cancel this is a clean stop on a committed
         // page boundary, and like a cancel it must NOT count as "exhausted" —
         // the backfill is unfinished and another run is owed.
@@ -1030,6 +1051,13 @@ async function runTracearrImport(
           );
         }
 
+        // Committing rows while older pages remain unread is what opens a gap
+        // if the walk stops here, so the caller records that first — before the
+        // commit, so a crash between the two cannot lose it either.
+        if (options.beforeUnfinishedCommit && rows.length > 0 && page.nextCursor) {
+          await options.beforeUnfinishedCommit();
+        }
+
         // Write this page's rows before going on to the next one (which may
         // already be on its way — see `prefetch`). The model is
         // append/upsert-only, so a failure on a later page leaves these durably
@@ -1133,9 +1161,46 @@ async function runTracearrImport(
 
   // FORWARD pass: new plays since the last run. Skipped on a first import,
   // where there is no watermark and the backfill below covers everything.
+  //
+  // Newest first, like everything else this API serves, so a forward walk
+  // that stops after a page (a timeout, a 429 past its retries, a write that
+  // errored, Stop, the stream's lifetime cap) has stored the NEWEST plays of
+  // its window and not the older ones. The next `since` is derived from
+  // `MAX(watchedAt)`, which those plays just moved, so the stretch between this
+  // window's start and the oldest play it reached would never be asked for
+  // again. Its start is recorded before the first commit that can open such a
+  // gap, the next run's window reaches back to it, and only a forward walk that
+  // runs to its end clears it.
+  let forwardOutcome: WalkOutcome | undefined;
+  let forwardResumeRecorded = false;
   if (forwardPlanned && accountMapUsable) {
-    await walk("forward", { since: window.since });
+    const forwardSince = window.since!;
+    forwardOutcome = await walk("forward", {
+      since: forwardSince,
+      beforeUnfinishedCommit: async () => {
+        if (forwardResumeRecorded) return;
+        await recordForwardResume(serverId, mappedServerId, forwardSince);
+        forwardResumeRecorded = true;
+      },
+    });
+    if (
+      forwardOutcome === "exhausted" &&
+      (forwardResumeAtStart !== null || forwardResumeRecorded)
+    ) {
+      await clearForwardResume(serverId, mappedServerId, forwardSince);
+    }
   }
+
+  // Whether a forward window is still unfinished after this run: one this run
+  // left, or one an earlier run left that this run did not walk to its end. An
+  // earlier one only counts while it reaches further back than the rows' own
+  // watermark — otherwise the window derived from the rows already covers it.
+  const forwardGapOpen =
+    forwardOutcome !== "exhausted" &&
+    (forwardResumeRecorded ||
+      (forwardResumeAtStart !== null &&
+        window.rowSince !== undefined &&
+        forwardResumeAtStart < window.rowSince));
 
   // BACKFILL pass: keep walking older until the history is exhausted. This is
   // the one that survives an interruption — `until` is derived from the OLDEST
@@ -1288,14 +1353,17 @@ async function runTracearrImport(
                 // Established: the archive has been walked to its oldest play,
                 // so play-activity criteria can be answered faithfully again.
                 // Written with the completion flag in the SAME guarded
-                // statement, so it can never be missed or land without it.
-                watchHistorySyncedAt: new Date(),
+                // statement, so it can never land without it — unless a
+                // forward window is still unfinished, in which case plays
+                // newer than the archive are still missing and the release
+                // below writes it on the run that closes the window.
+                ...(forwardGapOpen ? {} : { watchHistorySyncedAt: new Date() }),
               }
             : {}),
         },
         { tracearrBackfillCursorAt: cursorAtStart, tracearrBackfillComplete: false },
       );
-      markerWritten = finished && stored;
+      markerWritten = finished && stored && !forwardGapOpen;
       if (!stored) backfillComplete = false;
     }
 
@@ -1328,15 +1396,23 @@ async function runTracearrImport(
   // imported nothing and has verified nothing about the vocabulary the rows
   // carry, which is what `watchedByUser` matches against — plus the
   // archive having been walked, which is the other half of what "established"
-  // means for a Tracearr-sourced server. A forward pass that stopped early does
-  // not block it: the marker describes the stored archive, not this run's page
-  // fetches, and a partial forward pass leaves that archive exactly as complete
-  // as it was.
+  // means for a Tracearr-sourced server — plus no unfinished forward window.
+  // A forward pass that stops early is not harmless to the stored history: it
+  // reads newest first, so it has stored the newest plays of its window and
+  // left a stretch of older ones unread below them (`forwardGapOpen`). Those
+  // plays are still owed, so the marker waits for the run that walks that
+  // window to its end.
   //
   // Written on every healthy run rather than only when currently withdrawn, so
   // the timestamp keeps meaning what the column says: when a sync last
   // established what was played here.
-  if (!markerWritten && backfillComplete && accountNames && accountNames.size > 0) {
+  if (
+    !markerWritten &&
+    backfillComplete &&
+    !forwardGapOpen &&
+    accountNames &&
+    accountNames.size > 0
+  ) {
     await persistMappedState(serverId, mappedServerId, serverName, {
       watchHistorySyncedAt: new Date(),
     });
@@ -1575,7 +1651,10 @@ type WalkOutcome = "exhausted" | "stopped" | "errored";
  * newest play and walk back until the history runs out".
  */
 interface ImportWindow {
+  /** The forward pass's `since`: `rowSince`, reaching back to an unfinished window. */
   since?: Date;
+  /** The forward `since` the stored rows alone imply (`resolveSince`). */
+  rowSince?: Date;
   until?: Date;
   /** Whether this server has any stored Tracearr rows at all. */
   hasRows: boolean;
@@ -1606,6 +1685,8 @@ async function resolveImportWindow(
   serverId: string,
   backfillComplete: boolean,
   cursorAt: Date | null,
+  /** `MediaServer.tracearrForwardResumeAt` — see `recordForwardResume`. */
+  forwardResumeAt: Date | null,
 ): Promise<ImportWindow> {
   const rows = await prisma.$queryRawUnsafe<
     {
@@ -1644,9 +1725,18 @@ async function resolveImportWindow(
   const staleBackfillState = backfillComplete && !hasRows;
   const complete = backfillComplete && hasRows;
   const cursor = staleBackfillState ? null : cursorAt;
+  const rowSince = resolveSince(agg.maxWatchedAt, agg.oldestOpenChain);
 
   return {
-    since: resolveSince(agg.maxWatchedAt, agg.oldestOpenChain),
+    // An unfinished forward window reaches the next one back to where it
+    // started — exactly there, and past the open-chain lookback clamp, since
+    // what it marks is unread history rather than a chain that may never
+    // settle. With no rows there is no forward window to extend.
+    since:
+      rowSince && forwardResumeAt && forwardResumeAt < rowSince
+        ? forwardResumeAt
+        : rowSince,
+    rowSince,
     // Only meaningful while the backfill is unfinished; when it is finished the
     // caller never runs that pass.
     // Prefer where the walk actually REACHED over where it last managed to
@@ -1699,6 +1789,7 @@ async function persistMappedState(
     watchHistorySyncedAt?: Date | null;
     tracearrBackfillCursorAt?: Date | null;
     tracearrBackfillComplete?: boolean;
+    tracearrForwardResumeAt?: Date | null;
   },
   /** Further column values the row must still hold for the write to apply. */
   expect: {
@@ -1723,6 +1814,48 @@ async function persistMappedState(
   return true;
 }
 
+/**
+ * Record `since` as the start of a forward window this run has not finished.
+ *
+ * Kept at the OLDEST unfinished start (written only over nothing or a later
+ * one): two runs can overlap — the History page's Refresh runs outside the job
+ * queue — and the older start covers both of their gaps. Guarded on the
+ * mapping like every other piece of Tracearr state; a write the guard refuses
+ * needs no handling here, because the row write that follows refuses too.
+ */
+async function recordForwardResume(
+  serverId: string,
+  tracearrServerId: string,
+  since: Date,
+): Promise<void> {
+  await prisma.mediaServer.updateMany({
+    where: {
+      id: serverId,
+      tracearrServerId,
+      OR: [{ tracearrForwardResumeAt: null }, { tracearrForwardResumeAt: { gt: since } }],
+    },
+    data: { tracearrForwardResumeAt: since },
+  });
+}
+
+/**
+ * Clear the unfinished-window marker after a forward walk from `since` ran to
+ * its end.
+ *
+ * Only a marker at or after `since`: that walk read everything from there to
+ * now, so it covered the unfinished window. An older one — recorded by an
+ * overlapping run after this one started — is still owed and stays.
+ */
+async function clearForwardResume(
+  serverId: string,
+  tracearrServerId: string,
+  since: Date,
+): Promise<void> {
+  await prisma.mediaServer.updateMany({
+    where: { id: serverId, tracearrServerId, tracearrForwardResumeAt: { gte: since } },
+    data: { tracearrForwardResumeAt: null },
+  });
+}
 
 /**
  * Map and upsert an already-fetched set of this server's records.

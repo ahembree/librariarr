@@ -356,6 +356,28 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       expect(await countHistory(server.id)).toBe(0);
     });
 
+    it("a mapping change drops an unfinished forward window of the old source", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      await prisma.mediaServer.update({
+        where: { id: server.id },
+        data: {
+          tracearrServerId: TRACEARR_SERVER_A,
+          tracearrBackfillComplete: true,
+          tracearrForwardResumeAt: new Date("2026-01-01T00:00:00Z"),
+        },
+      });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B });
+      await expectJson(response, 200);
+
+      // A point in A's archive, carried over, would drag B's first catch-up
+      // back to it — and keep B's history from counting as established until
+      // a catch-up walked all the way there.
+      expect((await readServer(server.id)).tracearrForwardResumeAt).toBeNull();
+    });
+
     it("clearing the mapping resets a completed backfill", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

@@ -88,13 +88,19 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  * resumes below the OLDEST stored row, which after a partial purge is the far
  * end of the archive. It also makes a backfill slice that is running right now
  * discard its own progress write, which expects the cursor it started with.
- * Servers with no Tracearr mapping are untouched.
+ * An unfinished forward window is cleared with it: the restarted walk reads
+ * everything older than now, which covers it. Servers with no Tracearr mapping
+ * are untouched.
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;
   const { count } = await prisma.mediaServer.updateMany({
     where: { id: { in: serverIds }, tracearrServerId: { not: null } },
-    data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: new Date() },
+    data: {
+      tracearrBackfillComplete: false,
+      tracearrBackfillCursorAt: new Date(),
+      tracearrForwardResumeAt: null,
+    },
   });
   return count;
 }

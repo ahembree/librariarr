@@ -1575,10 +1575,16 @@ describe("syncTracearrHistory", () => {
 
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
       expect(historyOptions()[0].until).toBeUndefined();
-      // The stale state is reset in the DATABASE first, not only for this run.
+      // The stale state is reset in the DATABASE first, not only for this run —
+      // an unfinished forward window included, since it describes rows that
+      // are gone too.
       expect(mockPrisma.mediaServer.updateMany.mock.calls[0][0]).toEqual({
         where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
-        data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: null },
+        data: {
+          tracearrBackfillComplete: false,
+          tracearrBackfillCursorAt: null,
+          tracearrForwardResumeAt: null,
+        },
       });
       expect(mockPrisma.mediaServer.updateMany).toHaveBeenCalledWith({
         // Guarded on the mapping this run walked — see `persistMappedState`.
@@ -2433,6 +2439,7 @@ describe("syncTracearrHistory", () => {
       expect(writes[0].data).toEqual({
         tracearrBackfillComplete: false,
         tracearrBackfillCursorAt: null,
+        tracearrForwardResumeAt: null,
       });
       const cursor = writes[1].data.tracearrBackfillCursorAt as Date;
       expect(cursor).toEqual(new Date("2026-09-30T00:00:00.000Z"));
@@ -2802,6 +2809,71 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+
+  describe("a forward pass that stops short of its window's start", () => {
+    // Newest first: a forward walk that stops after a page has stored the
+    // newest plays of its window and none of the older ones. The next window
+    // is derived from the newest stored play, so without a record of where
+    // this one started the stretch below would never be asked for again.
+    const MIN = new Date("2021-03-04T08:00:00.000Z");
+    const MAX = new Date("2025-07-10T12:00:00.000Z");
+
+    function interruptedForwardThenArchiveEnd() {
+      mockGetHistoryPage
+        // Forward page 1: more pages follow.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T13:00:00.000Z" })],
+          nextCursor: "forward-2",
+        })
+        // Forward page 2 (requested while page 1 is written): never arrives.
+        .mockRejectedValueOnce(new Error("read ECONNRESET"))
+        // Backfill: the archive's last page.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-old", started_at: "2021-03-01T00:00:00.000Z" })],
+          nextCursor: null,
+        });
+    }
+
+    it("records the window's start before committing the page that opens the gap", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      interruptedForwardThenArchiveEnd();
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((call) => call[0]);
+      const resume = writes.find((write) => "tracearrForwardResumeAt" in write.data);
+      expect(resume).toMatchObject({
+        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
+        data: { tracearrForwardResumeAt: new Date(MAX.getTime() - HOUR_MS) },
+      });
+      // Before the rows it protects.
+      const resumeOrder = mockPrisma.mediaServer.updateMany.mock.invocationCallOrder[
+        writes.indexOf(resume!)
+      ];
+      expect(resumeOrder).toBeLessThan(mockPrisma.$executeRawUnsafe.mock.invocationCallOrder[0]);
+    });
+
+    it("finishes the archive without vouching for a history it left a gap in", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      interruptedForwardThenArchiveEnd();
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "both" }),
+      ).resolves.toMatchObject({ backfillPending: false });
+
+      const completion = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .find((write) => write.data.tracearrBackfillComplete === true);
+      expect(completion).toBeDefined();
+      // The archive is walked, but plays newer than it are still unread.
+      expect(completion!.data).not.toHaveProperty("watchHistorySyncedAt");
+      expect(
+        mockPrisma.mediaServer.updateMany.mock.calls.some(
+          (call) => "watchHistorySyncedAt" in (call[0] as { data: object }).data,
+        ),
+      ).toBe(false);
+    });
+  });
 
   describe("the run is reported as live while it imports", () => {
     // Settings shows a running import beside the sync status: the stored rows

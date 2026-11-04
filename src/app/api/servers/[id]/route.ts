@@ -133,6 +133,8 @@ export const PUT = withSession(async (
         // that means nothing on the new server.
         tracearrOldestPlayAt: null,
         tracearrBackfillCursorAt: null,
+        // An unfinished forward window of the old source's archive.
+        tracearrForwardResumeAt: null,
         // The wipe below empties the history, so it is unknown from the same
         // statement that switches the source. Withdrawn only after the wipe,
         // an unlink (native, no Tracearr flag to pause it) read as established

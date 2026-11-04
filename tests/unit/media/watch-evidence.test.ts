@@ -140,6 +140,10 @@ describe("restartTracearrBackfill", () => {
     // below the oldest stored row, which after a partial purge is the far end of
     // the archive — so nothing purged would be walked again.
     expect(arg.data.tracearrBackfillCursorAt).toEqual(NOW);
+    // The restarted walk reads everything older than now, so an unfinished
+    // forward window is covered by it — and would otherwise keep the play
+    // history from being re-established once the walk completes.
+    expect(arg.data).toHaveProperty("tracearrForwardResumeAt", null);
   });
 
   it("issues no UPDATE at all for an empty list", async () => {
