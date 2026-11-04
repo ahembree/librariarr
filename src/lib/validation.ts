@@ -206,8 +206,10 @@ export const cardDisplayPreferencesSchema = z.object({
 });
 
 export const dashboardLayoutSchema = z.object({
+  // Room for each card's saved display choices (`card-display.ts`, whose
+  // hidden-value bounds keep a full grid well inside it).
   layout: z.record(z.string(), z.unknown()).refine(
-    (val) => JSON.stringify(val).length <= 10_000,
+    (val) => JSON.stringify(val).length <= 32_000,
     "Layout data exceeds maximum size"
   ),
   revision: settingsRevisionSchema,

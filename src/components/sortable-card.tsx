@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ResizeHandle } from "@/components/resize-handle";
 import { VerticalResizeHandle } from "@/components/vertical-resize-handle";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { DASHBOARD_CELL_CLASS, dashboardCardStyle, StaticDashboardCard } from "@/components/dashboard-card-cell";
+import { dashboardCardStyle, StaticDashboardCard } from "@/components/dashboard-card-cell";
 import type { DropAxis, DropSide } from "@/lib/dashboard/card-drop";
 import { cn } from "@/lib/utils";
 
@@ -119,7 +119,7 @@ export function SortableCard({
           <GripVertical className="h-3.5 w-3.5" />
           Drag
         </button>
-        {heightPx != null && (
+        {heightPx != null && !isMobile && (
           <button
             type="button"
             aria-label="Auto height"
@@ -146,7 +146,7 @@ export function SortableCard({
           className={cn("pointer-events-none absolute z-30 rounded-full bg-primary", MARKER_POSITION[dropMarker.axis][dropMarker.side])}
         />
       )}
-      <div className={cn("pt-2 flex-1 min-h-0 flex flex-col", DASHBOARD_CELL_CLASS)}>{children}</div>
+      <div className="pt-2 flex-1 min-h-0 flex flex-col">{children}</div>
       {!isMobile && (
         <>
           <ResizeHandle

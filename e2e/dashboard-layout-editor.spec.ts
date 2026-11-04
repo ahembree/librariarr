@@ -64,6 +64,16 @@ function cells(page: Page): Locator {
   return grid(page).locator(":scope > div:has([data-slot=card-title])");
 }
 
+type StoredCard = { id: string; size: number; heightPx?: number; display?: unknown };
+
+async function storedCards(page: Page): Promise<StoredCard[]> {
+  const res = await page.request.get("/api/settings/dashboard-layout");
+  return ((await res.json()) as { layout: { main: StoredCard[] } }).layout.main;
+}
+
+const storedIds = async (page: Page) => (await storedCards(page)).map((c) => c.id);
+const storedCard = async (page: Page, id: string) => (await storedCards(page)).find((c) => c.id === id);
+
 function cardOrder(page: Page): Promise<string[]> {
   return cells(page).evaluateAll((els) =>
     els.map((el) => el.querySelector("[data-slot=card-title]")?.textContent?.trim() ?? ""),
@@ -198,6 +208,87 @@ test.describe("dashboard layout editor", () => {
     }
     expect(boxes[0].x).toBeGreaterThanOrEqual(card.x);
     expect(boxes[2].x + boxes[2].width).toBeLessThanOrEqual(card.x + card.width);
+
+    // The card's own dropdowns narrow and wrap to fit inside it too.
+    for (const select of await narrow.getByRole("combobox").all()) {
+      const box = await select.boundingBox();
+      if (!box) throw new Error("dropdown not on screen");
+      expect(box.x).toBeGreaterThanOrEqual(card.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
+    }
+  });
+
+  test("a card keeps its own choices through the editor, and they are saved with the layout", async ({ page }) => {
+    await openDashboard(page);
+    const card = cells(page).filter({ hasText: "Video Codec Breakdown" });
+    await card.getByRole("combobox").filter({ hasText: "Top 5" }).click();
+    await page.getByRole("option", { name: "Top 10" }).click();
+    await card.getByRole("button", { name: "Donut view" }).click();
+    await card.getByRole("button", { name: /^HEVC/ }).click();
+    await expect.poll(async () => (await storedCard(page, "video-codec"))?.display).toEqual({
+      topN: 10,
+      view: "donut",
+      hidden: ["HEVC"],
+    });
+
+    // Opening and closing the editor no longer re-creates the card.
+    const chosen = async () => ({
+      topN: await card.getByRole("combobox").filter({ hasText: /^Top|^All$/ }).textContent(),
+      donut: await card.getByRole("button", { name: "Donut view" }).getAttribute("aria-pressed"),
+    });
+    const before = await chosen();
+    await page.getByRole("button", { name: /^Customize$/ }).click();
+    await expect(page.getByRole("button", { name: "Drag to move card" })).toHaveCount(LAYOUT.length);
+    expect(await chosen()).toEqual(before);
+    await page.getByRole("button", { name: "Done" }).click();
+    expect(await chosen()).toEqual({ topN: "Top 10", donut: "true" });
+  });
+
+  test("a removed card comes back where it was with Undo", async ({ page }) => {
+    await openDashboard(page);
+    await page.getByRole("button", { name: /^Customize$/ }).click();
+    await cells(page).filter({ hasText: "Video Codec Breakdown" }).getByRole("button", { name: "Remove card" }).click();
+    await expect(cells(page)).toHaveCount(LAYOUT.length - 1);
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(cells(page)).toHaveCount(LAYOUT.length);
+    await expect.poll(() => storedIds(page)).toEqual(LAYOUT.map((c) => c.id));
+  });
+
+  test("Reset puts the default cards back, and Undo restores the layout it replaced", async ({ page }) => {
+    await openDashboard(page);
+    await page.getByRole("button", { name: /^Customize$/ }).click();
+    await page.getByRole("button", { name: "Reset" }).click();
+    await expect.poll(() => storedIds(page)).toEqual(["quality-breakdown", "top-played"]);
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect.poll(() => storedIds(page)).toEqual(LAYOUT.map((c) => c.id));
+  });
+
+  test("the size handles work from the keyboard", async ({ page }) => {
+    await openDashboard(page);
+    await page.getByRole("button", { name: /^Customize$/ }).click();
+    const quality = cells(page).filter({ hasText: "Quality Breakdown" });
+
+    await quality.getByRole("separator", { name: "Card width" }).focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await storedCard(page, "quality-breakdown"))?.size).toBe(5);
+    await expect(quality.getByRole("separator", { name: "Card width" })).toHaveAttribute("aria-valuenow", "5");
+
+    await quality.getByRole("separator", { name: "Card height" }).focus();
+    await page.keyboard.press("End");
+    await expect.poll(async () => (await storedCard(page, "quality-breakdown"))?.heightPx).toBe(800);
+    await expect(quality).toHaveCSS("height", "800px");
+  });
+
+  test("a set height does not apply on a phone", async ({ page }) => {
+    await openDashboard(page);
+    const topPlayed = cells(page).filter({ hasText: "Most Played Movies" });
+    await expect(topPlayed).toHaveCSS("height", "250px");
+    // Narrowed to a phone (opened there, the dashboard link is in the closed drawer).
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => topPlayed.evaluate((el) => (el as HTMLElement).style.height)).toBe("");
+    expect((await topPlayed.boundingBox())?.height ?? 0).toBeGreaterThan(250);
   });
 
   test("Auto height gives a card with a set height its natural height back", async ({ page }) => {

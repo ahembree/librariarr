@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useMemo } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useChipColors } from "@/components/chip-color-provider";
-import { StaticDashboardCard } from "@/components/dashboard-card-cell";
+import { CARD_HOST_CLASS, StaticDashboardCard } from "@/components/dashboard-card-cell";
 import { StatsCards } from "@/components/stats-cards";
 import { SyncStatus } from "@/components/sync-status";
 import { QualityChart } from "@/components/quality-chart";
@@ -17,9 +18,49 @@ import {
   type CardEntry,
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
+import { sameCardDisplay, type CardDisplay } from "@/lib/dashboard/card-display";
 import { lazyComponent } from "@/components/lazy-component";
 import { CustomCardSlot } from "@/components/dashboard/custom-card-slot";
 import { formatChannels } from "@/lib/format";
+
+/**
+ * The DOM node each card's content renders into (through a portal) for as
+ * long as the card is on the grid. A cell — plain, or the layout editor's
+ * frame — only holds it, so entering or leaving the editor moves the node
+ * into the new cell instead of re-creating the card: the card keeps its own
+ * state and its data. (Re-created, every card fetched again and lost what its
+ * own controls had set, on every Customize and Done.)
+ */
+class CardHosts {
+  private readonly hosts = new Map<string, HTMLDivElement>();
+
+  get(id: string): HTMLDivElement | null {
+    if (typeof document === "undefined") return null;
+    let host = this.hosts.get(id);
+    if (!host) {
+      host = document.createElement("div");
+      host.className = CARD_HOST_CLASS;
+      this.hosts.set(id, host);
+    }
+    return host;
+  }
+
+  /** Forget the hosts of cards no longer on the grid (a card added again starts afresh). */
+  keepOnly(ids: ReadonlySet<string>): void {
+    for (const id of [...this.hosts.keys()]) if (!ids.has(id)) this.hosts.delete(id);
+  }
+}
+
+/** Where a card's host sits in a cell: moved in on mount, never re-created. */
+function CardSlot({ host }: { host: HTMLDivElement | null }) {
+  const attach = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el && host && host.parentNode !== el) el.appendChild(host);
+    },
+    [host],
+  );
+  return <div ref={attach} className="contents" />;
+}
 
 /** What the grid draws while the edit-mode grid's code loads: the cards as they were. */
 const StaticGridContext = createContext<{ cards: CardEntry[]; renderCard: (card: CardEntry) => React.ReactNode } | null>(null);
@@ -123,16 +164,22 @@ interface Stats {
   }[];
 }
 
+type MediaType = "MOVIE" | "SERIES" | "MUSIC";
+
 interface DashboardCardGridProps {
   cards: CardEntry[];
   stats: Stats;
   editMode: boolean;
-  filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  filterType?: MediaType;
   lockedFilterType?: boolean;
   serverId?: string;
   servers?: { id: string; name: string; type?: string }[];
   availableTypes?: string[];
   onLayoutChange: (cards: CardEntry[]) => void;
+  /** A card's display choices changed (saved with the layout). */
+  onDisplayChange?: (cardId: string, display: CardDisplay | undefined) => void;
+  /** A card was removed in the editor; without it the card is simply dropped from the layout. */
+  onCardRemove?: (cardId: string) => void;
   onMovieClick: (movieId: string) => void;
   onSeriesClick: (seriesName: string) => void;
   onArtistClick: (mediaItemId: string) => void;
@@ -143,7 +190,211 @@ interface DashboardCardGridProps {
   onConfigChange?: (cardId: string, config: CustomCardConfig) => void;
 }
 
-export function DashboardCardGrid({
+/** Everything a card's content reads besides its own entry, built once per change of any of it. */
+type CardContext = Omit<DashboardCardGridProps, "cards" | "editMode" | "onLayoutChange" | "onCardRemove"> & {
+  noMusicTypes?: string[];
+  dynamicRangeHex: Record<string, string>;
+  audioCodecHex: Record<string, string>;
+};
+
+function renderCard(card: CardEntry, ctx: CardContext): React.ReactNode {
+  const {
+    stats, filterType, lockedFilterType, serverId, servers, availableTypes, noMusicTypes,
+    dynamicRangeHex, audioCodecHex, onConfigChange,
+  } = ctx;
+  const display = card.display;
+  const onDisplayChange = ctx.onDisplayChange
+    ? (next: CardDisplay | undefined) => ctx.onDisplayChange?.(card.id, next)
+    : undefined;
+
+  if (isCustomCardId(card.id) && card.config) {
+    return (
+      <CustomCardSlot
+        config={card.config}
+        filterType={filterType}
+        lockedFilterType={lockedFilterType}
+        serverId={serverId}
+        availableTypes={availableTypes}
+        onEditConfig={onConfigChange ? (newConfig) => onConfigChange(card.id, newConfig) : undefined}
+        display={display}
+        onDisplayChange={onDisplayChange}
+      />
+    );
+  }
+
+  const breakdownProps = { filterType, lockedFilterType, display, onDisplayChange };
+
+  switch (card.id) {
+    case "stats":
+      return <StatsCards stats={stats} availableTypes={availableTypes} />;
+    case "sync-status":
+      // The stats refresh during and after a sync is the page's own.
+      return <SyncStatus />;
+    case "quality-breakdown":
+      return (
+        <QualityChart
+          breakdown={stats.qualityBreakdown.filter((b) => b.type !== "MUSIC")}
+          availableTypes={noMusicTypes}
+          {...breakdownProps}
+        />
+      );
+    case "video-codec":
+      return (
+        <BreakdownChart
+          title="Video Codec Breakdown"
+          icon={getCardDefinition("video-codec")?.icon}
+          breakdown={stats.videoCodecBreakdown
+            .filter((b) => b.type !== "MUSIC")
+            .map((b) => ({
+              value: b.videoCodec,
+              type: b.type,
+              _count: b._count,
+            }))}
+          nullLabel="Unknown"
+          availableTypes={noMusicTypes}
+          {...breakdownProps}
+        />
+      );
+    case "audio-codec":
+      return (
+        <BreakdownChart
+          title="Audio Codec Breakdown"
+          icon={getCardDefinition("audio-codec")?.icon}
+          breakdown={stats.audioCodecBreakdown.map((b) => ({
+            value: b.audioCodec,
+            type: b.type,
+            _count: b._count,
+          }))}
+          nullLabel="Unknown"
+          // Codecs are upper-cased by the default label transform, which is
+          // how the chip-colour keys are spelled.
+          hexColors={audioCodecHex}
+          availableTypes={availableTypes}
+          {...breakdownProps}
+        />
+      );
+    case "content-rating":
+      return (
+        <BreakdownChart
+          title="Content Rating Breakdown"
+          icon={getCardDefinition("content-rating")?.icon}
+          breakdown={stats.contentRatingBreakdown
+            .filter((b) => b.type !== "MUSIC")
+            .map((b) => ({
+              value: b.contentRating,
+              type: b.type,
+              _count: b._count,
+            }))}
+          nullLabel="Not Rated"
+          availableTypes={noMusicTypes}
+          {...breakdownProps}
+        />
+      );
+    case "top-played":
+      return (
+        <TopPlayed
+          topMovies={stats.topMovies ?? []}
+          topSeries={stats.topSeries ?? []}
+          topMusic={stats.topMusic ?? []}
+          filterType={filterType}
+          onMovieClick={ctx.onMovieClick}
+          onSeriesClick={ctx.onSeriesClick}
+          onArtistClick={ctx.onArtistClick}
+        />
+      );
+    case "dynamic-range":
+      return (
+        <BreakdownChart
+          title="Dynamic Range Breakdown"
+          icon={getCardDefinition("dynamic-range")?.icon}
+          breakdown={(stats.dynamicRangeBreakdown ?? [])
+            .filter((b) => b.type !== "MUSIC")
+            .map((b) => ({
+              value: b.dynamicRange,
+              type: b.type,
+              _count: b._count,
+            }))}
+          nullLabel="Unknown"
+          hexColors={dynamicRangeHex}
+          // Dynamic-range values are normalized at sync time ("Dolby
+          // Vision", "HDR10+", …) and the chip-color keys match them
+          // case-sensitively — the default toUpperCase transform would
+          // break the lookup (and shout "DOLBY VISION").
+          labelTransform={(v) => v}
+          availableTypes={noMusicTypes}
+          {...breakdownProps}
+        />
+      );
+    case "audio-channels":
+      return (
+        <BreakdownChart
+          title="Audio Channels Breakdown"
+          icon={getCardDefinition("audio-channels")?.icon}
+          breakdown={(stats.audioChannelsBreakdown ?? []).map((b) => ({
+            value: b.audioChannels == null ? null : formatChannels(b.audioChannels, { verbose: true }),
+            type: b.type,
+            _count: b._count,
+          }))}
+          nullLabel="Unknown"
+          // formatChannels already returns display labels ("Stereo (2.0)");
+          // the default upper-casing would shout them.
+          labelTransform={(v) => v}
+          availableTypes={availableTypes}
+          {...breakdownProps}
+        />
+      );
+    case "genre":
+      return (
+        <BreakdownChart
+          title="Genre Breakdown"
+          icon={getCardDefinition("genre")?.icon}
+          breakdown={stats.genreBreakdown ?? []}
+          nullLabel="Unknown"
+          availableTypes={availableTypes}
+          labelTransform={(v) => v.charAt(0).toUpperCase() + v.slice(1).toLowerCase()}
+          {...breakdownProps}
+        />
+      );
+    case "recently-added":
+      return (
+        <RecentlyAdded
+          filterType={filterType}
+          lockedFilterType={lockedFilterType}
+          serverId={serverId}
+          servers={servers}
+          availableTypes={availableTypes}
+          onMovieClick={ctx.onMovieClick}
+          onEpisodeClick={ctx.onEpisodeClick}
+          onTrackClick={ctx.onTrackClick}
+          onSeasonClick={ctx.onSeasonClick}
+          onAlbumClick={ctx.onAlbumClick}
+        />
+      );
+    case "seerr-requests":
+      return <SeerrRequestStats />;
+    default:
+      return null;
+  }
+}
+
+/**
+ * One card's content. Redrawn only when what it shows changes — the shared
+ * context, or its own config or display choices — not when the card is moved
+ * or resized, the editor opens, or a drag's marker moves (each of which
+ * redrew every chart on the grid).
+ */
+const CardBody = memo(
+  function CardBody({ card, ctx }: { card: CardEntry; ctx: CardContext }) {
+    return renderCard(card, ctx);
+  },
+  (prev, next) =>
+    prev.ctx === next.ctx &&
+    prev.card.id === next.card.id &&
+    sameCardDisplay(prev.card.display, next.card.display) &&
+    (prev.card.config === next.card.config || JSON.stringify(prev.card.config) === JSON.stringify(next.card.config)),
+);
+
+export const DashboardCardGrid = memo(function DashboardCardGrid({
   cards,
   stats,
   editMode,
@@ -153,6 +404,8 @@ export function DashboardCardGrid({
   servers,
   availableTypes,
   onLayoutChange,
+  onDisplayChange,
+  onCardRemove,
   onMovieClick,
   onSeriesClick,
   onArtistClick,
@@ -163,203 +416,57 @@ export function DashboardCardGrid({
   onConfigChange,
 }: DashboardCardGridProps) {
   const { colors: chipColors } = useChipColors();
+  const dynamicRangeHex = chipColors.dynamicRange;
+  const audioCodecHex = chipColors.audioCodec;
 
-  // Build hex color maps for breakdown charts from chip color context
-  const dynamicRangeHex = useMemo(() => chipColors.dynamicRange, [chipColors.dynamicRange]);
-  const audioCodecHex = useMemo(() => chipColors.audioCodec, [chipColors.audioCodec]);
+  const ctx = useMemo<CardContext>(
+    () => ({
+      stats, filterType, lockedFilterType, serverId, servers, availableTypes,
+      noMusicTypes: availableTypes?.filter((t) => t !== "MUSIC"),
+      dynamicRangeHex, audioCodecHex,
+      onDisplayChange, onMovieClick, onSeriesClick, onArtistClick, onEpisodeClick, onTrackClick,
+      onSeasonClick, onAlbumClick, onConfigChange,
+    }),
+    [
+      stats, filterType, lockedFilterType, serverId, servers, availableTypes, dynamicRangeHex, audioCodecHex,
+      onDisplayChange, onMovieClick, onSeriesClick, onArtistClick, onEpisodeClick, onTrackClick,
+      onSeasonClick, onAlbumClick, onConfigChange,
+    ],
+  );
 
-  const noMusicTypes = availableTypes?.filter((t) => t !== "MUSIC");
+  const [hosts] = useState(() => new CardHosts());
+  const ids = useMemo(() => new Set(cards.map((c) => c.id)), [cards]);
+  useEffect(() => hosts.keepOnly(ids), [hosts, ids]);
 
-  function renderCard(cardId: string, config?: CustomCardConfig) {
-    if (isCustomCardId(cardId) && config) {
-      return (
-        <CustomCardSlot
-          config={config}
-          filterType={filterType}
-          lockedFilterType={lockedFilterType}
-          serverId={serverId}
-          availableTypes={availableTypes}
-          onEditConfig={onConfigChange ? (newConfig) => onConfigChange(cardId, newConfig) : undefined}
-        />
-      );
-    }
-
-    switch (cardId) {
-      case "stats":
-        return <StatsCards stats={stats} availableTypes={availableTypes} />;
-      case "sync-status":
-        // The stats refresh during and after a sync is the page's own.
-        return <SyncStatus />;
-      case "quality-breakdown":
-        return (
-          <QualityChart
-            breakdown={stats.qualityBreakdown.filter((b) => b.type !== "MUSIC")}
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={noMusicTypes}
-          />
-        );
-      case "video-codec":
-        return (
-          <BreakdownChart
-            title="Video Codec Breakdown"
-            icon={getCardDefinition("video-codec")?.icon}
-            breakdown={stats.videoCodecBreakdown
-              .filter((b) => b.type !== "MUSIC")
-              .map((b) => ({
-                value: b.videoCodec,
-                type: b.type,
-                _count: b._count,
-              }))}
-            nullLabel="Unknown"
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={noMusicTypes}
-          />
-        );
-      case "audio-codec":
-        return (
-          <BreakdownChart
-            title="Audio Codec Breakdown"
-            icon={getCardDefinition("audio-codec")?.icon}
-            breakdown={stats.audioCodecBreakdown.map((b) => ({
-              value: b.audioCodec,
-              type: b.type,
-              _count: b._count,
-            }))}
-            nullLabel="Unknown"
-            // Codecs are upper-cased by the default label transform, which is
-            // how the chip-colour keys are spelled.
-            hexColors={audioCodecHex}
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={availableTypes}
-          />
-        );
-      case "content-rating":
-        return (
-          <BreakdownChart
-            title="Content Rating Breakdown"
-            icon={getCardDefinition("content-rating")?.icon}
-            breakdown={stats.contentRatingBreakdown
-              .filter((b) => b.type !== "MUSIC")
-              .map((b) => ({
-                value: b.contentRating,
-                type: b.type,
-                _count: b._count,
-              }))}
-            nullLabel="Not Rated"
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={noMusicTypes}
-          />
-        );
-      case "top-played":
-        return (
-          <TopPlayed
-            topMovies={stats.topMovies ?? []}
-            topSeries={stats.topSeries ?? []}
-            topMusic={stats.topMusic ?? []}
-            filterType={filterType}
-            onMovieClick={onMovieClick}
-            onSeriesClick={onSeriesClick}
-            onArtistClick={onArtistClick}
-          />
-        );
-      case "dynamic-range":
-        return (
-          <BreakdownChart
-            title="Dynamic Range Breakdown"
-            icon={getCardDefinition("dynamic-range")?.icon}
-            breakdown={(stats.dynamicRangeBreakdown ?? [])
-              .filter((b) => b.type !== "MUSIC")
-              .map((b) => ({
-                value: b.dynamicRange,
-                type: b.type,
-                _count: b._count,
-              }))}
-            nullLabel="Unknown"
-            hexColors={dynamicRangeHex}
-            // Dynamic-range values are normalized at sync time ("Dolby
-            // Vision", "HDR10+", …) and the chip-color keys match them
-            // case-sensitively — the default toUpperCase transform would
-            // break the lookup (and shout "DOLBY VISION").
-            labelTransform={(v) => v}
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={noMusicTypes}
-          />
-        );
-      case "audio-channels":
-        return (
-          <BreakdownChart
-            title="Audio Channels Breakdown"
-            icon={getCardDefinition("audio-channels")?.icon}
-            breakdown={(stats.audioChannelsBreakdown ?? []).map((b) => ({
-              value: b.audioChannels == null ? null : formatChannels(b.audioChannels, { verbose: true }),
-              type: b.type,
-              _count: b._count,
-            }))}
-            nullLabel="Unknown"
-            // formatChannels already returns display labels ("Stereo (2.0)");
-            // the default upper-casing would shout them.
-            labelTransform={(v) => v}
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={availableTypes}
-          />
-        );
-      case "genre":
-        return (
-          <BreakdownChart
-            title="Genre Breakdown"
-            icon={getCardDefinition("genre")?.icon}
-            breakdown={stats.genreBreakdown ?? []}
-            nullLabel="Unknown"
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            availableTypes={availableTypes}
-            labelTransform={(v) => v.charAt(0).toUpperCase() + v.slice(1).toLowerCase()}
-          />
-        );
-      case "recently-added":
-        return (
-          <RecentlyAdded
-            filterType={filterType}
-            lockedFilterType={lockedFilterType}
-            serverId={serverId}
-            servers={servers}
-            availableTypes={availableTypes}
-            onMovieClick={onMovieClick}
-            onEpisodeClick={onEpisodeClick}
-            onTrackClick={onTrackClick}
-            onSeasonClick={onSeasonClick}
-            onAlbumClick={onAlbumClick}
-          />
-        );
-      case "seerr-requests":
-        return <SeerrRequestStats />;
-      default:
-        return null;
-    }
-  }
-
-  const renderEntry = (card: CardEntry) => renderCard(card.id, card.config);
+  const renderSlot = useCallback((card: CardEntry) => <CardSlot host={hosts.get(card.id)} />, [hosts]);
+  const removeCard = useCallback(
+    (cardId: string) =>
+      onCardRemove ? onCardRemove(cardId) : onLayoutChange(cards.filter((c) => c.id !== cardId)),
+    [cards, onCardRemove, onLayoutChange],
+  );
+  const staticGrid = useMemo(() => ({ cards, renderCard: renderSlot }), [cards, renderSlot]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-      {editMode ? (
-        <StaticGridContext.Provider value={{ cards, renderCard: renderEntry }}>
-          <SortableCardGrid
-            cards={cards}
-            limitsOf={cardLimits}
-            renderCard={renderEntry}
-            onLayoutChange={onLayoutChange}
-          />
-        </StaticGridContext.Provider>
-      ) : (
-        <StaticCards cards={cards} renderCard={renderEntry} />
-      )}
-    </div>
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+        {editMode ? (
+          <StaticGridContext.Provider value={staticGrid}>
+            <SortableCardGrid
+              cards={cards}
+              limitsOf={cardLimits}
+              renderCard={renderSlot}
+              onLayoutChange={onLayoutChange}
+              onRemove={removeCard}
+            />
+          </StaticGridContext.Provider>
+        ) : (
+          <StaticCards cards={cards} renderCard={renderSlot} />
+        )}
+      </div>
+      {cards.map((card) => {
+        const host = hosts.get(card.id);
+        return host ? createPortal(<CardBody card={card} ctx={ctx} />, host, card.id) : null;
+      })}
+    </>
   );
-}
+});

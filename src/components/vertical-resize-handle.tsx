@@ -2,11 +2,10 @@
 
 import { useCallback, useRef, useState, useEffect } from "react";
 import { MIN_CARD_HEIGHT, MAX_CARD_HEIGHT } from "@/lib/dashboard/card-registry";
-
-const HEIGHT_STEP = 50;
+import { HEIGHT_STEP_PX, heightForKey } from "@/lib/dashboard/resize-keys";
 
 function snapToStep(px: number): number {
-  return Math.round(px / HEIGHT_STEP) * HEIGHT_STEP;
+  return Math.round(px / HEIGHT_STEP_PX) * HEIGHT_STEP_PX;
 }
 
 interface VerticalResizeHandleProps {
@@ -114,18 +113,42 @@ export function VerticalResizeHandle({
     };
   }, [isDragging, onResize, onPreviewChange]);
 
+  // The keyboard's way to set the height: a focusable separator that
+  // ArrowUp/ArrowDown move a step at a time, from the card's current height
+  // (measured when it has none set).
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const card = handleRef.current?.parentElement;
+      const current = currentHeight ?? card?.getBoundingClientRect().height ?? MIN_CARD_HEIGHT;
+      const next = heightForKey(e.key, current);
+      if (next === null) return;
+      e.preventDefault();
+      if (next !== currentHeight) onResize(next);
+    },
+    [currentHeight, onResize]
+  );
+
   return (
     <>
       {/* In the gap below the card, clear of its content */}
       <div
         ref={handleRef}
-        title="Drag to set the height · double-click for auto height"
-        className="absolute -bottom-5 left-0 right-0 h-4 cursor-row-resize z-20 rounded group/vresize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Card height"
+        aria-valuemin={MIN_CARD_HEIGHT}
+        aria-valuemax={MAX_CARD_HEIGHT}
+        aria-valuenow={currentHeight}
+        aria-valuetext={currentHeight != null ? `${currentHeight} pixels` : "Auto"}
+        tabIndex={0}
+        title="Drag, or use the arrow keys, to set the height · double-click for auto height"
+        className="absolute -bottom-5 left-0 right-0 h-4 cursor-row-resize z-20 rounded group/vresize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none outline-none focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onDoubleClick={handleDoubleClick}
+        onKeyDown={handleKeyDown}
       >
-        <div className="h-0.5 w-8 rounded-full bg-muted-foreground/40 group-hover/vresize:bg-primary transition-colors" />
+        <div className="h-0.5 w-8 rounded-full bg-muted-foreground/40 group-hover/vresize:bg-primary group-focus-visible/vresize:bg-primary transition-colors" />
       </div>
 
       {isDragging && (

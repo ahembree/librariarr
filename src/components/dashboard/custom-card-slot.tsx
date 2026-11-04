@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { lazyComponent } from "@/components/lazy-component";
 import { ChartCardSkeleton } from "@/components/skeletons";
-import { reconcileSelectedType } from "@/lib/dashboard/server-selection";
+import { useDashboardCardDisplay } from "@/hooks/use-dashboard-card-display";
+import { effectiveCardType, toggleHiddenValue, type CardDisplay, type CardMediaType } from "@/lib/dashboard/card-display";
 import type { CustomCardConfig } from "@/lib/dashboard/card-registry";
 import {
   customCardBatcher,
@@ -16,6 +17,8 @@ import {
 // Loaded on demand: it is the only dashboard card built on recharts (~500 KB
 // of script), and most dashboards have no custom card at all, so importing it
 // here put the whole chart library on the landing page for nothing.
+const NO_HIDDEN: readonly string[] = [];
+
 const CustomChartCard = lazyComponent(
   () => import("@/components/custom-chart-card").then((m) => m.CustomChartCard),
   ChartCardSkeleton,
@@ -28,6 +31,9 @@ interface CustomCardSlotProps {
   serverId?: string;
   availableTypes?: string[];
   onEditConfig?: (config: CustomCardConfig) => void;
+  /** The card's saved display choices (type pick, hidden values) and their setter; the dialog's preview keeps its own. */
+  display?: CardDisplay;
+  onDisplayChange?: (next: CardDisplay | undefined) => void;
 }
 
 /**
@@ -47,21 +53,17 @@ export function CustomCardSlot({
   serverId,
   availableTypes,
   onEditConfig,
+  display,
+  onDisplayChange,
 }: CustomCardSlotProps) {
-  const [localFilter, setLocalFilter] = useState<string>(externalFilterType ?? "ALL");
-  // Follow the Insights type selector, as the built-in cards do; the card's
-  // own selector still overrides it until the Insights one changes again.
-  // Without this the dashboard's type filter did nothing to custom cards.
-  const [prevExternalFilter, setPrevExternalFilter] = useState(externalFilterType);
-  if (prevExternalFilter !== externalFilterType) {
-    setPrevExternalFilter(externalFilterType);
-    setLocalFilter(externalFilterType ?? "ALL");
-  }
-
-  // The card's own selector hides once one type is left, so a local choice of
-  // a type that has since gone must not stay applied with no way to clear it.
-  const effectiveLocal = reconcileSelectedType(localFilter, availableTypes ?? [], "ALL");
-  const filterType = lockedFilterType ? externalFilterType : (effectiveLocal === "ALL" ? undefined : effectiveLocal);
+  // The card follows the Insights type selector, as the built-in cards do;
+  // its own pick overrides it until the Insights one changes again. A pick of
+  // a type that has since left the library is ignored (the card's selector
+  // hides once one type is left, so it could not be cleared there).
+  const [choices, updateChoices] = useDashboardCardDisplay(display, onDisplayChange, externalFilterType);
+  const localType = effectiveCardType(choices.type, externalFilterType as CardMediaType | undefined, availableTypes);
+  const localFilter = localType ?? "ALL";
+  const filterType = lockedFilterType ? externalFilterType : localType;
 
   const request = customCardRequest(config, { serverId, filterType });
   const requestKey = customCardRequestKey(request);
@@ -93,7 +95,9 @@ export function CustomCardSlot({
       lockedFilterType={lockedFilterType}
       availableTypes={availableTypes}
       localFilter={localFilter}
-      onLocalFilterChange={setLocalFilter}
+      onLocalFilterChange={(value) => updateChoices({ type: value === "ALL" ? "ALL" : (value as CardMediaType) })}
+      hidden={choices.hidden ?? NO_HIDDEN}
+      onToggleHidden={(label) => updateChoices({ hidden: toggleHiddenValue(choices.hidden, label) })}
       loading={loading}
       failed={!loading && data === null}
       data={data}

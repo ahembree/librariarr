@@ -41,6 +41,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { isValidCardDisplay, normalizeCardDisplay, type CardDisplay } from "./card-display";
 
 /** Curated set of icons available for custom dashboard cards. Storing the name (string)
  *  in the config serializes cleanly across reload; the runtime maps name → component. */
@@ -134,6 +135,8 @@ export interface CardEntry {
   size: number;
   heightPx?: number;
   config?: CustomCardConfig;
+  /** The card's own display choices (`card-display.ts`); absent at the defaults. */
+  display?: CardDisplay;
 }
 
 export type DashboardLayout = Record<DashboardTab, CardEntry[]>;
@@ -409,7 +412,14 @@ function normalizeTab(raw: unknown[], tab: DashboardTab): CardEntry[] {
           ? Math.max(CUSTOM_CARD_DEFINITION.minSize, Math.min(CUSTOM_CARD_DEFINITION.maxSize, entry.size))
           : CUSTOM_CARD_DEFINITION.defaultSize;
       const heightPx = clampHeight(entry.heightPx);
-      result.push({ id: entry.id, size, ...(heightPx != null && { heightPx }), config: entry.config });
+      const display = normalizeCardDisplay(entry.display);
+      result.push({
+        id: entry.id,
+        size,
+        ...(heightPx != null && { heightPx }),
+        config: entry.config,
+        ...(display && { display }),
+      });
       continue;
     }
 
@@ -423,7 +433,8 @@ function normalizeTab(raw: unknown[], tab: DashboardTab): CardEntry[] {
         ? Math.max(def.minSize, Math.min(def.maxSize, entry.size))
         : CARD_DEFAULTS.get(entry.id) ?? 12;
     const heightPx = clampHeight(entry.heightPx);
-    result.push({ id: entry.id, size, ...(heightPx != null && { heightPx }) });
+    const display = normalizeCardDisplay(entry.display);
+    result.push({ id: entry.id, size, ...(heightPx != null && { heightPx }), ...(display && { display }) });
   }
   return result;
 }
@@ -461,6 +472,7 @@ export function isValidLayout(layout: unknown): layout is DashboardLayout {
       const e = entry as Record<string, unknown>;
       if (typeof e.id !== "string" || typeof e.size !== "number") return false;
       if (e.heightPx !== undefined && (typeof e.heightPx !== "number" || e.heightPx < MIN_CARD_HEIGHT || e.heightPx > MAX_CARD_HEIGHT)) return false;
+      if (e.display !== undefined && !isValidCardDisplay(e.display)) return false;
 
       if (isCustomCardId(e.id)) {
         if (!isValidCustomConfig(e.config)) return false;

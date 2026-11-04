@@ -27,7 +27,7 @@ import {
   isCustomCardId,
   type CardEntry,
 } from "@/lib/dashboard/card-registry";
-import { customCardTitle } from "@/lib/dashboard/custom-dimensions";
+import { cardLabel } from "@/lib/dashboard/card-label";
 import {
   adjacentCardId,
   keyboardDropSide,
@@ -43,6 +43,8 @@ export interface SortableCardGridProps {
   limitsOf: (card: CardEntry) => { minSize: number; maxSize: number };
   renderCard: (card: CardEntry) => React.ReactNode;
   onLayoutChange: (cards: CardEntry[]) => void;
+  /** Remove a card (the dashboard offers to undo it). */
+  onRemove: (cardId: string) => void;
 }
 
 /**
@@ -85,12 +87,11 @@ function sameMarker(a: DropMarker | null, b: DropMarker | null): boolean {
 function cardChrome(card: CardEntry): { label: string; icon: LucideIcon } {
   if (isCustomCardId(card.id)) {
     return {
-      label: card.config ? customCardTitle(card.config) : CUSTOM_CARD_DEFINITION.label,
+      label: cardLabel(card),
       icon: (card.config?.icon && CUSTOM_CARD_ICONS[card.config.icon]) || CUSTOM_CARD_DEFINITION.icon,
     };
   }
-  const def = getCardDefinition(card.id);
-  return { label: def?.label ?? "Card", icon: def?.icon ?? LayoutDashboard };
+  return { label: cardLabel(card), icon: getCardDefinition(card.id)?.icon ?? LayoutDashboard };
 }
 
 /**
@@ -104,7 +105,7 @@ function cardChrome(card: CardEntry): { label: string; icon: LucideIcon } {
  * reflow until the drop, and a small label follows the pointer instead of the
  * whole card.
  */
-export function SortableCardGrid({ cards, limitsOf, renderCard, onLayoutChange }: SortableCardGridProps) {
+export function SortableCardGrid({ cards, limitsOf, renderCard, onLayoutChange, onRemove }: SortableCardGridProps) {
   const ids = useMemo(() => cards.map((c) => c.id), [cards]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [marker, setMarker] = useState<DropMarker | null>(null);
@@ -218,7 +219,7 @@ export function SortableCardGrid({ cards, limitsOf, renderCard, onLayoutChange }
               maxSize={maxSize}
               editMode
               dropMarker={marker?.id === card.id ? marker : null}
-              onRemove={() => onLayoutChange(cards.filter((c) => c.id !== card.id))}
+              onRemove={() => onRemove(card.id)}
               onResize={(newSize) => update(card.id, (c) => ({ ...c, size: newSize }))}
               onHeightResize={(newHeight) => update(card.id, (c) => ({ ...c, heightPx: newHeight }))}
               onHeightReset={() =>

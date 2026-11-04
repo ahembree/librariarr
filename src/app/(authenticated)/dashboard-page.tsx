@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, startTransition } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore, startTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,8 +28,10 @@ import {
   type DashboardLayout,
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
+import { clearTypePicks, type CardDisplay } from "@/lib/dashboard/card-display";
+import { cardLabel } from "@/lib/dashboard/card-label";
 import { lazyComponent } from "@/components/lazy-component";
-import { AlertCircle, Check, Film, Music, Pencil, Server, Tv } from "lucide-react";
+import { AlertCircle, Check, Film, Music, Pencil, RotateCcw, Server, Tv } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
@@ -135,6 +137,11 @@ const CustomCardDialog = lazyComponent(
 // Cards that became fixed dashboard zones — excluded from the customizable
 // Insights grid (and from its add-card dropdown).
 const FIXED_ZONE_CARDS = ["stats", "sync-status", "recently-added"];
+
+/** The Insights cards of a layout: its "main" tab without the cards that became fixed zones. */
+function insightsOf(layout: DashboardLayout): CardEntry[] {
+  return layout.main.filter((c) => !FIXED_ZONE_CARDS.includes(c.id));
+}
 
 /** Zone heading: mono eyebrow label + optional right-aligned controls. */
 function SectionHeader({ label, children }: { label: string; children?: React.ReactNode }) {
@@ -407,17 +414,27 @@ export function DashboardPage() {
     void (async () => { await fetchStats(); })();
   }, [selectedServerId, fetchStats]);
 
-  const resolvedLayout = resolveLayout(layout) ?? getDefaultLayout();
+  // Resolved once per saved layout, not on every render: a fresh copy of the
+  // cards redrew every Insights chart whenever anything on the page changed.
+  const resolvedLayout = useMemo(() => resolveLayout(layout) ?? getDefaultLayout(), [layout]);
   // The Insights grid is the customizable remainder of the old "main" tab
   // layout; cards that became fixed zones above it are filtered out.
-  const insightCards = resolvedLayout.main.filter((c) => !FIXED_ZONE_CARDS.includes(c.id));
+  const insightCards = useMemo(() => insightsOf(resolvedLayout), [resolvedLayout]);
+  // The layout as last rendered, for the editing callbacks: they stay the
+  // same functions across edits (the grid and its cards are memoised on
+  // them) and still start from the current cards.
+  const layoutRef = useRef(resolvedLayout);
+  useLayoutEffect(() => {
+    layoutRef.current = resolvedLayout;
+  }, [resolvedLayout]);
 
   const updateInsights = useCallback(
     (newCards: CardEntry[]) => {
       const newLayout = {
-        ...resolvedLayout,
+        ...layoutRef.current,
         main: newCards,
       };
+      layoutRef.current = newLayout;
 
       // A rejected save (e.g. layout-size cap) would otherwise look applied
       // and silently evaporate on reload.
@@ -448,7 +465,68 @@ export function DashboardPage() {
           toast.error("Failed to save dashboard layout");
         });
     },
-    [resolvedLayout, shell]
+    [shell]
+  );
+
+  /** A card's display choices (view, Top N, type pick, hidden values), saved with the layout. */
+  const handleDisplayChange = useCallback(
+    (cardId: string, display: CardDisplay | undefined) => {
+      updateInsights(
+        insightsOf(layoutRef.current).map((c) => {
+          if (c.id !== cardId) return c;
+          const { display: _old, ...rest } = c;
+          void _old;
+          return display ? { ...rest, display } : rest;
+        }),
+      );
+    },
+    [updateInsights],
+  );
+
+  /** Remove a card, with an Undo that puts it back where it was. */
+  const handleCardRemove = useCallback(
+    (cardId: string) => {
+      const cards = insightsOf(layoutRef.current);
+      const index = cards.findIndex((c) => c.id === cardId);
+      if (index === -1) return;
+      const removed = cards[index];
+      updateInsights(cards.filter((c) => c.id !== cardId));
+      toast(`Removed ${cardLabel(removed)}`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            const now = insightsOf(layoutRef.current);
+            if (now.some((c) => c.id === removed.id)) return;
+            const at = Math.min(index, now.length);
+            updateInsights([...now.slice(0, at), removed, ...now.slice(at)]);
+          },
+        },
+      });
+    },
+    [updateInsights],
+  );
+
+  /** Put the default Insights cards back, with an Undo that restores the layout it replaced. */
+  const handleResetLayout = useCallback(() => {
+    const previous = insightsOf(layoutRef.current);
+    updateInsights(insightsOf(getDefaultLayout()));
+    toast("Insights reset to the default layout", {
+      action: { label: "Undo", onClick: () => updateInsights(previous) },
+    });
+  }, [updateInsights]);
+
+  /**
+   * The Insights type filter: every card follows it, so a change drops each
+   * card's own type pick (one save, and only if a card had one).
+   */
+  const handleMediaTypeChange = useCallback(
+    (value: string) => {
+      setSelectedMediaType(value);
+      const cards = insightsOf(layoutRef.current);
+      const cleared = clearTypePicks(cards);
+      if (cleared !== cards) updateInsights(cleared);
+    },
+    [updateInsights],
   );
 
   const handleMovieClick = useCallback((movieId: string) => {
@@ -492,11 +570,11 @@ export function DashboardPage() {
     (config: CustomCardConfig) => {
       const id = `custom-${generateId()}`;
       updateInsights([
-        ...insightCards,
+        ...insightsOf(layoutRef.current),
         { id, size: CUSTOM_CARD_DEFINITION.defaultSize, config },
       ]);
     },
-    [insightCards, updateInsights]
+    [updateInsights]
   );
 
   const handleConfigChange = useCallback(
@@ -511,12 +589,12 @@ export function DashboardPage() {
   const handleConfigSave = useCallback(
     (newConfig: CustomCardConfig) => {
       if (!editingCustomCard) return;
-      updateInsights(insightCards.map((c) =>
+      updateInsights(insightsOf(layoutRef.current).map((c) =>
         c.id === editingCustomCard.cardId ? { ...c, config: newConfig } : c
       ));
       setEditingCustomCard(null);
     },
-    [editingCustomCard, insightCards, updateInsights]
+    [editingCustomCard, updateInsights]
   );
 
   if (!stats && statsFailed) {
@@ -657,7 +735,7 @@ export function DashboardPage() {
             {insightsReady && (availableTypes.length === 0 || availableTypes.length > 1) && (
               <Select
                 value={selectedMediaType}
-                onValueChange={setSelectedMediaType}
+                onValueChange={handleMediaTypeChange}
               >
                 <SelectTrigger className="h-9 w-36 text-sm">
                   {selectedMediaType === "MOVIE" ? (
@@ -684,13 +762,19 @@ export function DashboardPage() {
               </Select>
             )}
             {editMode && (
+              <Button variant="outline" onClick={handleResetLayout} title="Put the default Insights cards back (you can undo it)">
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Reset
+              </Button>
+            )}
+            {editMode && (
               <AddCardDropdown
                 tab="main"
                 existingCards={[...insightCards.map((c) => c.id), ...FIXED_ZONE_CARDS]}
                 onAdd={(cardId) => {
                   const def = getCardDefinition(cardId);
                   updateInsights([
-                    ...insightCards,
+                    ...insightsOf(layoutRef.current),
                     { id: cardId, size: def?.defaultSize ?? 12 },
                   ]);
                 }}
@@ -730,6 +814,8 @@ export function DashboardPage() {
             servers={servers}
             availableTypes={availableTypes}
             onLayoutChange={updateInsights}
+            onDisplayChange={handleDisplayChange}
+            onCardRemove={handleCardRemove}
             onMovieClick={handleMovieClick}
             onSeriesClick={handleSeriesClick}
             onArtistClick={handleArtistClick}
