@@ -136,12 +136,21 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true, seriesScope: true },
+    select: { enabled: true, type: true, rules: true, seriesScope: true, actionsHeldSince: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
       { error: "Rule set is disabled — enable it before retrying actions" },
       { status: 400 }
+    );
+  }
+  // Held since a save changed what the rule set matches (`actionsHeldSince`):
+  // the stale-match guard below reads matches the old rules made until a
+  // detection run re-checks them, so a retry waits for that run too.
+  if (ruleSet.actionsHeldSince) {
+    return NextResponse.json(
+      { error: "This rule set's rules or servers changed since its matches were detected — re-run detection before retrying" },
+      { status: 409 }
     );
   }
   // Seerr criteria on a MUSIC rule set can never evaluate, so its matches are

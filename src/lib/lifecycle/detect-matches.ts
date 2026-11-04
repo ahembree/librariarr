@@ -33,6 +33,33 @@ interface RuleSetConfig {
   addArrTags: string[];
   removeArrTags: string[];
   stickyMatches: boolean;
+  /**
+   * `RuleSet.actionsHeldSince`, read in the same row as `rules`. Evaluating
+   * the rule set releases the hold (`releaseHeldActions`), and only this
+   * stamp: a save landing while the run evaluates older rules sets a newer one,
+   * which stays. Left out, the run releases nothing (the safe default).
+   */
+  actionsHeldSince?: Date | null;
+}
+
+/**
+ * Release a rule set's actions held since a save changed what it matches
+ * (`RuleSet.actionsHeldSince`): this run has just re-evaluated it under the
+ * rules that save wrote, and its matches now say which items they still
+ * select. Its pending actions keep their dates — the executor cancels any
+ * whose item the rules dropped (the match is gone, or its member is) and
+ * scheduling cancels them too. Conditional on the stamp the run read with
+ * its rules, so a later save's hold survives a run of the older rules.
+ */
+async function releaseHeldActions(ruleSet: RuleSetConfig): Promise<void> {
+  if (!ruleSet.actionsHeldSince) return;
+  const released = await prisma.ruleSet.updateMany({
+    where: { id: ruleSet.id, actionsHeldSince: ruleSet.actionsHeldSince },
+    data: { actionsHeldSince: null },
+  });
+  if (released.count > 0) {
+    logger.info("Lifecycle", `Rule set "${ruleSet.name}" re-checked under its edited rules — its pending actions are no longer held`);
+  }
 }
 
 /** Format matched criteria into a readable string like "Resolution = 4K, Year > 2020" */
@@ -639,6 +666,7 @@ export async function detectAndSaveMatches(
     });
 
     logger.info("Lifecycle", `Detected ${enrichedItems.length} matches for rule set "${ruleSet.name}" (full re-evaluation)`);
+    await releaseHeldActions(ruleSet);
     return { items: enrichedItems, count: enrichedItems.length, episodeIdMap, currentItems: enrichedItems };
   }
 
@@ -834,6 +862,7 @@ export async function detectAndSaveMatches(
 
   const removedCount = ruleSet.stickyMatches ? 0 : staleIds.length;
   logger.info("Lifecycle", `Detected ${newItems.length} new matches for rule set "${ruleSet.name}" (${existingMatches.length - removedCount} existing, ${removedCount} removed, ${returnItems.length} total)`);
+  await releaseHeldActions(ruleSet);
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
 }
 
@@ -968,6 +997,7 @@ export async function runDetection(
           addArrTags: rs.addArrTags,
           removeArrTags: rs.removeArrTags,
           stickyMatches: rs.stickyMatches,
+          actionsHeldSince: rs.actionsHeldSince,
         },
         serverIds,
         arrData,

@@ -2485,7 +2485,10 @@ export function LifecycleRulePage({
           <AlertDialogHeader>
             <AlertDialogTitle>Save Rule Set</AlertDialogTitle>
             <AlertDialogDescription>
-              How should existing matches be handled?
+              How should existing matches be handled? <strong>Save only</strong> keeps the current
+              matches until the next detection run re-checks them against the new rules — until
+              then this rule set&rsquo;s pending actions are held and won&rsquo;t run, even from the
+              Pending page.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-2 py-2">

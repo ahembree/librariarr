@@ -142,6 +142,14 @@ describe("OpenAPI document", () => {
     expect(execute.description).toMatch(/calls naming different items run side by side/);
   });
 
+  it("tells a client an execute waits for detection after the rule set's rules change", () => {
+    // A save that changes what a rule set matches holds its actions until
+    // detection re-checks them (`RuleSet.actionsHeldSince`); the route answers 409.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    expect(execute.description).toMatch(/rules or servers changed since its matches were detected \(409: run detection again\)/);
+    expect(execute.responses?.["409"]).toMatch(/rules or servers changed since its matches were detected/);
+  });
+
   it("names only registry scopes", () => {
     for (const op of API_OPERATIONS) {
       if (op.scope !== null) expect(API_SCOPES).toContain(op.scope);

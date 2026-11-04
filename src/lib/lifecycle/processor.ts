@@ -389,6 +389,7 @@ export async function processLifecycleRules(userId?: string) {
           addArrTags: ruleSet.addArrTags,
           removeArrTags: ruleSet.removeArrTags,
           stickyMatches: ruleSet.stickyMatches,
+          actionsHeldSince: ruleSet.actionsHeldSince,
         },
         serverIds,
         arrData,
@@ -526,7 +527,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // A minute early, so a clock difference between the app and the database —
   // `createdAt` is the database's — can only make pass 2 check more, never less.
   const exceptionsCheckedBefore = new Date(Date.now() - 60_000);
-  const loadedActions = await prisma.lifecycleAction.findMany({
+  const dueActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
       scheduledFor: { lte: new Date() },
@@ -557,10 +558,26 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           type: true,
           rules: true,
           seriesScope: true,
+          actionsHeldSince: true,
         },
       },
     },
   });
+  // Nor one whose rules or servers changed since its matches were detected
+  // (`actionsHeldSince`): its matches are the old rules' until a detection
+  // run re-checks them. Left out of the run untouched — still PENDING, dates
+  // unchanged, not cancelled by any check below — and logged, so a due action
+  // that did not run is explained.
+  const heldRuleSets = new Set<string>();
+  const loadedActions = dueActions.filter((a) => {
+    if (!a.ruleSet?.actionsHeldSince) return true;
+    heldRuleSets.add(a.ruleSet.name);
+    return false;
+  });
+  for (const name of heldRuleSets) {
+    logger.info("Lifecycle", `Holding the due actions of rule set "${name}" — its rules or servers changed since its matches were detected; the next detection run re-checks them`);
+  }
+
   // Whether each action acts on its episodes rather than its series, decided
   // once and carried with the action into naming, pass 1 and the executor.
   const pendingActions = loadedActions.map((a) => ({
@@ -995,7 +1012,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           status: "PENDING",
           updatedAt: action.updatedAt,
           scheduledFor: { lte: new Date() },
-          ruleSet: { is: { enabled: true } },
+          // An edit that changed what the rule set matches holds it from here
+          // on, even mid-run (`actionsHeldSince`).
+          ruleSet: { is: { enabled: true, actionsHeldSince: null } },
         },
         select: { id: true },
       });

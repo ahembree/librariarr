@@ -376,7 +376,8 @@ export const API_OPERATIONS: readonly Operation[] = [
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
       `Listed items that are not current matches, or are protected by an exception, are skipped and the rest run — compare ` +
       `\`executed\` + \`failed\` with what you sent (400 when nothing is left). Refused whole — nothing runs — when an item changed ` +
-      `identity since it matched (409: run detection again), or when a limit would be exceeded. A call naming an item that ` +
+      `identity since it matched, or the rule set's rules or servers changed since its matches were detected (409: run ` +
+      `detection again), or when a limit would be exceeded. A call naming an item that ` +
       `another execution of the same rule set is acting on right now is refused (409) rather than repeating the deletion; ` +
       `calls naming different items run side by side.`,
     body: {
@@ -392,7 +393,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     responses: {
       "200": "`{ executed, failed, errors }`",
       "404": "No such rule set",
-      "409": "Another execution of this rule set is acting on one of the named items, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
+      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), or the rule set's rules or servers changed since its matches were detected; nothing was executed",
       "429": BUDGET_429,
     },
   },

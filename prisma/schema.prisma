@@ -599,6 +599,15 @@ model RuleSet {
   discordNotifyOnMatch   Boolean           @default(false)
   stickyMatches          Boolean           @default(false)
   serverIds              String[]          @default([])
+  /// Set by a save that changes what the rule set matches — its rules, its
+  /// servers, its series scope, or the Arr instance its Arr criteria are read
+  /// from — and cleared by the next detection run that evaluates it under
+  /// those rules (only if no later save set it again). While it is set none of
+  /// the rule set's actions run: not the scheduled executor, Execute on the
+  /// Pending page, force-retry or the public API. A "Save only" keeps the
+  /// matches the old rules made, and they are not acted on until detection
+  /// has re-checked them.
+  actionsHeldSince       DateTime?
   lifecycleActions       LifecycleAction[]
   ruleMatches            RuleMatch[]
   createdAt              DateTime          @default(now())

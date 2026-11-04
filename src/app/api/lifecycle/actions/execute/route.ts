@@ -160,6 +160,16 @@ async function executeRuleSet(
     );
   }
 
+  // Held since a save changed what the rule set matches (`actionsHeldSince`):
+  // the stored matches this route acts on are the old rules' until a
+  // detection run re-checks them — the scheduled executor holds them too.
+  if (ruleSet.actionsHeldSince) {
+    return NextResponse.json(
+      { error: "This rule set's rules or servers changed since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing" },
+      { status: 409 }
+    );
+  }
+
   // Permanent-invalidity backstop (mirrors executeLifecycleActions): Seerr
   // criteria on a MUSIC rule set can never evaluate — Seerr has no music
   // requests, so every artist reads "never requested" and the stored matches
