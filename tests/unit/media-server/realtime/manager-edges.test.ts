@@ -219,7 +219,7 @@ describe("RealtimeManager — side-effect edges", () => {
     mgr.stopAll();
   });
 
-  it("logs nothing when an enqueue reports it did not queue", async () => {
+  it("logs nothing when an enqueue reports it did not queue, and retries after a quiet window", async () => {
     h.enqueueJob.mockResolvedValue(false);
     const { f, sockets } = factory();
     const mgr = new RealtimeManager(f);
@@ -236,6 +236,78 @@ describe("RealtimeManager — side-effect edges", () => {
     // once they have all settled here its handlers have run.
     await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
     expect(logger.info).not.toHaveBeenCalledWith("Realtime", expect.stringContaining("Enqueued"));
+
+    // Neither batch was dropped: each is retried once its quiet window passes.
+    h.enqueueJob.mockClear();
+    h.enqueueJob.mockResolvedValue(true);
+    vi.advanceTimersByTime(5_000);
+    expect(h.enqueueJob).toHaveBeenCalledExactlyOnceWith(
+      TASK_SYNC_SERVER,
+      { serverId: "j1", trigger: "realtime library change: 151 changed item(s) exceeds the 100-item incremental limit" },
+      { jobKey: "sync:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    vi.advanceTimersByTime(25_000);
+    expect(h.enqueueJob).toHaveBeenLastCalledWith(
+      TASK_SYNC_WATCH_HISTORY,
+      { serverId: "j1", incremental: true },
+      { jobKey: "watch-history:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+    mgr.stopAll();
+  });
+
+  it("merges a refused batch with the ids that arrived meanwhile, and waits a quiet window to retry", async () => {
+    let refuse!: (ok: boolean) => void;
+    h.enqueueJob.mockReturnValueOnce(new Promise<boolean>((r) => (refuse = r)));
+    const { f, sockets } = factory();
+    const mgr = new RealtimeManager(f);
+    await mgr.reconcile();
+
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"], ItemsRemoved: ["gone"] } });
+    vi.advanceTimersByTime(5_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(1);
+    // A new change arrives while the enqueue is still out.
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["b"] } });
+    refuse(false);
+    await h.enqueueJob.mock.results[0].value;
+
+    // No hot loop: nothing is retried before the quiet window closes.
+    vi.advanceTimersByTime(4_999);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+    const [task, payload] = h.enqueueJob.mock.calls[1];
+    expect(task).toBe(TASK_SYNC_INCREMENTAL);
+    expect({ ...payload, changedIds: [...payload.changedIds].sort() }).toEqual({
+      serverId: "j1",
+      changedIds: ["a", "b"],
+      removedIds: ["gone"],
+    });
+    mgr.stopAll();
+  });
+
+  it("does not retry a refused batch or refresh for a server removed meanwhile", async () => {
+    let refuseSync!: (ok: boolean) => void;
+    let refuseWatch!: (ok: boolean) => void;
+    h.enqueueJob
+      .mockReturnValueOnce(new Promise<boolean>((r) => (refuseSync = r)))
+      .mockReturnValueOnce(new Promise<boolean>((r) => (refuseWatch = r)));
+    const { f, sockets } = factory();
+    const mgr = new RealtimeManager(f);
+    await mgr.reconcile();
+
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"] } });
+    sockets[0].fire({ MessageType: "UserDataChanged" });
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+
+    h.mediaServer.findMany.mockResolvedValue([]);
+    await mgr.reconcile();
+    refuseSync(false);
+    refuseWatch(false);
+    await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
     mgr.stopAll();
   });
 

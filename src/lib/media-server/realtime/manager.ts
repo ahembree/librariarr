@@ -298,14 +298,34 @@ export class RealtimeManager {
     // contributes nothing rather than escalating the window to a full sync.
     if (changed.length === 0 && removed.length === 0) return false;
 
-    let pending = this.pendingChanges.get(event.serverId);
+    this.addPendingChanges(event.serverId, changed, removed);
+    return true;
+  }
+
+  private addPendingChanges(serverId: string, changed: Iterable<string>, removed: Iterable<string>): void {
+    let pending = this.pendingChanges.get(serverId);
     if (!pending) {
       pending = { changed: new Set(), removed: new Set() };
-      this.pendingChanges.set(event.serverId, pending);
+      this.pendingChanges.set(serverId, pending);
     }
     for (const id of changed) pending.changed.add(id);
     for (const id of removed) pending.removed.add(id);
-    return true;
+  }
+
+  /**
+   * Hand a library sync the queue did not take back to the debouncer.
+   *
+   * `enqueueJob` never throws: a queue or database error comes back as
+   * `false` so the caller can retry, and dropping the batch there lost every
+   * add and delete it named. The ids go back into the accumulator, merged
+   * with any that arrived meanwhile, and the debouncer is re-armed, so the
+   * retry waits a quiet window rather than looping hot. A server removed or
+   * disabled meanwhile is no longer managed and has nothing left to sync.
+   */
+  private requeueLibraryChanges(serverId: string, changedIds: string[], removedIds: string[]): void {
+    if (!this.connections.has(serverId)) return;
+    this.addPendingChanges(serverId, changedIds, removedIds);
+    this.getSyncDebouncer(serverId).trigger();
   }
 
   /**
@@ -357,7 +377,8 @@ export class RealtimeManager {
 
   private flushLibraryChanges(serverId: string): void {
     // Snapshot + clear synchronously so events arriving during the async enqueue
-    // start a fresh accumulator (no lost ids).
+    // start a fresh accumulator (no lost ids). A batch the queue does not take
+    // is merged back into it (`requeueLibraryChanges`).
     const pending = this.pendingChanges.get(serverId);
     this.pendingChanges.delete(serverId);
 
@@ -390,6 +411,7 @@ export class RealtimeManager {
         { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       ).then((ok) => {
         if (ok) logger.info("Realtime", `Enqueued full sync for server ${label} (${trigger})`);
+        else this.requeueLibraryChanges(serverId, changedIds, removedIds);
       });
       return;
     }
@@ -407,6 +429,8 @@ export class RealtimeManager {
           "Realtime",
           `Enqueued incremental sync for server ${label} (${changedIds.length} changed, ${removedIds.length} removed)`,
         );
+      } else {
+        this.requeueLibraryChanges(serverId, changedIds, removedIds);
       }
     });
   }
@@ -457,6 +481,11 @@ export class RealtimeManager {
                 "Realtime",
                 `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
               );
+            } else if (this.connections.has(serverId)) {
+              // Not queued (a queue or database error): re-arm, so the refresh
+              // is retried after a quiet window instead of lost. Not for a
+              // server removed or disabled meanwhile.
+              this.getWatchDebouncer(serverId).trigger();
             }
           });
         },
