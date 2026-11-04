@@ -117,13 +117,19 @@ describe("restoreBackup file formats and failures", () => {
     expect(calls[10][0].data).toEqual([{ id: "l1000" }]);
   });
 
+  // The error's own message is never repeated: a Prisma one can carry the
+  // rows (restore-insert-failure.test.ts runs the real thing).
   it("names the table that failed and rolls the restore back", async () => {
     writeBackup("librariarr-backup-bad.json.gz", gzipSync(backupJson({ systemConfig: [{ id: "x" }] })));
-    model("systemConfig").createMany.mockRejectedValueOnce(new Error("duplicate key"));
-    await expect(restoreBackup("librariarr-backup-bad.json.gz")).rejects.toThrow("Failed to restore table systemConfig: duplicate key");
+    model("systemConfig").createMany.mockRejectedValueOnce(new Error("duplicate key (id)=(row-value)"));
+    await expect(restoreBackup("librariarr-backup-bad.json.gz")).rejects.toThrow(
+      /^Failed to restore table systemConfig: the insert failed \(Error\)$/,
+    );
 
     model("systemConfig").createMany.mockRejectedValueOnce("weird");
-    await expect(restoreBackup("librariarr-backup-bad.json.gz")).rejects.toThrow("Failed to restore table systemConfig: weird");
+    await expect(restoreBackup("librariarr-backup-bad.json.gz")).rejects.toThrow(
+      /^Failed to restore table systemConfig: the insert failed \(UnknownError\)$/,
+    );
     expect(invalidate).not.toHaveBeenCalled();
   });
 

@@ -364,8 +364,10 @@ export async function restoreBackup(
           });
         }
       } catch (error) {
-        logger.error("Backup", `Failed to restore table ${table}`, { error: String(error) });
-        throw new Error(`Failed to restore table ${table}: ${error instanceof Error ? error.message : String(error)}`);
+        // Never the error's own message: see `describeRestoreInsertError`.
+        const message = `Failed to restore table ${table}: ${describeRestoreInsertError(error, table)}`;
+        logger.error("Backup", message);
+        throw new Error(message);
       }
 
       // Force GC after large tables to reclaim row arrays
@@ -545,6 +547,47 @@ function knownFieldsFor(table: string): Set<string> | null {
   return fields;
 }
 const knownFieldCache = new Map<string, Set<string> | null>();
+
+/**
+ * What a failed restore insert may say about itself, in the log and in the
+ * restore's NDJSON. Never the error's message: a Prisma validation error
+ * renders the whole `createMany` argument — up to a batch of rows, every
+ * column, so the Plex token, password hash, OIDC client secret and Discord
+ * webhook among them — and `sanitizeErrorDetail` strips none of it; a
+ * database error can quote a value too. What it does say: the error's class,
+ * its Prisma code, and the names its last line quotes in backticks that are
+ * this table's own columns, or constraints named from them (`User_pkey`,
+ * `AppSettings_userId_fkey`) — checked against the schema, so a value from a
+ * row can never pass for one.
+ */
+function describeRestoreInsertError(error: unknown, table: string): string {
+  const errorClass = error instanceof Error && /^\w{1,64}$/.test(error.name) ? error.name : "UnknownError";
+  const code =
+    error instanceof Prisma.PrismaClientKnownRequestError && /^P\d{4}$/.test(error.code) ? error.code : null;
+
+  const columns = knownFieldsFor(table) ?? new Set<string>();
+  const dbName = tableToDbName(table);
+  const isSchemaName = (name: string) => {
+    if (columns.has(name)) return true;
+    const constraint = name.match(/^([A-Za-z0-9]+)_(?:(.+)_)?(pkey|fkey|key)$/);
+    if (!constraint || constraint[1] !== dbName) return false;
+    const parts = constraint[2]?.split("_") ?? [];
+    return constraint[3] === "pkey" ? parts.length === 0 : parts.length > 0 && parts.every((part) => columns.has(part));
+  };
+  const lastLine = (error instanceof Error ? error.message : "").trimEnd().split("\n").pop() ?? "";
+  const names = [...new Set([...lastLine.matchAll(/`(\w{1,64})`/g)].map((match) => match[1]))]
+    .filter(isSchemaName)
+    .slice(0, 5);
+
+  const what =
+    error instanceof Prisma.PrismaClientValidationError
+      ? "a row in the backup does not match the current schema"
+      : error instanceof Prisma.PrismaClientKnownRequestError
+        ? "the database refused a row"
+        : "the insert failed";
+  const detail = [code ? `${errorClass} ${code}` : errorClass, ...names.map((name) => `\`${name}\``)].join(", ");
+  return `${what} (${detail})`;
+}
 
 /** Columns already reported as dropped, so one restore logs each table once. */
 const droppedFieldsReported = new Set<string>();

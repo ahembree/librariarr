@@ -155,7 +155,7 @@ The restore process:
 
 </Steps>
 
-The restore runs in a single transaction. If any step fails — a table that cannot be cleared, a row the database refuses — nothing is changed, and the error names the table where it stopped.
+The restore runs in a single transaction. If any step fails — a table that cannot be cleared, a row the database refuses — nothing is changed, and the error names the table where it stopped. For a row that cannot be restored it also names the kind of error and the column or constraint involved, but never the row's values: the rows hold your Plex token, password hash and other secrets, and the error is shown in the browser and kept in the system log.
 
 ## Storage
 
