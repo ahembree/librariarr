@@ -118,9 +118,10 @@ describe("restoring a config-only backup", () => {
   });
 
   it("does not let a restored tracearrBackfillComplete flag vouch for an empty history", async () => {
-    // The `MediaServer` row is restored verbatim, so the flag survives while
-    // the rows it describes do not. The restore withdraws the evidence marker,
-    // so the guard refuses regardless of what the stale flag claims.
+    // The `MediaServer` row is restored verbatim, flag included, while the rows
+    // it describes are not. The restore restarts the archive walk (see
+    // restore-tracearr-walk.test.ts) and withdraws the evidence marker, so the
+    // guard refuses on both counts.
     const { userId, serverId } = await seed(true);
     const prisma = getTestPrisma();
 
@@ -131,7 +132,7 @@ describe("restoring a config-only backup", () => {
       where: { id: serverId },
       select: { tracearrBackfillComplete: true, watchHistorySyncedAt: true },
     });
-    expect(server.tracearrBackfillComplete).toBe(true);
+    expect(server.tracearrBackfillComplete).toBe(false);
     expect(server.watchHistorySyncedAt).toBeNull();
 
     // Refused for the withdrawn marker, not for an unfinished import: the

@@ -5,7 +5,10 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
-import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import {
+  invalidateServersWithoutWatchHistory,
+  restartTracearrBackfillWithoutPlays,
+} from "@/lib/media/watch-evidence";
 import { compareSemver } from "@/lib/version/semver";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
@@ -279,6 +282,9 @@ export async function restoreBackup(
 
   logger.info("Backup", `Restoring from backup: ${filename}`);
 
+  /** Tracearr-mapped servers whose archive walk the restore restarted. */
+  let tracearrRestarted = 0;
+
   // Wrap truncate + insert in a transaction so a mid-restore failure rolls back cleanly
   await prisma.$transaction(async (tx) => {
     // The highest session version in use, read before the rows are dropped —
@@ -373,16 +379,34 @@ export async function restoreBackup(
       // Force GC after large tables to reclaim row arrays
       if (rows.length > 1000) global.gc?.();
     }
+
+    // Every `MediaServer` row came back verbatim, Tracearr walk state included,
+    // but its plays only if the file held them — and a config-only backup holds
+    // none. A row saved part-way through the server's first archive walk then
+    // carries a cursor deep in the archive over no rows: the next slice resumes
+    // there and never reads the newer stretch again, and with no rows the
+    // forward pass has nothing to catch up from. So a mapped server left with
+    // no Tracearr plays walks again from the newest one. In this transaction,
+    // not after it: a crash in between would strand that state for good, and a
+    // backfill slice that read it in between and stored a page would leave the
+    // server holding rows, and so never restarted.
+    tracearrRestarted = await restartTracearrBackfillWithoutPlays(tx);
   }, { timeout: 300000 }); // 5 min timeout for large restores
+
+  if (tracearrRestarted > 0) {
+    logger.info(
+      "Backup",
+      `Restarted the Tracearr history import of ${tracearrRestarted} media server(s) ` +
+        `the restore left without Tracearr plays — the next walk starts from the newest play`,
+    );
+  }
 
   // Restore TRUNCATEs every table in `TABLE_ORDER` — `MediaItem` and
   // `WatchHistory` included — and then re-inserts only what the file actually
   // holds. A config-only backup holds neither, so it empties both and refills
   // neither: the media comes back on the next sync, and so does the history —
-  // native history is re-fetched, and a Tracearr server's row, restored
-  // verbatim with `tracearrBackfillComplete` still true, is recognised by the
-  // importer as "complete with no rows", which resets that state and walks the
-  // archive again.
+  // native history is re-fetched, and a Tracearr server's archive walk was
+  // restarted above.
   //
   // An empty `WatchHistory` reads as "nobody watched anything", so without this
   // the first detection run after a restore-plus-resync matches the WHOLE

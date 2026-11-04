@@ -5,7 +5,7 @@ import { gzipSync } from "zlib";
 
 // Real files in a throwaway directory (never /config): BACKUP_DIR is read when
 // the module loads, so it is set before the import below.
-const { backupDir, models, executeRaw } = vi.hoisted(() => {
+const { backupDir, models, executeRaw, transactions } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodeFs = require("fs") as typeof import("fs");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -16,7 +16,8 @@ const { backupDir, models, executeRaw } = vi.hoisted(() => {
   const dir = nodeFs.mkdtempSync(nodePath.join(base, "librariarr-backup-test-"));
   process.env.BACKUP_DIR = dir;
   const models: Record<string, { findMany: ReturnType<typeof vi.fn>; createMany: ReturnType<typeof vi.fn>; aggregate: ReturnType<typeof vi.fn> }> = {};
-  return { backupDir: dir, models, executeRaw: vi.fn() };
+  // The client each `$transaction` callback was handed, in order.
+  return { backupDir: dir, models, executeRaw: vi.fn(), transactions: [] as unknown[] };
 });
 
 function model(name: string) {
@@ -31,7 +32,13 @@ function model(name: string) {
 vi.mock("@/lib/db", () => {
   const get = (_t: object, prop: string) => {
     if (prop === "$executeRawUnsafe") return executeRaw;
-    if (prop === "$transaction") return async (fn: (tx: unknown) => Promise<void>) => fn(new Proxy({}, { get }));
+    if (prop === "$transaction") {
+      return async (fn: (tx: unknown) => Promise<void>) => {
+        const tx = new Proxy({}, { get });
+        transactions.push(tx);
+        return fn(tx);
+      };
+    }
     return model(prop);
   };
   return { prisma: new Proxy({}, { get }) };
@@ -41,8 +48,14 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { invalidate } = vi.hoisted(() => ({ invalidate: vi.fn() }));
-vi.mock("@/lib/media/watch-evidence", () => ({ invalidateServersWithoutWatchHistory: invalidate }));
+const { invalidate, restartTracearr } = vi.hoisted(() => ({
+  invalidate: vi.fn(),
+  restartTracearr: vi.fn(),
+}));
+vi.mock("@/lib/media/watch-evidence", () => ({
+  invalidateServersWithoutWatchHistory: invalidate,
+  restartTracearrBackfillWithoutPlays: restartTracearr,
+}));
 
 import { logger } from "@/lib/logger";
 import { createBackup, restoreBackup, listBackups, pruneBackups, deleteBackup } from "@/lib/backup/backup-service";
@@ -61,6 +74,8 @@ beforeEach(() => {
   }
   executeRaw.mockResolvedValue(undefined);
   invalidate.mockResolvedValue(0);
+  restartTracearr.mockResolvedValue(0);
+  transactions.length = 0;
 });
 
 afterAll(() => {
@@ -131,6 +146,28 @@ describe("restoreBackup file formats and failures", () => {
       /^Failed to restore table systemConfig: the insert failed \(UnknownError\)$/,
     );
     expect(invalidate).not.toHaveBeenCalled();
+    expect(restartTracearr).not.toHaveBeenCalled();
+  });
+
+  // Inside the transaction, after the last insert: a backfill slice that read
+  // the restored walk state before the restart, and stored a page, would leave
+  // the server holding rows — and so never restarted.
+  it("restarts the Tracearr walks of servers left without plays inside the restore's transaction", async () => {
+    writeBackup("librariarr-backup-walk.json", backupJson({ mediaServer: [{ id: "s1" }] }));
+    restartTracearr.mockImplementationOnce(async () => {
+      expect(model("mediaServer").createMany).toHaveBeenCalled();
+      return 1;
+    });
+
+    await restoreBackup("librariarr-backup-walk.json");
+
+    expect(transactions).toHaveLength(1);
+    expect(restartTracearr).toHaveBeenCalledTimes(1);
+    expect(restartTracearr.mock.calls[0][0]).toBe(transactions[0]);
+    expect(vi.mocked(logger.info)).toHaveBeenCalledWith(
+      "Backup",
+      expect.stringMatching(/^Restarted the Tracearr history import of 1 media server\(s\)/),
+    );
   });
 
   // A failed TRUNCATE aborts the Postgres transaction: carrying on only made
@@ -145,6 +182,7 @@ describe("restoreBackup file formats and failures", () => {
     expect(executeRaw).toHaveBeenCalledTimes(2);
     expect(model("systemConfig").createMany).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
+    expect(restartTracearr).not.toHaveBeenCalled();
   });
 });
 

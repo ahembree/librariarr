@@ -647,13 +647,13 @@ async function runTracearrImport(
   let cursorAtStart = server.tracearrBackfillCursorAt;
 
   // Stored backfill state whose rows were removed out from under it — a
-  // config-only restore, which brings the server row back verbatim without the
-  // history (see `resolveImportWindow` for exactly when). Reset it here, in the
-  // database and not only for this run. Only clearing it locally restarted the
-  // walk for ONE slice: that slice's rows made the next slice read the stale
-  // "complete" flag as true again, so the archive walk stopped after five
-  // minutes, reported itself finished, and re-established the evidence marker
-  // over a history that was mostly missing.
+  // restore by an earlier version, which brought the server row back verbatim
+  // without the history (see `resolveImportWindow` for exactly when). Reset it
+  // here, in the database and not only for this run. Only clearing it locally
+  // restarted the walk for ONE slice: that slice's rows made the next slice
+  // read the stale "complete" flag as true again, so the archive walk stopped
+  // after five minutes, reported itself finished, and re-established the
+  // evidence marker over a history that was mostly missing.
   if (window.staleBackfillState) {
     logger.warn(
       "WatchHistory",
@@ -1714,8 +1714,9 @@ interface ImportWindow {
   /**
    * The stored backfill state says "complete" (and carries a resume cursor)
    * while the server holds no Tracearr rows, and nothing says that is how the
-   * walk left it — the rows were removed out from under it (a config-only
-   * restore). The caller resets that state, and this window already ignores it.
+   * walk left it — the rows were removed out from under it (a restore by an
+   * earlier version). The caller resets that state, and this window already
+   * ignores it.
    */
   staleBackfillState: boolean;
 }
@@ -1783,9 +1784,10 @@ async function resolveImportWindow(
   //    five-minute MAIN_QUEUE slices, complete, reset, repeat — with
   //    play-activity rules refused for the server the whole time.
   //  - The rows were removed out from under the flag. The bulk paths that do
-  //    that (purge, disable with delete data, a source change) reset the flag
-  //    themselves; the one that does not is a config-only restore, which
-  //    brings the server row back verbatim without its history — and withdraws
+  //    that (purge, disable with delete data, a source change, a restore —
+  //    `restartTracearrBackfillWithoutPlays`) reset the flag themselves; this
+  //    is the backstop for a restore by an earlier version, which brought the
+  //    server row back verbatim without its history and withdrew
   //    `watchHistorySyncedAt` from every server left without plays. Neither
   //    the flag nor the cursor (the archive's far end) may steer this run
   //    then, so the walk starts again from the newest play.
