@@ -1,12 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   withGroupParentTitle,
   isGroupRecord,
   episodesMatchingIndividually,
+  isGroupValueField,
+  MEMBER_VALUE_COLUMNS,
+  memberValuesOf,
+  readsMemberValues,
+  readsEpisodeValues,
+  matchGroupThroughMembers,
+  withEvaluatedRecord,
+  evaluatedRecordOf,
   type AggregableEpisode,
 } from "@/lib/conditions/series-aggregates";
+import { CONDITION_FIELDS } from "@/lib/conditions/fields";
+import type { ConditionGroup } from "@/lib/conditions/types";
+import { Prisma } from "@/generated/prisma/client";
 
 function ep(overrides: Partial<AggregableEpisode> & { id: string; parentTitle: string | null; libraryId: string }): AggregableEpisode {
   return {
@@ -307,5 +318,137 @@ describe("episodesMatchingIndividually", () => {
       latestEpisodeViewDate: "2026-01-01T00:00:00.000Z", seriesLastPlayedAt: "2026-01-02T00:00:00.000Z",
       lastEpisodeAddedAt: "2026-01-03T00:00:00.000Z", lastEpisodeAiredAt: "2026-01-04T00:00:00.000Z",
     });
+  });
+
+  it("evaluates one episode and keeps every episode or none when no rule reads an episode's own value", () => {
+    const episodes = [{ id: "e1" }, { id: "e2" }, { id: "e3" }];
+    const pass = vi.fn(() => true);
+    expect(episodesMatchingIndividually(episodes, { availableEpisodeCount: 3 }, pass, false)).toEqual(["e1", "e2", "e3"]);
+    expect(pass).toHaveBeenCalledTimes(1);
+    const fail = vi.fn(() => false);
+    expect(episodesMatchingIndividually(episodes, { availableEpisodeCount: 3 }, fail, false)).toEqual([]);
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(episodesMatchingIndividually([], {}, pass, false)).toEqual([]);
+  });
+});
+
+function ruleGroups(fields: string[], extra: Partial<ConditionGroup> = {}): ConditionGroup[] {
+  return [{
+    id: "g", condition: "AND", groups: [], ...extra,
+    rules: fields.map((field, i) => ({ id: `r${i}`, field, operator: "equals", value: "x", condition: "AND" as const })),
+  }];
+}
+
+const AUDIO_STREAM_QUERY = { streamQuery: { streamType: "audio" as const, quantifier: "any" as const } };
+
+describe("group values and member values", () => {
+  // A field a group answers per member is read off the member that satisfies
+  // the rule; read off the representative alone, "Resolution = 4K" matched a
+  // show only when its lowest-id episode was 4K. A new condition field has to
+  // be placed on one side or the other here.
+  it("answers every per-item field per member and the group's own values once", () => {
+    const perMember = CONDITION_FIELDS.map((f) => f.value).filter((f) => !isGroupValueField(f));
+    expect(perMember.sort()).toEqual([
+      "albumTitle", "aspectRatio", "audienceRating", "audioBitrate", "audioChannels", "audioCodec",
+      "audioProfile", "audioSamplingRate", "container", "contentRating", "country", "duration",
+      "dynamicRange", "genre", "isWatchlisted", "labels", "originallyAvailableAt", "rating",
+      "ratingCount", "resolution", "scanType", "studio", "videoBitDepth", "videoBitrate",
+      "videoCodec", "videoFrameRate", "videoProfile", "year",
+    ]);
+    for (const field of [
+      "title", "parentTitle", "playCount", "lastPlayedAt", "addedAt", "fileSize", "watchedByUser",
+      "audioLanguage", "subtitleLanguage", "streamAudioCodec", "audioStreamCount", "subtitleStreamCount",
+      "serverCount", "matchedByRuleSet", "hasPendingAction", "hasExternalId",
+      "availableEpisodeCount", "seriesLastPlayedAt", "arrTag", "arrMonitored", "seerrRequested", "sqCodec",
+    ]) {
+      expect(isGroupValueField(field), field).toBe(true);
+    }
+  });
+
+  it("takes each per-member field from a column a media item has", () => {
+    const columns = new Set<string>(Object.values(Prisma.MediaItemScalarFieldEnum));
+    expect(MEMBER_VALUE_COLUMNS.filter((c) => !columns.has(c))).toEqual([]);
+    expect(MEMBER_VALUE_COLUMNS).toContain("genres");
+    expect(MEMBER_VALUE_COLUMNS).toContain("countries");
+  });
+
+  it("copies a member's per-member values and nothing of the group's", () => {
+    const values = memberValuesOf({
+      id: "e2", title: "Pilot", playCount: 4, fileSize: BigInt(5), resolution: "4k", year: 2021, genres: ["Drama"],
+    });
+    expect(values).toEqual({ resolution: "4k", year: 2021, genres: ["Drama"] });
+  });
+
+  it("tells whether a rule reads a per-member value", () => {
+    expect(readsMemberValues(ruleGroups(["resolution"]))).toBe(true);
+    expect(readsMemberValues(ruleGroups(["playCount", "title", "availableEpisodeCount", "arrTag", "serverCount"]))).toBe(false);
+    // A stream query reads the union of the group's streams.
+    expect(readsMemberValues(ruleGroups(["sqCodec"], AUDIO_STREAM_QUERY))).toBe(false);
+    // A disabled rule is never evaluated.
+    expect(readsMemberValues([{
+      id: "g", condition: "AND", groups: [],
+      rules: [
+        { id: "a", field: "playCount", operator: "equals", value: "0", condition: "AND" },
+        { id: "b", field: "resolution", operator: "equals", value: "4K", condition: "AND", enabled: false },
+      ],
+    }])).toBe(false);
+  });
+
+  it("tells whether a per-episode run reads an episode's own value", () => {
+    // Series scope off: the episode's own play count, title and streams.
+    expect(readsEpisodeValues(ruleGroups(["availableEpisodeCount", "playCount"]))).toBe(true);
+    expect(readsEpisodeValues(ruleGroups(["availableEpisodeCount", "resolution"]))).toBe(true);
+    expect(readsEpisodeValues(ruleGroups(["sqCodec"], AUDIO_STREAM_QUERY))).toBe(true);
+    // Aggregates, Arr and Seerr are the show's, alike for every episode.
+    expect(readsEpisodeValues(ruleGroups(["availableEpisodeCount", "watchedEpisodePercentage", "arrTag", "seerrRequested"]))).toBe(false);
+  });
+});
+
+describe("matchGroupThroughMembers", () => {
+  const group = { id: "e1", title: "Show", parentTitle: "Show", resolution: "1080", year: 2001, playCount: 9 };
+  const members = [
+    { id: "e3", resolution: "4k", year: 2003 },
+    { id: "e1", resolution: "1080", year: 2001 },
+    { id: "e2", resolution: "4k", year: 2002 },
+  ];
+  const is4k = (record: Record<string, unknown>) => record.resolution === "4k";
+
+  it("matches through the first member, lowest id first, that satisfies the rule", () => {
+    // e2, not e3: members are taken lowest id first whatever order they come in.
+    expect(matchGroupThroughMembers(group, members, is4k, true)).toEqual({
+      record: { ...group, resolution: "4k", year: 2002 },
+      memberValues: { resolution: "4k", year: 2002 },
+    });
+  });
+
+  it("keeps the group's own values whichever member it is seen through", () => {
+    const seen: Array<Record<string, unknown>> = [];
+    matchGroupThroughMembers(group, members, (record) => { seen.push(record); return false; }, true);
+    expect(seen.map((r) => [r.title, r.playCount, r.resolution])).toEqual([
+      ["Show", 9, "1080"], ["Show", 9, "4k"], ["Show", 9, "4k"],
+    ]);
+  });
+
+  it("matches no group none of whose members satisfies the rule", () => {
+    expect(matchGroupThroughMembers(group, [members[1]], is4k, true)).toBeNull();
+  });
+
+  it("evaluates the group once when no rule reads a per-member value", () => {
+    const matches = vi.fn(() => true);
+    expect(matchGroupThroughMembers(group, members, matches, false)).toEqual({ record: group, memberValues: {} });
+    expect(matches).toHaveBeenCalledTimes(1);
+    expect(matches).toHaveBeenCalledWith(group);
+  });
+});
+
+describe("withEvaluatedRecord", () => {
+  it("carries the evaluated record without a spread or JSON ever copying it", () => {
+    const evaluated = { id: "e2", title: "Pilot", playCount: 0 };
+    const record = withEvaluatedRecord({ id: "e1", title: "Show", parentTitle: null }, evaluated);
+    expect(evaluatedRecordOf(record)).toBe(evaluated);
+    expect(Object.keys(record)).toEqual(["id", "title", "parentTitle"]);
+    expect(evaluatedRecordOf({ ...record })).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(record))).toEqual({ id: "e1", title: "Show", parentTitle: null });
+    expect(evaluatedRecordOf({ id: "x" })).toBeUndefined();
   });
 });

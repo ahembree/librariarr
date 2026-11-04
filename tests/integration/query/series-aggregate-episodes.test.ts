@@ -261,4 +261,73 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
     const grouped = await executeQuery(mixedQuery(server.id, false, rules), user.id, 1, 0);
     expect(grouped.items[0]).toMatchObject({ matchedEpisodes: 3 });
   });
+
+  /**
+   * The other way round: the first episode — the aggregate's representative,
+   * the lowest id — 1080p, the other two 4K. Plus a show with no 4K episode.
+   */
+  async function seedFirstEpisodeHdShow(libraryId: string) {
+    const ids: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(libraryId, {
+        type: "SERIES", title: `Late S1E${e}`, parentTitle: "Late 4K Show",
+        seasonNumber: 1, episodeNumber: e, resolution: "4k",
+      });
+      ids.push(ep.id);
+    }
+    for (let e = 1; e <= 3; e++) {
+      await createTestMediaItem(libraryId, {
+        type: "SERIES", title: `HD S1E${e}`, parentTitle: "HD Show",
+        seasonNumber: 1, episodeNumber: e, resolution: "1080",
+      });
+    }
+    const [first, ...rest] = [...ids].sort(compareIds);
+    await getTestPrisma().mediaItem.update({ where: { id: first }, data: { resolution: "1080" } });
+    return { hd: first, fourK: rest };
+  }
+
+  // Regression: the show's aggregate read `resolution` off its representative
+  // and gated the per-episode narrowing, so a show whose first episode is
+  // 1080p was dropped although two of its episodes are 4K.
+  it("returns the 4K episodes of a show whose first episode is 1080p (episode view)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const { fourK } = await seedFirstEpisodeHdShow(library.id);
+
+    const result = await executeQuery(mixedQuery(server.id, true, FOURK_WITH_AGGREGATE), user.id, 1, 0);
+
+    expect(result.items.map((i) => i.id).sort()).toEqual([...fourK].sort());
+  });
+
+  it("lists a show whose first episode is 1080p with its 4K episodes (grouped view)", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const { fourK } = await seedFirstEpisodeHdShow(library.id);
+
+    const result = await executeQuery(mixedQuery(server.id, false, FOURK_WITH_AGGREGATE), user.id, 1, 0);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ title: "Late 4K Show", matchedEpisodes: 2 });
+    expect(fourK).toContain(result.items[0].id);
+  });
+
+  it("lists the episodes that are not 4K for NOT Resolution = 4K, whatever the first episode is", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    // First episode 4K, the other two 1080p: the show's record read 4K and
+    // dropped the show, though two of its episodes are not 4K.
+    const { hd } = await seedMixedResolutionShow(library.id);
+    const definition = mixedQuery(server.id, true, FOURK_WITH_AGGREGATE);
+    definition.groups[0].rules[1].negate = true;
+
+    const episodes = await executeQuery(definition, user.id, 1, 0);
+    expect(episodes.items.map((i) => i.id).sort()).toEqual([...hd].sort());
+
+    const grouped = await executeQuery({ ...definition, includeEpisodes: false }, user.id, 1, 0);
+    expect(grouped.items).toHaveLength(1);
+    expect(grouped.items[0]).toMatchObject({ title: "Mixed Show", matchedEpisodes: 2 });
+  });
 });

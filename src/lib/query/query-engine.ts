@@ -22,6 +22,7 @@ import {
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
   episodesMatchingIndividually,
+  readsEpisodeValues,
   type AggregableEpisode,
 } from "@/lib/conditions";
 import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules } from "@/lib/conditions/helpers";
@@ -29,7 +30,7 @@ import {
   isUnconfiguredContainsRule,
   ruleToWhere,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where";
 import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
@@ -605,22 +606,22 @@ async function runQueryDefinition(
 /**
  * For series queries that reference series-aggregate fields
  * (`watchedEpisodePercentage`, `availableEpisodeCount`, etc.): fetch ALL
- * episodes for the relevant SERIES libraries (with NO rule-level WHERE),
- * aggregate into one record per series, then evaluate every rule against
- * the aggregate. This matches the rule engine's `evaluateSeriesScope`
- * semantics — aggregates must be computed over every episode of a series,
- * not over the subset that happens to satisfy other rules, otherwise
- * counts and percentages are skewed.
+ * episodes for the relevant SERIES libraries (with NO rule-level WHERE) and
+ * aggregate them into one record per series. Aggregates must be computed over
+ * every episode of a series, not over the subset that happens to satisfy
+ * other rules, otherwise counts and percentages are skewed.
  *
- * The aggregate reads episode-level fields (resolution, fileSize, …) off its
- * representative episode, so a show that passes is then narrowed to the
- * episodes that pass on their own, with the aggregates carried over as
- * series-level constants (`episodesMatchingIndividually`, the narrowing
- * `evaluateSeriesScope` applies with series scope off). Both views list the
- * episodes that matched — the episode view as rows, the grouped view as each
- * show's matched episodes — and the query-actions route acts on those. Whole
- * shows are acted on where the action itself is whole-show (Delete from
- * Sonarr, quality profile, grouped Unmonitor / Search).
+ * Every other criterion is per episode: a show survives when at least one of
+ * its episodes passes on its own, with the aggregates carried over as
+ * series-level constants (`episodesMatchingIndividually`, the selection
+ * `evaluateSeriesScope` makes with series scope off), and only those episodes
+ * survive. The show's aggregate record is no gate — it reads episode-level
+ * fields (resolution, fileSize, …) off its representative episode, so a show
+ * whose first episode is 1080p and the rest 4K never passed "Resolution =
+ * 4K". Both views list the episodes that matched — the episode view as rows,
+ * the grouped view as each show's matched episodes — and the query-actions
+ * route acts on those. Whole shows are acted on where the action itself is
+ * whole-show (Delete from Sonarr, quality profile, grouped Unmonitor / Search).
  */
 async function computeAggregateSurvivingEpisodeIds(
   effectiveServerIds: string[],
@@ -645,7 +646,7 @@ async function computeAggregateSurvivingEpisodeIds(
     episodes as unknown as AggregableEpisode[],
     { includeStreams: hasStreamRules(groups) },
   );
-  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  // Cross-system fields, each episode's own (the selection is per episode).
   const crossSystem = hasCrossSystemRules(groups)
     ? await fetchCrossSystemData(episodes.map((ep) => ep.id))
     : undefined;
@@ -653,21 +654,26 @@ async function computeAggregateSurvivingEpisodeIds(
   const episodeById = new Map(
     (episodes as unknown as Array<Record<string, unknown> & { id: string }>).map((ep) => [ep.id, ep]),
   );
+  // Whether a criterion reads a value an episode holds on its own; when none
+  // does (aggregates, Arr, Seerr only) a show is evaluated once.
+  const perEpisode = readsEpisodeValues(groups);
   const survivingIds: string[] = [];
   for (const series of aggregates) {
-    const item = { ...serializeSeriesAggregateForEval(series), ...foldCrossSystemData(series.memberIds, crossSystem) };
+    // The show's aggregates (and its external ids, for the series-level Arr /
+    // Seerr record).
+    const item = serializeSeriesAggregateForEval(series);
     const { arrMeta, seerrMeta } = lookupExternalMeta(
       item, arrDataByType, seerrDataByType,
     );
-    if (!evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta)) continue;
     // Each episode as the per-episode paths read it (its own row and
-    // cross-system values), with the series aggregates as constants. Same
-    // arr/seerr meta: correlation is series-level.
+    // cross-system values), with the series aggregates as constants, lowest id
+    // first. Same arr/seerr meta: correlation is series-level.
     survivingIds.push(...episodesMatchingIndividually(
       series.memberIds.map((id) => episodeById.get(id)!),
       item,
       (ep, seriesFields) =>
         evaluateAllQueryRulesInMemory(groups, { ...ep, ...crossSystem?.get(ep.id), ...seriesFields }, arrMeta, seerrMeta),
+      perEpisode,
     ));
   }
 
@@ -739,10 +745,10 @@ async function executeEpisodesWithSeriesAggregate(
       : Promise.resolve([]),
   ]);
 
-  // Surviving episodes already passed: their show at the series level, and
-  // each episode on its own with the series aggregates injected
-  // (computeAggregateSurvivingEpisodeIds). Do NOT re-evaluate them through
-  // the ungrouped per-episode path — an aggregate field reads NULL there.
+  // Surviving episodes already passed, each on its own with the series
+  // aggregates injected (computeAggregateSurvivingEpisodeIds). Do NOT
+  // re-evaluate them through the ungrouped per-episode path — an aggregate
+  // field reads NULL there.
   const serializedEpisodes = episodeRows.map(serializeItem);
 
   // Flat items: full in-memory evaluation (handles all rule types correctly).
