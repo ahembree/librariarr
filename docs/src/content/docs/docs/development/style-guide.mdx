@@ -98,9 +98,11 @@ What a thing **is**, never how it is doing — so they never borrow the status h
 | `--app-lidarr` | `oklch(76.5% 0.177 163.223)` | Lidarr |
 | `--app-seerr` | `oklch(70.2% 0.183 293.541)` | Seerr |
 | `--app-tracearr` | `oklch(78.9% 0.154 211.53)` | Tracearr |
-| `--media-movie` | `oklch(67.3% 0.182 276.935)` | Movie type chip |
-| `--media-series` | `oklch(71.4% 0.203 305.504)` | Series type chip |
-| `--media-music` | `oklch(71.8% 0.202 349.761)` | Music type chip |
+| `--media-movie` | `oklch(67.3% 0.182 276.935)` | Movie type chip (indigo) |
+| `--media-series` | `oklch(84.1% 0.238 128.85)` | Series type chip (lime) |
+| `--media-music` | `oklch(71.8% 0.202 349.761)` | Music type chip (pink) |
+
+The three media types sit well apart from each other and from the status hues, measured in OKLab (`tests/unit/theme/media-type-colors.test.ts`): Movie and Series were once indigo beside purple and read as one colour.
 
 Read an integration's classes from `INTEGRATION_APP_STYLES` (`src/lib/theme/integration-colors.ts`), a media type's from `MEDIA_TYPE_BADGE_COLORS` (`src/lib/theme/media-type-colors.ts`), and a server type's from `SERVER_TYPE_STYLES` (`src/lib/server-styles.ts`) — Plex is orange everywhere, the login button and onboarding included.
 
@@ -474,7 +476,7 @@ The coloured resolution, dynamic-range, audio-profile and audio-codec chips — 
 - **Missing values**: no chip. A table cell shows a plain `-` instead — never a grey "-", "Unknown" or "SDR" chip.
 - **Labels**: a resolution shows its standard label (`4K`, `1080P`…) and a value that maps to none its own spelling; SDR is shown like any other dynamic range; an audio codec is upper-cased; a count reads `label: n` in the chip's colour.
 - **Order**: counts follow `QUALITY_ORDER` and `AUDIO_CODEC_ORDER`, then the rest by name, with empty buckets dropped.
-- **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. Use the exported `QualityBar` for a bar outside `MediaCard`.
+- **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. SDR draws no segment: it is the baseline every file has, so the bar under the artwork marks only what sets an item apart (the SDR chip still shows in tables, popovers and detail pages). Use the exported `QualityBar` for a bar outside `MediaCard`.
 - **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge` (see Chips vs Badges): neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision follows [Stream Decisions](#stream-decisions) below, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. A resolution named outside a media item (a Seerr request's "4K") is a `QualityChip` too, so it takes the user's resolution colour.
 - **Per-stream values** (a stream's `videoRangeType`, an audio stream's profile) are the server's own spellings; colour them by the range or profile they name (`detectStreamDynamicRange`, `detectStreamAudioProfile`), with the raw value as the chip's title.
 

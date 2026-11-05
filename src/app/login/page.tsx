@@ -333,7 +333,7 @@ export default function LoginPage() {
                   onClick={handlePlexLogin}
                   disabled={plexLoading}
                   variant="ghost"
-                  className={`w-full cursor-pointer border ${SERVER_TYPE_STYLES.PLEX.classes}`}
+                  className={`w-full cursor-pointer ${SERVER_TYPE_STYLES.PLEX.signInButton}`}
                   size="lg"
                 >
                   <svg

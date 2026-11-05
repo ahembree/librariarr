@@ -136,7 +136,9 @@
      status set: green, amber, red, sky). The same in both themes.
      excluded: an item protected by a lifecycle exception (shield marker).
      app-*: each integration's own colour (its dot, tile and links).
-     media-*: the Movie / Series / Music type chips. */
+     media-*: the Movie / Series / Music type chips — indigo, lime, pink, so
+     the three read apart at a glance and none sits beside a status hue
+     (tests/unit/theme/media-type-colors.test.ts measures both). */
   --excluded: oklch(75% 0.183 55.934);
   --app-sonarr: oklch(74.6% 0.16 232.661);
   --app-radarr: oklch(82.8% 0.189 84.429);
@@ -144,7 +146,7 @@
   --app-seerr: oklch(70.2% 0.183 293.541);
   --app-tracearr: oklch(78.9% 0.154 211.53);
   --media-movie: oklch(67.3% 0.182 276.935);
-  --media-series: oklch(71.4% 0.203 305.504);
+  --media-series: oklch(84.1% 0.238 128.85);
   --media-music: oklch(71.8% 0.202 349.761);
 
   /* Overhaul tokens — light. Dark is the shipped default; these keep the
