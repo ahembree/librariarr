@@ -3,7 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
-import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
+import { validateRequest, ruleSetUpdateSchema, ruleSetScopeError } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
@@ -70,6 +70,32 @@ export const PUT = withSession(async (
         { status: 400 }
       );
     }
+  }
+
+  // A Series or Music rule set judging whole shows or artists may not use a
+  // criterion that describes one episode or track (`ruleSetScopeError`): new
+  // rules under the stored scope, or the scope turned on over the stored
+  // rules, are refused as a create would be. A save changing neither (a
+  // rename, enabling or disabling it, its action settings) cannot make a rule
+  // set invalid, and stays allowed on one saved before the rule existed —
+  // whose detection is skipped and whose actions are held until it is edited.
+  if (rules !== undefined || seriesScope !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { type: true, seriesScope: true, rules: true },
+    });
+    if (!current) {
+      return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
+    }
+    const scopeError = ruleSetScopeError(
+      {
+        type: current.type,
+        seriesScope: seriesScope ?? current.seriesScope,
+        rules: rules ?? current.rules,
+      },
+      rules !== undefined ? "rules" : "seriesScope",
+    );
+    if (scopeError) return scopeError;
   }
 
   // If the merged state would be an enabled CHANGE_QUALITY_PROFILE_* action

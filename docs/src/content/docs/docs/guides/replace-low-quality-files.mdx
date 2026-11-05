@@ -65,10 +65,14 @@ whenever the item still matches.
 
 ## Shows
 
-On the **Series** tab the same conditions work per episode. With
-**Match against entire series** off, a file delete acts only on the episodes that matched
+On the **Series** tab the same conditions work per episode, with
+**Match against entire series** off: a file delete acts only on the episodes that matched
 (a 480p episode in an otherwise 1080p season), and Sonarr's search is run
-for exactly those episodes. With it on, the action covers the whole show.
+for exactly those episodes. Resolution, codecs and the other quality fields
+describe one episode's file, so they can't be used with **Match against
+entire series** on — a whole-show action would follow one episode's quality.
+The editor disables them there and offers to turn series scope off. Music is
+the same with **Match against entire artist**.
 
 ## Fix the profiles first
 

@@ -9,9 +9,12 @@ import {
   getStreamQueryFieldsForType,
   getConditionField,
   isValuelessOperator,
+  isBlockedAtGroupScope,
+  GROUP_SCOPE_TERMS,
   type Condition,
   type ConditionGroup,
   type ConditionLogic,
+  type GroupScopeType,
   type LibraryType,
   type StreamQueryStreamType,
 } from "@/lib/conditions";
@@ -46,6 +49,20 @@ export function validateAllRules(groups: LifecycleRuleGroup[]): boolean {
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
+/**
+ * The scope the rule set judges whole shows or artists in, while it is on
+ * (`FieldContext.groupScope`): criteria describing one episode or track are
+ * not allowed there (`isBlockedAtGroupScope`, src/lib/conditions/group-scope.ts).
+ */
+function groupScopeOf(ctx: FieldContext): GroupScopeType | null {
+  return ctx.groupScope === "SERIES" || ctx.groupScope === "MUSIC" ? ctx.groupScope : null;
+}
+
+function groupScopeFieldTooltip(scope: GroupScopeType): string {
+  const t = GROUP_SCOPE_TERMS[scope];
+  return `Describes one ${t.member}, not the whole ${t.group} — turn off "${t.toggle}" to use it`;
+}
+
 function createRule(): LifecycleRule {
   return {
     id: generateId(),
@@ -70,6 +87,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   }),
 
   isFieldDisabled: (field, ctx) => {
+    if (groupScopeOf(ctx) && isBlockedAtGroupScope(field)) return true;
     const def = getConditionField(field);
     if (!def) return false;
     if (def.requiresArr && ctx.arrConnected === false) return true;
@@ -83,6 +101,8 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   },
 
   getDisabledTooltip: (field, ctx) => {
+    const scope = groupScopeOf(ctx);
+    if (scope && isBlockedAtGroupScope(field)) return groupScopeFieldTooltip(scope);
     const def = getConditionField(field);
     if (!def) return null;
     if (def.requiresArr && ctx.arrConnected === false)
@@ -103,6 +123,11 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   isValuelessOperator,
 
   getFieldUnreachableTooltip: (field, ctx) => {
+    // A rule already using a criterion the scope does not allow (a rule set
+    // saved before the rule, an import, or the scope just turned on): marked
+    // on its row, beside the editor's warning listing them all.
+    const scope = groupScopeOf(ctx);
+    if (scope && isBlockedAtGroupScope(field)) return groupScopeFieldTooltip(scope);
     const def = getConditionField(field);
     if (!def) return null;
     // arrUnreachable / seerrUnreachable mean "configured but currently
@@ -124,6 +149,14 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   },
 
   // Stream query support
+  getStreamQueryDisabledTooltip: (ctx) => {
+    const scope = groupScopeOf(ctx);
+    if (!scope) return null;
+    const t = GROUP_SCOPE_TERMS[scope];
+    return scope === "SERIES"
+      ? `Stream queries read one ${t.member}'s tracks — turn off "${t.toggle}" to use them`
+      : `Stream queries read one ${t.member}'s streams — turn off "${t.toggle}" to use them`;
+  },
   streamQueryFields: STREAM_QUERY_FIELDS,
   streamQuerySections: STREAM_QUERY_SECTIONS,
   getStreamQueryFieldsForType: (streamType) =>
@@ -162,6 +195,12 @@ interface RuleBuilderProps {
   seerrConnected?: boolean;
   seerrUnreachable?: boolean;
   libraryType?: LibraryType;
+  /**
+   * The scope the rule set judges whole shows or artists in ("Match against
+   * entire series" / "artist" on), or null: criteria describing one episode or
+   * track and stream queries are then offered disabled, with the reason.
+   */
+  groupScope?: GroupScopeType | null;
 }
 
 export function RuleBuilder({
@@ -174,6 +213,7 @@ export function RuleBuilder({
   seerrConnected,
   seerrUnreachable,
   libraryType,
+  groupScope = null,
 }: RuleBuilderProps) {
   const fieldContext: FieldContext = {
     arrConnected,
@@ -182,6 +222,7 @@ export function RuleBuilder({
     seerrConnected,
     seerrUnreachable,
     libraryType,
+    groupScope,
   };
   return (
     <BaseBuilder<LifecycleRule, LifecycleRuleGroup>

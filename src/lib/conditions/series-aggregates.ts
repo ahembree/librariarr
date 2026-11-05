@@ -226,8 +226,19 @@ const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggrega
 // member (the lowest id) made "Resolution = 4K" match a show only when its
 // first episode was 4K. A group matches a rule when at least ONE member
 // satisfies the whole rule, each member seen as the group record carrying that
-// member's own values for those fields. NOT forms follow: "NOT Resolution =
-// 4K" matches a show with at least one episode that is not 4K.
+// member's own values for those fields. NOT forms follow: "NOT Genre =
+// Anime" matches a show with at least one episode whose genres leave it out.
+//
+// Criteria that describe one file or one episode/track (Resolution, the
+// codecs, Year, the stream fields and queries, …) are not allowed at series or
+// artist scope at all (`groupScopeViolation`, group-scope.ts): saving refuses
+// them, detection skips a rule set holding them, and the group-scope engines
+// match nothing for one. The per-member fields left there — Genre, Studio,
+// Country, Content Rating, Label, Is Watchlisted — are show- or artist-level
+// metadata the sync gives every member, so judging through the members reads
+// the group's own value. `MEMBER_VALUE_COLUMNS` still lists every per-item
+// column: a match stores and reports the values of the member it matched
+// through.
 
 /**
  * Fields a group record answers with ONE value for the whole show or artist

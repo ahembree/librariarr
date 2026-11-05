@@ -319,6 +319,7 @@ export async function detectAndSaveMatches(
     rules,
     ruleSet.serverIds,
     ruleSet.arrInstanceId,
+    ruleSet.seriesScope,
   );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
@@ -953,7 +954,7 @@ export async function runDetection(
       // manual "Re-evaluate All" path refuse rule sets the scheduled path
       // happily evaluates — the same rule set, a different answer depending on
       // how it was triggered.
-      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId, rs.seriesScope);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {

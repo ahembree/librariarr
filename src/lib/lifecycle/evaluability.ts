@@ -3,6 +3,7 @@ import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/li
 import { prisma } from "@/lib/db";
 import { hasEnabledArrInstances, arrFamilyLabel, resolveArrInstanceScope } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
 
 /**
  * Whether a rule set's external dependencies (Arr/Seerr instances) are
@@ -22,6 +23,14 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
  *    must also DISARM the rule set (clear matches, cancel pending actions):
  *    a vacuous whole-library flood armed before this guard existed would
  *    otherwise stay frozen forever and still execute.
+ *
+ * A rule set judging whole shows or artists on per-episode/per-track
+ * criteria (`groupScopeViolation`) is the one configuration skipped for its
+ * own rules rather than an outside dependency: it can be evaluated, but not
+ * faithfully — one episode would decide for the whole show. It is transient
+ * (an edit resolves it), so its matches and actions are left in place; its
+ * actions are held meanwhile by `actionHoldOf` (held-actions.ts), which reads
+ * the same predicate.
  *
  * This is the single policy point for the guard — the detection paths log
  * the reason and skip, the preview/test/diff routes return it as a 400.
@@ -165,7 +174,21 @@ export async function checkLifecycleRuleEvaluability(
    * (`resolveArrInstanceScope`), so that instance has to be enabled.
    */
   arrInstanceId?: string | null,
+  /**
+   * Whether the run judges whole shows or artists: the rule set's
+   * `seriesScope`, or the editor's unsaved value, read as the caller routes
+   * its evaluation. Omitted reads as on, the rule set default: a caller that
+   * forgets it refuses per-episode criteria rather than evaluating them at
+   * series scope. Only SERIES and MUSIC have a scope.
+   */
+  seriesScope: boolean = true,
 ): Promise<RuleEvaluability> {
+  // Checked first: it reads only the rules, and no instance or history makes
+  // such a rule set evaluable.
+  const scopeViolation = groupScopeViolation(type, seriesScope, rules);
+  if (scopeViolation) {
+    return { evaluable: false, permanent: false, reason: groupScopeHoldReason(scopeViolation) };
+  }
   if (hasArrRules(rules) && !(await hasEnabledArrInstances(userId, type, arrInstanceId))) {
     const scoped = arrInstanceId ? await resolveArrInstanceScope(userId, type, arrInstanceId) : null;
     return {

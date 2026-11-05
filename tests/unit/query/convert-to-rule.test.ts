@@ -3,6 +3,7 @@ import type { QueryDefinition } from "@/lib/query/types";
 import {
   ConvertQueryError,
   convertQueryToRuleSetBody,
+  convertedScope,
 } from "@/lib/query/convert-to-rule";
 import { ruleSetCreateSchema } from "@/lib/validation";
 
@@ -54,13 +55,21 @@ describe("convertQueryToRuleSetBody", () => {
     expect("actionType" in body).toBe(false);
   });
 
-  it("sets seriesScope only when target is SERIES, mirroring includeEpisodes", () => {
+  it("sets seriesScope only for a scoped target, SERIES mirroring includeEpisodes", () => {
     const movieBody = convertQueryToRuleSetBody(makeQuery(), {
       name: "M",
       targetLibraryType: "MOVIE",
       serverIds: ["srv1"],
     });
     expect("seriesScope" in movieBody).toBe(false);
+
+    // Music: artist scope on, the rule set default.
+    const musicBody = convertQueryToRuleSetBody(makeQuery({ mediaTypes: ["MUSIC"] }), {
+      name: "L",
+      targetLibraryType: "MUSIC",
+      serverIds: ["srv1"],
+    });
+    expect(musicBody.seriesScope).toBe(true);
 
     const seriesAggregate = convertQueryToRuleSetBody(
       makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: false }),
@@ -80,6 +89,62 @@ describe("convertQueryToRuleSetBody", () => {
       { name: "S-def", targetLibraryType: "SERIES", serverIds: ["srv1"] },
     );
     expect(seriesDefault.seriesScope).toBe(true);
+  });
+
+  describe("a query using a criterion that describes one episode or track", () => {
+    const perItem = (field: string, value: string, nested: unknown[] = []) =>
+      makeQuery({
+        groups: [{
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+            { id: "r2", field, operator: "equals", value, condition: "AND" },
+          ],
+          groups: nested as never,
+        }],
+      });
+
+    it("becomes a Series rule set with series scope off, even grouped by show, and saves", () => {
+      for (const includeEpisodes of [false, undefined, true]) {
+        const query = { ...perItem("resolution", "4K"), mediaTypes: ["SERIES" as const], includeEpisodes };
+        const body = convertQueryToRuleSetBody(query, { name: "S", targetLibraryType: "SERIES", serverIds: ["srv1"] });
+        expect(body.seriesScope).toBe(false);
+        expect(ruleSetCreateSchema.safeParse(body).success).toBe(true);
+      }
+    });
+
+    it("becomes a Music rule set with artist scope off, and saves", () => {
+      const query = { ...perItem("audioCodec", "flac"), mediaTypes: ["MUSIC" as const] };
+      const body = convertQueryToRuleSetBody(query, { name: "L", targetLibraryType: "MUSIC", serverIds: ["srv1"] });
+      expect(body.seriesScope).toBe(false);
+      expect(ruleSetCreateSchema.safeParse(body).success).toBe(true);
+    });
+
+    it("counts a stream query group", () => {
+      const query = {
+        ...perItem("title", "x", [{
+          id: "sq", condition: "AND", streamQuery: { streamType: "audio", quantifier: "any" },
+          rules: [{ id: "s1", field: "sqLanguage", operator: "equals", value: "English", condition: "AND" }], groups: [],
+        }]),
+        mediaTypes: ["SERIES" as const],
+      };
+      expect(convertedScope(query, "SERIES", query.groups)).toEqual({ seriesScope: false, blockedLabels: ["Stream Query"] });
+    });
+
+    it("says which criteria turned the scope off, for the dialog", () => {
+      const query = { ...perItem("resolution", "4K"), mediaTypes: ["SERIES" as const] };
+      expect(convertedScope(query, "SERIES", query.groups)).toEqual({ seriesScope: false, blockedLabels: ["Resolution"] });
+      const showLevel = { ...perItem("genre", "Drama"), mediaTypes: ["SERIES" as const] };
+      expect(convertedScope(showLevel, "SERIES", showLevel.groups)).toEqual({ seriesScope: true, blockedLabels: [] });
+      expect(convertedScope({ ...showLevel, includeEpisodes: true }, "SERIES", showLevel.groups)).toEqual({ seriesScope: false, blockedLabels: [] });
+      expect(convertedScope(query, "MOVIE", query.groups)).toBeNull();
+    });
+
+    it("keeps any criterion on a movie rule set, which has no scope", () => {
+      const body = convertQueryToRuleSetBody(perItem("resolution", "4K"), { name: "M", targetLibraryType: "MOVIE", serverIds: ["srv1"] });
+      expect("seriesScope" in body).toBe(false);
+    });
   });
 
   it("removes incompatible rules from the cleaned rules tree", () => {

@@ -95,6 +95,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
     arrInstanceId,
+    // As the group scope below reads it: per-episode criteria at series or
+    // artist scope are refused with the reason, not answered.
+    !!seriesScope,
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });

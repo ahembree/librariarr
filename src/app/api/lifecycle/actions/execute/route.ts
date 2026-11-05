@@ -27,6 +27,7 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { ACTION_SIGNATURE_SELECT, actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { coverageOf, episodesToExecute } from "@/lib/lifecycle/episode-coverage";
+import { actionHoldOf } from "@/lib/lifecycle/held-actions";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import {
   destructiveRefusalResponse,
@@ -160,12 +161,19 @@ async function executeRuleSet(
     );
   }
 
-  // Held since a save changed what the rule set matches (`actionsHeldSince`):
-  // the stored matches this route acts on are the old rules' until a
-  // detection run re-checks them — the scheduled executor holds them too.
-  if (ruleSet.actionsHeldSince) {
+  // Held (`actionHoldOf`, the check the scheduled executor makes too): a save
+  // changed what the rule set matches (`actionsHeldSince`), so the stored
+  // matches this route acts on are the old rules' until a detection run
+  // re-checks them; or it judges whole shows or artists on per-episode or
+  // per-track criteria, which detection skips until it is edited.
+  const hold = actionHoldOf(ruleSet);
+  if (hold) {
     return NextResponse.json(
-      { error: "This rule set's rules or servers changed since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing" },
+      {
+        error: hold.kind === "groupScope"
+          ? hold.reason
+          : "This rule set's rules or servers changed since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing",
+      },
       { status: 409 }
     );
   }

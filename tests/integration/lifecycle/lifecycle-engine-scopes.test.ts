@@ -33,6 +33,7 @@ import {
   evaluateLifecycleRules,
   groupSeriesResults,
 } from "@/lib/rules/lifecycle-engine";
+import { logger } from "@/lib/logger";
 
 function rule(field: string, operator: string, value: string | number = "", extra: Partial<LifecycleRule> = {}): LifecycleRule {
   return { id: `${field}-${operator}`, field, operator, value, condition: "AND", ...extra };
@@ -94,10 +95,9 @@ describe("lifecycle engine scopes", () => {
       expect(await evaluateSeriesScope([group([rule("title", "equals", "Alpha", { enabled: false })])], [server.id])).toEqual([]);
     });
 
-    it("aggregates streams, watch history and episode dates per show", async () => {
+    it("aggregates watch history and episode dates per show", async () => {
       const { server, a1, a2, a3 } = await seedSeries();
       const rules = [group([
-        rule("audioLanguage", "equals", "English"),
         rule("watchedByUser", "equals", "alice"),
         rule("lastEpisodeAiredAt", "equals", "2022-09-01"),
         rule("lastEpisodeAddedAt", "equals", "2023-06-01"),
@@ -111,7 +111,23 @@ describe("lifecycle engine scopes", () => {
       expect([...res[0].memberIds].sort()).toEqual([a1.id, a2.id, a3.id].sort());
       expect(res[0]).toMatchObject({ matchedEpisodes: 3, availableEpisodeCount: 3, playCount: 2 });
       expect(res[0].watchedEpisodePercentage).toBeCloseTo(100 / 3);
-      expect((res[0].streams as unknown[]).length).toBe(1);
+    });
+
+    it("refuses a per-episode criterion in series scope, and checks it per episode with series scope off", async () => {
+      // A stream field describes one episode's file: in series scope a show
+      // would match on one English episode, so the engine matches nothing (the
+      // save, detection and Preview refuse it before it gets here).
+      const { server, a1 } = await seedSeries();
+      const rules = [group([rule("audioLanguage", "equals", "English"), rule("availableEpisodeCount", "greaterThanOrEqual", "1")])];
+
+      expect(await evaluateSeriesScope(rules, [server.id])).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringMatching(/^Refusing to evaluate series scope — This rule set uses per-episode criteria \(Audio Language\)/));
+
+      // Series scope off, forced through the series path by the aggregate:
+      // each episode's own streams decide, and only that episode is a member.
+      const perEpisode = await evaluateSeriesScope(rules, [server.id], undefined, undefined, true);
+      expect(perEpisode.map((r) => r.title)).toEqual(["Alpha"]);
+      expect(perEpisode[0].memberIds).toEqual([a1.id]);
     });
 
     it("evaluates Arr and Seerr criteria against the series' TVDB id", async () => {
@@ -151,10 +167,9 @@ describe("lifecycle engine scopes", () => {
       expect(await evaluateMusicScope([group([rule("title", "equals", "x", { enabled: false })])], [server.id])).toEqual([]);
     });
 
-    it("aggregates streams, plays and watch history per artist and evaluates Arr data", async () => {
+    it("aggregates plays and watch history per artist and evaluates Arr data", async () => {
       const { server, t1, t2 } = await seedMusic();
       const rules = [group([
-        rule("streamAudioCodec", "equals", "flac"),
         rule("watchedByUser", "equals", "bob"),
         rule("arrMonitored", "equals", "true"),
         rule("lastPlayedAt", "equals", "2024-05-01"),
@@ -163,6 +178,15 @@ describe("lifecycle engine scopes", () => {
       expect(res).toHaveLength(1);
       expect([...(res[0].memberIds as string[])].sort()).toEqual([t1.id, t2.id].sort());
       expect(await evaluateMusicScope(rules, [server.id])).toEqual([]);
+    });
+
+    it("refuses a per-track criterion in artist scope", async () => {
+      // One FLAC track would make the whole artist match.
+      const { server } = await seedMusic();
+      const rules = [group([rule("streamAudioCodec", "equals", "flac"), rule("watchedByUser", "equals", "bob")])];
+
+      expect(await evaluateMusicScope(rules, [server.id], { "mb-band": arrMeta() })).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringMatching(/^Refusing to evaluate artist scope — This rule set uses per-track criteria \(Stream Audio Codec\)/));
     });
 
     describe("same-named artists", () => {

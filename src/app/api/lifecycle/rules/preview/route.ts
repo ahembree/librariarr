@@ -33,7 +33,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
+  // Series/artist scope read as the evaluation below routes it (on unless
+  // turned off): per-episode criteria at that scope are refused, not previewed.
+  const evaluability = await checkLifecycleRuleEvaluability(
+    session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false,
+  );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }

@@ -35,6 +35,7 @@ import { coverageOf, uncoveredEpisodes } from "@/lib/lifecycle/episode-coverage"
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { actionHoldOf } from "@/lib/lifecycle/held-actions";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
@@ -334,6 +335,7 @@ export async function processLifecycleRules(userId?: string) {
         rules,
         ruleSet.serverIds,
         ruleSet.arrInstanceId,
+        ruleSet.seriesScope,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
@@ -563,19 +565,27 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       },
     },
   });
-  // Nor one whose rules or servers changed since its matches were detected
-  // (`actionsHeldSince`): its matches are the old rules' until a detection
-  // run re-checks them. Left out of the run untouched — still PENDING, dates
+  // Nor one whose rule set is held (`actionHoldOf`): its rules or servers
+  // changed since its matches were detected (`actionsHeldSince`) — they are
+  // the old rules' until a detection run re-checks them — or it judges whole
+  // shows or artists on per-episode/per-track criteria, which detection skips
+  // until it is edited. Left out of the run untouched — still PENDING, dates
   // unchanged, not cancelled by any check below — and logged, so a due action
   // that did not run is explained.
-  const heldRuleSets = new Set<string>();
+  const heldRuleSets = new Map<string, string>();
   const loadedActions = dueActions.filter((a) => {
-    if (!a.ruleSet?.actionsHeldSince) return true;
-    heldRuleSets.add(a.ruleSet.name);
+    const hold = a.ruleSet ? actionHoldOf(a.ruleSet) : null;
+    if (!hold) return true;
+    heldRuleSets.set(
+      a.ruleSet!.name,
+      hold.kind === "groupScope"
+        ? hold.reason
+        : "its rules or servers changed since its matches were detected; the next detection run re-checks them",
+    );
     return false;
   });
-  for (const name of heldRuleSets) {
-    logger.info("Lifecycle", `Holding the due actions of rule set "${name}" — its rules or servers changed since its matches were detected; the next detection run re-checks them`);
+  for (const [name, why] of heldRuleSets) {
+    logger.info("Lifecycle", `Holding the due actions of rule set "${name}" — ${why}`);
   }
 
   // Whether each action acts on its episodes rather than its series, decided
@@ -1012,14 +1022,23 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           status: "PENDING",
           updatedAt: action.updatedAt,
           scheduledFor: { lte: new Date() },
-          // An edit that changed what the rule set matches holds it from here
-          // on, even mid-run (`actionsHeldSince`).
-          ruleSet: { is: { enabled: true, actionsHeldSince: null } },
+          ruleSet: { is: { enabled: true } },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          ruleSet: { select: { type: true, seriesScope: true, rules: true, actionsHeldSince: true } },
+        },
       });
       if (!current) {
         skip("it was cancelled, rescheduled, changed or executed elsewhere after this run started");
+        continue;
+      }
+      // A hold set since the run loaded the action (`actionHoldOf`) holds it
+      // from here on, even mid-run: an edit that changed what the rule set
+      // matches, or rules judging whole shows on per-episode criteria. (The
+      // relation filter above already requires the rule set.)
+      if (current.ruleSet && actionHoldOf(current.ruleSet)) {
+        skip(`rule set "${action.ruleSet?.name ?? action.ruleSetId}" was held after this run started`);
         continue;
       }
       if (await newlyProtected(action.userId, action.actionType, mediaItem, filteredMatchedIds)) {

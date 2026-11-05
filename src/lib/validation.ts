@@ -15,6 +15,7 @@ import {
 } from "@/lib/auth/password-rules";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 import { isForwardAuthCredentialHeader } from "@/lib/sso/forward-secret";
+import { groupScopeSaveError, groupScopeViolation } from "@/lib/conditions/group-scope";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -470,7 +471,33 @@ export const ruleSetCreateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+}).superRefine((data, ctx) => {
+  // A Series or Music rule set judging whole shows or artists may not use a
+  // criterion that describes one episode or track (`groupScopeViolation`).
+  // The scope is on unless the request turns it off, as the route creates it.
+  const violation = groupScopeViolation(data.type, data.seriesScope ?? true, data.rules);
+  if (violation) ctx.addIssue({ code: "custom", path: ["rules"], message: groupScopeSaveError(violation) });
 });
+
+/**
+ * The refusal of a rule set update whose merged state — the request over the
+ * stored rule set, since a PUT sends only what changed — judges whole shows
+ * or artists on criteria that describe one episode or track
+ * (`groupScopeViolation`): the same 400 `ruleSetCreateSchema` answers a
+ * create with, which only the route can decide for an update. `path` names
+ * what the request changed: its rules, or only its scope. Null when allowed.
+ */
+export function ruleSetScopeError(
+  merged: { type: string; seriesScope: boolean; rules: unknown },
+  path: "rules" | "seriesScope",
+): NextResponse | null {
+  const violation = groupScopeViolation(merged.type, merged.seriesScope, merged.rules);
+  if (!violation) return null;
+  return NextResponse.json(
+    { error: "Validation failed", details: [`${path}: ${groupScopeSaveError(violation)}`] },
+    { status: 400 },
+  );
+}
 
 export const ruleSetUpdateSchema = z.object({
   name: z.string().min(1).optional(),

@@ -21,7 +21,15 @@ import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from 
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules, groupScopeViolation } from "@/lib/conditions";
+import {
+  BlockedReason,
+  EvaluationScopeCard,
+  SaveRuleSetButton,
+  groupScopeBlockedReason,
+  type ScopeConfig,
+} from "@/components/rule-scope-gate";
+import { responseErrorMessage } from "@/lib/api/error-message";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { groupOfRow } from "@/lib/media/detail-panel-item";
@@ -52,7 +60,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Loader2, Save, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Loader2, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -188,15 +196,6 @@ interface RuleSetExport {
   discordNotifyOnMatch?: boolean;
   stickyMatches?: boolean;
   serverIds?: string[];
-}
-
-interface ScopeConfig {
-  id: string;
-  label: string;
-  enabledDescription: string;
-  disabledDescription: string;
-  ruleSetEnabledLabel: string;
-  ruleSetDisabledLabel: string;
 }
 
 interface ActionTypeOption {
@@ -398,6 +397,22 @@ export function LifecycleRulePage({
   // is the SAME shared predicate the server-side guard triggers on, so the
   // banner can't come to a different conclusion about which rules count.
   const ruleUsesPlayActivity = useMemo(() => hasPlayActivityRules(groups), [groups]);
+  // With series or artist scope on, a rule judges a whole show or artist, so
+  // criteria describing one episode or track are not allowed — the same
+  // predicate the server refuses the save with and skips detection on
+  // (`groupScopeViolation`). While the rules break it, the scope card warns
+  // and offers to turn the scope off, and Save, Preview and Test Media stay
+  // off with the reason.
+  const hasScope = !!scopeConfig;
+  const scopeViolation = useMemo(
+    () => (hasScope ? groupScopeViolation(mediaType, seriesScope, groups) : null),
+    [hasScope, mediaType, seriesScope, groups],
+  );
+  const scopeBlockedReason = scopeViolation ? groupScopeBlockedReason(scopeViolation) : null;
+  // The scope the builder offers criteria for: per-episode/per-track ones are
+  // disabled while it judges whole shows or artists.
+  const builderGroupScope =
+    hasScope && seriesScope && (mediaType === "SERIES" || mediaType === "MUSIC") ? mediaType : null;
 
   // Recycle bin safety check
   const [recycleBinStatus, setRecycleBinStatus] = useState<{
@@ -859,8 +874,10 @@ export function LifecycleRulePage({
       }
 
       if (!response.ok) {
-        const data = await response.json();
-        setSaveError(data.error || "Failed to save rule set");
+        const data = await response.json().catch(() => null);
+        // A refused validation names the problem in its first detail (a
+        // per-episode criterion at series scope, say).
+        setSaveError(responseErrorMessage(data, "Failed to save rule set"));
         return;
       }
       const data = await response.json();
@@ -1470,10 +1487,11 @@ export function LifecycleRulePage({
           seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
           seerrUnreachable={seerrUnreachable}
           libraryType={mediaType}
+          groupScope={builderGroupScope}
         />
       </BuilderWithPseudocode>
     ),
-    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable],
+    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable, builderGroupScope],
   );
 
   return (
@@ -1673,25 +1691,12 @@ export function LifecycleRulePage({
 
           {/* Evaluation Scope (series/music only) */}
           {scopeConfig && (
-            <div className="rounded-lg border p-4">
-              <div className="flex items-center gap-3">
-                <Switch
-                  id={scopeConfig.id}
-                  checked={seriesScope}
-                  onCheckedChange={setSeriesScope}
-                />
-                <div>
-                  <Label htmlFor={scopeConfig.id} className="font-medium">
-                    {scopeConfig.label}
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {seriesScope
-                      ? scopeConfig.enabledDescription
-                      : scopeConfig.disabledDescription}
-                  </p>
-                </div>
-              </div>
-            </div>
+            <EvaluationScopeCard
+              config={scopeConfig}
+              seriesScope={seriesScope}
+              onSeriesScopeChange={setSeriesScope}
+              violation={scopeViolation}
+            />
           )}
 
           <IntegrationUnreachableBanner
@@ -2303,25 +2308,32 @@ export function LifecycleRulePage({
           )}
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <LoadingButton
-              onClick={handlePreview}
-              loading={previewing}
-              icon={Eye}
-              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              variant="secondary"
-            >
-              Preview
-            </LoadingButton>
-            <Button
-              onClick={() => setShowTestMediaDialog(true)}
-              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              variant="secondary"
-            >
-              <FlaskConical className="mr-2 h-4 w-4" />
-              Test Media
-            </Button>
-            <Button
-              onClick={() => {
+            <BlockedReason reason={scopeBlockedReason}>
+              <LoadingButton
+                onClick={handlePreview}
+                loading={previewing}
+                icon={Eye}
+                disabled={!!scopeBlockedReason || groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
+                variant="secondary"
+              >
+                Preview
+              </LoadingButton>
+            </BlockedReason>
+            <BlockedReason reason={scopeBlockedReason}>
+              <Button
+                onClick={() => setShowTestMediaDialog(true)}
+                disabled={!!scopeBlockedReason || groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
+                variant="secondary"
+              >
+                <FlaskConical className="mr-2 h-4 w-4" />
+                Test Media
+              </Button>
+            </BlockedReason>
+            <SaveRuleSetButton
+              blockedReason={scopeBlockedReason}
+              loading={loading}
+              justSaved={justSaved}
+              onSave={() => {
                 if (activeRuleSetId && !rulesChanged) {
                   // Config-only change — skip detection, just save
                   handleSave({ clearMatches: false, runDetection: false });
@@ -2332,17 +2344,7 @@ export function LifecycleRulePage({
                 }
               }}
               disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              className={justSaved ? "bg-green hover:bg-green text-white" : ""}
-            >
-              {loading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : justSaved ? (
-                <Check className="mr-2 h-4 w-4" />
-              ) : (
-                <Save className="mr-2 h-4 w-4" />
-              )}
-              {justSaved ? "Saved" : "Save"}
-            </Button>
+            />
             <div className="ml-auto flex gap-2">
               <Button
                 onClick={() => { setSaveError(null); setShowImportDialog(true); }}

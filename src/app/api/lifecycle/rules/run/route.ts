@@ -46,7 +46,7 @@ async function explainSkippedRuleSets(
   // deliberately turned off.
   const candidates = await prisma.ruleSet.findMany({
     where: namedRuleSetId ? { id: namedRuleSetId, userId } : { userId, enabled: true },
-    select: { id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true },
+    select: { id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true, seriesScope: true },
   });
 
   const enabledServers = await prisma.mediaServer.findMany({
@@ -74,6 +74,7 @@ async function explainSkip(
     enabled: boolean;
     serverIds: string[];
     arrInstanceId: string | null;
+    seriesScope: boolean;
   },
   enabledServerIds: Set<string>,
 ): Promise<string | null> {
@@ -89,7 +90,9 @@ async function explainSkip(
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
   if (!hasAnyActiveRules(rules)) return "The rule set has no active rules.";
 
-  const evaluability = await checkLifecycleRuleEvaluability(userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(
+    userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId, ruleSet.seriesScope,
+  );
   return evaluability.evaluable ? null : evaluability.reason;
 }
 

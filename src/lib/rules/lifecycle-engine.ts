@@ -67,6 +67,8 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { DATE_ONLY_FIELDS } from "@/lib/conditions/fields";
 import { formatDateOnly } from "@/lib/format";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
+import { groupScopeHoldReason, groupScopeViolation, type GroupScopeType } from "@/lib/conditions/group-scope";
+import { logger } from "@/lib/logger";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -1876,6 +1878,21 @@ export function evaluateAllRulesInMemory(
 export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasSeriesAggregateRules };
 
 /**
+ * Defense in depth for the group-scope engines: whether `rules` judge whole
+ * shows or artists on a criterion that describes one episode or track
+ * (`groupScopeViolation`), which saving refuses and detection, Preview and
+ * Test Media skip (`checkLifecycleRuleEvaluability`). A caller that reaches an
+ * engine anyway gets no matches — never a whole show matched on one episode —
+ * and the reason is logged.
+ */
+function refusesGroupScope(rules: LifecycleRule[] | LifecycleRuleGroup[], type: GroupScopeType): boolean {
+  const violation = groupScopeViolation(type, true, rules);
+  if (!violation) return false;
+  logger.warn("Lifecycle", `Refusing to evaluate ${type === "SERIES" ? "series" : "artist"} scope — ${groupScopeHoldReason(violation)}`);
+  return true;
+}
+
+/**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
  * first, then evaluate rules against the aggregated series data.
  * This is the default for SERIES type rule sets.
@@ -1885,7 +1902,12 @@ export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, ha
  * (`evaluateGroupThroughMembers`); the show's own values (name, play total,
  * size, streams, watchers, aggregates, cross-system, Arr, Seerr) are the same
  * for every episode. The match is stored and reported with the first such
- * episode's values.
+ * episode's values. Criteria that describe one episode (Resolution, Year, a
+ * stream query, …) are not allowed in series scope (`groupScopeViolation`):
+ * rules holding one match nothing here. What remains per episode — Genre,
+ * Studio, Country, Content Rating, Label, Is Watchlisted — is the show's own
+ * metadata, which the sync gives every episode, so judging the show through
+ * its episodes reads the show.
  */
 export async function evaluateSeriesScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -1910,6 +1932,10 @@ export async function evaluateSeriesScope(
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
+  // Series scope (not a per-episode run forced through here by an aggregate
+  // field, where every criterion is checked per episode): no per-episode
+  // criteria.
+  if (!restrictMembersToEpisodeMatches && refusesGroupScope(rules, "SERIES")) return [];
 
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
@@ -2225,7 +2251,9 @@ export async function evaluateSeriesScope(
 /**
  * Evaluate rules at the artist scope: aggregate ALL tracks into artists
  * first, then evaluate rules against the aggregated artist data.
- * This is the default for MUSIC type rule sets.
+ * This is the default for MUSIC type rule sets. Criteria that describe one
+ * track (Audio Codec, Year, Album, a stream query, …) are not allowed in
+ * artist scope (`groupScopeViolation`): rules holding one match nothing here.
  */
 export async function evaluateMusicScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -2236,6 +2264,7 @@ export async function evaluateMusicScope(
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
+  if (refusesGroupScope(rules, "MUSIC")) return [];
 
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);

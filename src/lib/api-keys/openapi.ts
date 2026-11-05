@@ -302,6 +302,8 @@ export const API_OPERATIONS: readonly Operation[] = [
       `Grouped by rule set. A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. ` +
       `Each group's \`ruleSet.actionsHeldSince\` is the time its rules or servers were changed, while its actions wait for the next detection run ` +
       `to re-check its matches (executing or retrying one answers 409 until then), and null otherwise. ` +
+      `Its \`ruleSet.scopeHoldReason\` is set, a sentence, while its actions are held because it uses per-episode or per-track criteria ` +
+      `with series or artist scope on (executing or retrying one answers 409 with that reason until the rule set is edited), and null otherwise. ` +
       `Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
@@ -381,7 +383,8 @@ export const API_OPERATIONS: readonly Operation[] = [
       `Listed items that are not current matches, or are protected by an exception, are skipped and the rest run — compare ` +
       `\`executed\` + \`failed\` with what you sent (400 when nothing is left). Refused whole — nothing runs — when an item changed ` +
       `identity since it matched, or the rule set's rules or servers changed since its matches were detected (409: run ` +
-      `detection again), or when a limit would be exceeded. A call naming an item that ` +
+      `detection again), or the rule set uses per-episode or per-track criteria with series or artist scope on (409: edit ` +
+      `the rule set), or when a limit would be exceeded. A call naming an item that ` +
       `another execution of the same rule set is acting on right now is refused (409) rather than repeating the deletion; ` +
       `calls naming different items run side by side.`,
     body: {
@@ -397,7 +400,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     responses: {
       "200": "`{ executed, failed, errors }`",
       "404": "No such rule set",
-      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), or the rule set's rules or servers changed since its matches were detected; nothing was executed",
+      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set's rules or servers changed since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on; nothing was executed",
       "429": BUDGET_429,
     },
   },

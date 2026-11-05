@@ -77,6 +77,21 @@ describe("docs rule set library", () => {
     expect(checkRuleSetLibrary("```json\n{ not json\n```").problems.get("block #1")?.[0]).toMatch(/^not valid JSON/);
   });
 
+  it("rejects a per-episode criterion in a rule set with series scope on, as saving does", () => {
+    // A whole-show rule may not use a criterion that describes one episode.
+    const series = structuredClone(ruleSets.find((r) => r.type === "SERIES" && r.seriesScope === true)!);
+    series.rules[0].rules.push({ id: "res", field: "resolution", operator: "equals", value: "4K", condition: "AND" });
+    expect(ruleSetProblems(series)).toEqual([
+      `With "Match against entire series" on, a rule judges a whole show, so it can't use criteria that describe one ` +
+        `episode or file: Resolution. Turn "Match against entire series" off to check them per episode, or remove them.`,
+    ]);
+    const payload: Record<string, unknown> = { ...series, serverIds: ["server"] };
+    delete payload.version;
+    expect(ruleSetCreateSchema.safeParse(payload).success).toBe(false);
+    // The same rules with series scope off are an import the editor can save.
+    expect(ruleSetProblems({ ...series, seriesScope: false })).toEqual([]);
+  });
+
   it("accepts the valueless operators as the editor stores them", () => {
     // Is Empty / Is Not Empty save `value: ""`, which is not a number.
     const base = structuredClone(ruleSets[0]);

@@ -1313,17 +1313,40 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
               <Layers className="mr-1 h-3 w-3" />
               Add Sub-group
             </Button>
-            {config.createStreamQueryGroup && (
-              <Button
-                onClick={handleAddStreamQuery}
-                variant="ghost"
-                size="sm"
-                className="flex-1 text-muted-foreground"
-              >
-                <AudioLines className="mr-1 h-3 w-3" />
-                Stream Query
-              </Button>
-            )}
+            {config.createStreamQueryGroup && (() => {
+              // Not offered while the scope does not allow it (a lifecycle
+              // rule set judging whole shows or artists): disabled, the reason
+              // on hover and focus — a disabled button takes no pointer
+              // events, so the tooltip hangs on a focusable span around it.
+              const blockedReason = config.getStreamQueryDisabledTooltip?.(fieldContext) ?? null;
+              const button = (
+                <Button
+                  onClick={handleAddStreamQuery}
+                  variant="ghost"
+                  size="sm"
+                  className={blockedReason ? "w-full text-muted-foreground" : "flex-1 text-muted-foreground"}
+                  disabled={!!blockedReason}
+                >
+                  <AudioLines className="mr-1 h-3 w-3" />
+                  Stream Query
+                </Button>
+              );
+              if (!blockedReason) return button;
+              return (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="flex flex-1" tabIndex={0}>
+                        {button}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      {blockedReason}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              );
+            })()}
           </>
         )}
       </div>

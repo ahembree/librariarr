@@ -221,6 +221,59 @@ describe("Convert query → lifecycle rule set", () => {
     expect(epPayload.ruleSet.seriesScope).toBe(false);
   });
 
+  it("creates a query using Resolution, grouped by show, as a rule set with series scope off", async () => {
+    // Resolution describes one episode, which a whole-show rule may not use:
+    // with series scope on the save would be refused.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const query = makeQuery({
+      mediaTypes: ["SERIES"],
+      includeEpisodes: false,
+      groups: [{
+        id: "g1",
+        condition: "AND",
+        rules: [
+          { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+          { id: "r2", field: "resolution", operator: "equals", value: "720P", condition: "AND" },
+        ],
+        groups: [],
+      }],
+    });
+
+    const body = convertQueryToRuleSetBody(query, { name: "Low-res shows", targetLibraryType: "SERIES", serverIds: [server.id] });
+    const payload = await expectJson<{ ruleSet: { id: string; seriesScope: boolean } }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body }),
+      201,
+    );
+
+    expect(payload.ruleSet.seriesScope).toBe(false);
+    expect((await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: payload.ruleSet.id } })).seriesScope).toBe(false);
+  });
+
+  it("creates a music query using Audio Codec as a rule set with artist scope off", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const query = makeQuery({
+      mediaTypes: ["MUSIC"],
+      groups: [{
+        id: "g1",
+        condition: "AND",
+        rules: [{ id: "r1", field: "audioCodec", operator: "equals", value: "mp3", condition: "AND" }],
+        groups: [],
+      }],
+    });
+
+    const body = convertQueryToRuleSetBody(query, { name: "MP3s", targetLibraryType: "MUSIC", serverIds: [server.id] });
+    const payload = await expectJson<{ ruleSet: { seriesScope: boolean } }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body }),
+      201,
+    );
+
+    expect(payload.ruleSet.seriesScope).toBe(false);
+  });
+
   it("rejects a duplicate name + type combination", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

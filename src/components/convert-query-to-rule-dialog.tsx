@@ -27,7 +27,9 @@ import {
   ConvertQueryError,
   arrInstanceIdForType,
   convertQueryToRuleSetBody,
+  convertedScope,
 } from "@/lib/query/convert-to-rule";
+import { GROUP_SCOPE_TERMS } from "@/lib/conditions/group-scope";
 
 interface Props {
   open: boolean;
@@ -214,6 +216,13 @@ function ConvertDialogBody({
       countAllRulesIncludingDisabled(cleanedGroups) === 0
     );
   }, [cleanedGroups]);
+
+  // The scope the rule set is created with, as the body sets it: what the
+  // dialog says below.
+  const scope = useMemo(
+    () => (targetType && cleanedGroups ? convertedScope(query, targetType, cleanedGroups) : null),
+    [query, targetType, cleanedGroups],
+  );
 
   const effectiveServerIds =
     query.serverIds.length > 0
@@ -443,6 +452,31 @@ function ConvertDialogBody({
               ))}
             </ul>
           </div>
+        )}
+
+        {targetType && !wouldHaveNoRules && scope && (targetType === "SERIES" || targetType === "MUSIC") && (
+          scope.blockedLabels.length > 0 ? (
+            <div className="space-y-2 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
+                <p>
+                  Created with &ldquo;{GROUP_SCOPE_TERMS[targetType].toggle}&rdquo; off:{" "}
+                  {scope.blockedLabels.join(", ")}{" "}
+                  {scope.blockedLabels.length === 1 ? "describes" : "describe"} one{" "}
+                  {GROUP_SCOPE_TERMS[targetType].member}, which a rule judging a whole{" "}
+                  {GROUP_SCOPE_TERMS[targetType].group} can&apos;t use. Each{" "}
+                  {GROUP_SCOPE_TERMS[targetType].member} is checked on its own and matches are
+                  grouped by {GROUP_SCOPE_TERMS[targetType].group}.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              {scope.seriesScope
+                ? `Created with "${GROUP_SCOPE_TERMS[targetType].toggle}" on: each ${GROUP_SCOPE_TERMS[targetType].group} is judged as a whole.`
+                : `Created with "${GROUP_SCOPE_TERMS[targetType].toggle}" off, as the query lists individual episodes: each ${GROUP_SCOPE_TERMS[targetType].member} is checked on its own.`}
+            </div>
+          )
         )}
 
         {query.serverIds.length > 0 && (

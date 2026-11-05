@@ -14,6 +14,7 @@ import {
 } from "@/lib/lifecycle/action-target";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
+import { scopeHoldReason } from "@/lib/lifecycle/held-actions";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -81,6 +82,13 @@ interface RuleSetGroup {
      * from it. Per rule set, as the hold is.
      */
     actionsHeldSince: string | null;
+    /**
+     * Set while the rule set judges whole shows or artists (series or artist
+     * scope) on per-episode or per-track criteria (`scopeHoldReason`,
+     * held-actions.ts): why its actions are held — refused the same way —
+     * until it is edited. Null otherwise.
+     */
+    scopeHoldReason: string | null;
   };
   items: ActionItem[];
   count: number;
@@ -102,6 +110,8 @@ const RULE_SET_SELECT = {
   id: true, name: true, type: true, seriesScope: true, actionType: true, actionDelayDays: true,
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
   removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true, actionsHeldSince: true,
+  // Read for the group-scope hold only (`scopeHoldReason`), never returned.
+  rules: true,
 } as const;
 
 type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: string }>;
@@ -110,9 +120,9 @@ type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: stri
  * The user's rule sets and each library's server, read once. They used to come
  * through Prisma's per-row relation includes (`ruleSet`, `library.mediaServer`),
  * which stitched the same handful of rows onto every action — measured at
- * ~150 ms of a 10.8k-action listing. Each rule set's hold
- * (`actionsHeldSince`) comes with it, so the listing reports it without a read
- * per row.
+ * ~150 ms of a 10.8k-action listing. Each rule set's holds
+ * (`actionsHeldSince`, `scopeHoldReason`) come with it, so the listing reports
+ * them without a read per row.
  */
 async function loadActionLookups(userId: string) {
   const [ruleSets, libraries] = await Promise.all([
@@ -124,7 +134,11 @@ async function loadActionLookups(userId: string) {
   ]);
   return {
     ruleSetById: new Map(
-      ruleSets.map((rs) => [rs.id, { ...rs, actionsHeldSince: rs.actionsHeldSince?.toISOString() ?? null }]),
+      ruleSets.map(({ rules, ...rs }) => [rs.id, {
+        ...rs,
+        actionsHeldSince: rs.actionsHeldSince?.toISOString() ?? null,
+        scopeHoldReason: scopeHoldReason({ type: rs.type, seriesScope: rs.seriesScope, rules }),
+      }]),
     ),
     servers: new Map(libraries.map((l) => [l.id, l.mediaServer])) as LibraryServers,
   };
@@ -580,6 +594,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
       arrInstanceId: null,
       targetQualityProfileId: a.targetQualityProfileId ?? null,
       actionsHeldSince: null,
+      scopeHoldReason: null,
       deleted: true,
     };
 

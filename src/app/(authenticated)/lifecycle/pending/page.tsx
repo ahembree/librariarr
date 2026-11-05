@@ -56,7 +56,8 @@ import {
 } from "@/components/held-actions";
 import {
   heldActionCount,
-  heldActionsReason,
+  heldCountLabel,
+  holdReasonOf,
   isActionHeld,
   skippedHeldLabel,
   type HoldingRuleSet,
@@ -123,6 +124,12 @@ interface RuleSetGroup {
      * refuses Execute, Execute All and Retry (409), so the page disables them.
      */
     actionsHeldSince?: string | null;
+    /**
+     * Set while the rule set uses per-episode/per-track criteria at series or
+     * artist scope: its actions are held, and refused the same way, until it
+     * is edited. The reason, as the server words it.
+     */
+    scopeHoldReason?: string | null;
   };
   items: ActionItem[];
   count: number;
@@ -239,7 +246,7 @@ function VirtualizedActionTable({
               const hasMediaItem = action.mediaItem.id !== null;
               const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
               const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
-              const heldSince = isActionHeld(hold, action) ? hold.actionsHeldSince! : null;
+              const heldReason = isActionHeld(hold, action) ? holdReasonOf(hold) : null;
 
               const tableRow = (
                 <tr
@@ -325,7 +332,7 @@ function VirtualizedActionTable({
                       >
                         {STATUS_LABELS[action.status] ?? action.status}
                       </ColorChip>
-                      {heldSince && <HeldChip since={heldSince} />}
+                      {heldReason && <HeldChip reason={heldReason} />}
                     </div>
                     {action.error && (
                       <div className="mt-1 max-w-64">
@@ -352,7 +359,7 @@ function VirtualizedActionTable({
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         <ExecuteNowButton
-                          heldSince={heldSince}
+                          heldReason={heldReason}
                           executing={isItemExecuting}
                           disabled={!hasMediaItem}
                           onExecute={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
@@ -378,7 +385,7 @@ function VirtualizedActionTable({
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {action.status === "FAILED" && !isDeletedRuleSet && hasMediaItem && (
                           <RetryActionButton
-                            heldSince={heldSince}
+                            heldReason={heldReason}
                             retrying={retryingItems.has(action.id)}
                             onRetry={() => onRetryAction(action)}
                           />
@@ -430,8 +437,8 @@ interface PendingActionCardProps {
   isMovie: boolean;
   priority: boolean;
   excepted: boolean;
-  /** Since when the action's rule set holds it, or null (`isActionHeld`). */
-  heldSince: string | null;
+  /** Why the action's rule set holds it, or null (`isActionHeld`, `holdReasonOf`). */
+  heldReason: string | null;
   onItemClick: (action: ActionItem) => void;
   getHex: (category: ChipColorCategory, value: string) => string;
 }
@@ -447,7 +454,7 @@ const PendingActionCard = memo(function PendingActionCard({
   isMovie,
   priority,
   excepted,
-  heldSince,
+  heldReason,
   onItemClick,
   getHex,
 }: PendingActionCardProps) {
@@ -489,7 +496,7 @@ const PendingActionCard = memo(function PendingActionCard({
             <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
               {STATUS_LABELS[action.status] ?? action.status}
             </ColorChip>
-            {heldSince && <HeldChip since={heldSince} />}
+            {heldReason && <HeldChip reason={heldReason} />}
           </>
         }
       />
@@ -531,7 +538,7 @@ function PendingActionCardGrid({
     overscan: 5,
   });
 
-  const heldSince = hold.actionsHeldSince ?? null;
+  const heldReason = holdReasonOf(hold);
   const renderCard = useCallback(
     (action: ActionItem, { priority }: GridCardContext) => (
       <PendingActionCard
@@ -540,12 +547,12 @@ function PendingActionCardGrid({
         isMovie={isMovie}
         priority={priority}
         excepted={exceptedItemIds.has(action.mediaItem.id!)}
-        heldSince={isActionHeld({ actionsHeldSince: heldSince }, action) ? heldSince : null}
+        heldReason={heldReason && isActionHeld(hold, action) ? heldReason : null}
         onItemClick={onItemClick}
         getHex={getHex}
       />
     ),
-    [isMusic, isMovie, exceptedItemIds, heldSince, onItemClick, getHex],
+    [isMusic, isMovie, exceptedItemIds, hold, heldReason, onItemClick, getHex],
   );
 
   return (
@@ -759,8 +766,9 @@ export default function PendingActionsPage() {
     // disabled; this covers a hold the listing reported while the dialog was open.
     const group = groups.find((g) => g.ruleSet.id === ruleSetId);
     const held = group ? heldActionCount(group) : 0;
-    if (group?.ruleSet.actionsHeldSince && held > 0) {
-      toast.info(skippedHeldLabel(held), { description: heldActionsReason(group.ruleSet.actionsHeldSince) });
+    const heldReason = group ? holdReasonOf(group.ruleSet) : null;
+    if (heldReason && held > 0) {
+      toast.info(skippedHeldLabel(held), { description: heldReason });
       return;
     }
     executingRuleActions.add(ruleSetId);
@@ -1025,10 +1033,12 @@ export default function PendingActionsPage() {
               const isExecuting = executingRules.has(group.ruleSet.id);
               const result = executeResults[group.ruleSet.id];
 
-              // Held since an edit changed what the rule set matches: the rows
-              // it holds (pending, failed) can't run until detection re-checks.
+              // Held since an edit changed what the rule set matches, or for
+              // per-episode criteria at series scope: the rows it holds
+              // (pending, failed) can't run until detection re-checks them, or
+              // until the rule set is edited.
               const heldCount = heldActionCount(group);
-              const heldSince = heldCount > 0 ? group.ruleSet.actionsHeldSince! : null;
+              const heldReason = heldCount > 0 ? holdReasonOf(group.ruleSet) : null;
 
               // Per-rule deletion stats — contextual to active tab
               const rs = ruleSetStatsMap.get(group.ruleSet.id);
@@ -1058,9 +1068,9 @@ export default function PendingActionsPage() {
                   expanded={isExpanded}
                   onToggle={() => toggleExpand(group.ruleSet.id)}
                   meta={
-                    heldSince ? (
+                    heldReason ? (
                       <>
-                        <HeldChip since={heldSince} />
+                        <HeldChip reason={heldReason} />
                         {stats}
                       </>
                     ) : stats
@@ -1086,7 +1096,8 @@ export default function PendingActionsPage() {
                         )}
                         <ExecuteAllButton
                           held={heldCount}
-                          heldSince={heldSince}
+                          heldReason={heldReason}
+                          heldLabel={heldCountLabel(heldCount, group.ruleSet)}
                           executing={isExecuting}
                           onExecuteAll={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
                         />

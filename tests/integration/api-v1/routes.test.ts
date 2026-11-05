@@ -73,6 +73,7 @@ import { GET as appMediaItemGET } from "@/app/api/media/[id]/route";
 import { GET as appSyncStatusGET } from "@/app/api/sync/status/route";
 import { API_SCOPES, API_SCOPE_INFO, type ApiScope } from "@/lib/api-keys/scopes";
 import { TASK_LIFECYCLE_DETECTION, TASK_LIFECYCLE_EXECUTION, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
 
 const prisma = getTestPrisma();
 
@@ -368,6 +369,52 @@ describe("/api/v1 endpoints", () => {
       );
       const holds = Object.fromEntries(viaApi.groups.map((g) => [g.ruleSet.id, [g.ruleSet.actionsHeldSince, g.count]]));
       expect(holds).toEqual({ [held.id]: [heldSince.toISOString(), 1], [unheld.id]: [null, 1] });
+    });
+
+    it("holds a series-scoped rule set's actions for a per-episode criterion: listed with the reason, execute refused", async () => {
+      // Saved before such criteria were refused at series scope (or restored):
+      // its actions wait until it is edited, and a key cannot run them.
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const episode = await createTestMediaItem(library.id, { type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const rules = [{
+        id: "g1", condition: "AND", groups: [],
+        rules: [{ id: "r1", field: "resolution", operator: "equals", value: "4K", condition: "AND" }],
+      }];
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Per-episode", type: "SERIES", seriesScope: true, rules, serverIds: [server.id],
+        actionEnabled: true, actionType: "UNMONITOR_SONARR",
+      });
+      await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: episode.id, itemData: { id: episode.id, title: "Show" } } });
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, ruleSetId: ruleSet.id, mediaItemId: episode.id, actionType: "UNMONITOR_SONARR",
+          status: "PENDING", scheduledFor: new Date(),
+        },
+      });
+      const reason = groupScopeHoldReason(groupScopeViolation("SERIES", true, rules)!);
+      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:read", "lifecycle:execute"] });
+
+      type Listing = { groups: Array<{ ruleSet: { id: string; actionsHeldSince: string | null; scopeHoldReason: string | null } }> };
+      const listing = await expectJson<Listing>(
+        await call(ROUTES.find((r) => r.label === "GET /lifecycle/actions")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      expect(listing.groups.map((g) => g.ruleSet)).toEqual([
+        expect.objectContaining({ id: ruleSet.id, actionsHeldSince: null, scopeHoldReason: reason }),
+      ]);
+
+      const refused = await expectJson<{ error: string }>(
+        await call(
+          ROUTES.find((r) => r.label === "POST /lifecycle/actions/execute")!,
+          { authorization: `Bearer ${key}` },
+          { body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] } },
+        ),
+        409,
+      );
+      expect(refused.error).toBe(reason);
+      expect((await prisma.lifecycleAction.findFirstOrThrow({ where: { ruleSetId: ruleSet.id } })).status).toBe("PENDING");
     });
 
     it("POST /jobs/sync queues a sync per enabled server, attributed to the key", async () => {

@@ -16,6 +16,7 @@ import { ColorChip } from "@/components/color-chip";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { avatarColor } from "@/lib/avatar";
 import { countAllRules } from "@/components/rule-builder";
+import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import type { SavedRuleSet } from "@/hooks/use-rule-editor-data";
 
@@ -33,12 +34,15 @@ function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {
 /** Tinted chip for rule-set capability flags in the saved list. */
 function FeatureChip({
   tone,
+  title,
   children,
 }: {
-  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted";
+  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted" | "red";
+  title?: string;
   children: React.ReactNode;
 }) {
   const tones: Record<string, string> = {
+    red: "border-red/25 bg-red-dim text-red",
     green: "border-green/30 bg-green-dim text-green",
     amber: "border-amber/30 bg-amber-dim text-amber",
     sky: "border-sky/30 bg-sky-dim text-sky",
@@ -47,7 +51,7 @@ function FeatureChip({
     muted: "border-border bg-muted/40 text-muted-foreground",
   };
   return (
-    <ColorChip className={`text-[10px] font-medium ${tones[tone]}`}>{children}</ColorChip>
+    <ColorChip className={`text-[10px] font-medium ${tones[tone]}`} title={title}>{children}</ColorChip>
   );
 }
 
@@ -69,11 +73,20 @@ function RuleSetChips({
   scopeLabels?: RuleSetNavigatorProps["scopeLabels"];
 }) {
   const ruleCount = countRules(ruleSet.rules);
+  // Judging whole shows or artists on per-episode/per-track criteria (saved
+  // before that was refused, or restored): detection skips it and its actions
+  // are held until it is edited. The reason on hover.
+  const scopeViolation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope !== false, ruleSet.rules);
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1">
       <span className="mr-1 font-mono text-[10.5px] text-faint">
         {ruleCount} rule{ruleCount !== 1 && "s"}
       </span>
+      {scopeViolation && (
+        <FeatureChip tone="red" title={groupScopeHoldReason(scopeViolation)}>
+          Needs edit
+        </FeatureChip>
+      )}
       {!ruleSet.enabled && <FeatureChip tone="muted">Disabled</FeatureChip>}
       {ruleSet.enabled && ruleSet.actionEnabled && <FeatureChip tone="amber">Action</FeatureChip>}
       {ruleSet.enabled && !!ruleSet.collectionId && <FeatureChip tone="sky">Collection</FeatureChip>}

@@ -71,6 +71,12 @@ export interface FieldContext {
   mediaTypes?: ("MOVIE" | "SERIES" | "MUSIC")[];
   /** Whether the query is in episode mode (skips series grouping). */
   includeEpisodes?: boolean;
+  /**
+   * The rule builder's scope while a Series or Music rule set judges whole
+   * shows or artists ("Match against entire series" / "artist" on), else
+   * null: per-episode/per-track criteria and stream queries are disabled.
+   */
+  groupScope?: "SERIES" | "MUSIC" | null;
   [key: string]: unknown;
 }
 
@@ -84,14 +90,20 @@ export interface BuilderConfig<R extends BaseRule, G extends BaseGroup<R>> {
   isFieldDisabled: (field: string, ctx: FieldContext) => boolean;
   getDisabledTooltip: (field: string, ctx: FieldContext) => string | null;
   /**
-   * Returns a tooltip string when the rule's required integration is
-   * configured but currently unreachable. The base builder renders a small
+   * Returns a tooltip string when a rule's field cannot be answered as things
+   * stand — its integration is configured but currently unreachable, or the
+   * rule set's scope does not allow it. The base builder renders a small
    * warning badge next to the field name when this returns non-null. Should
-   * return null when the field doesn't depend on an unreachable integration.
+   * return null otherwise.
    */
   getFieldUnreachableTooltip?: (field: string, ctx: FieldContext) => string | null;
   isSectionHidden?: (sectionKey: string, ctx: FieldContext) => boolean;
   isValuelessOperator?: (op: string) => boolean;
+  /**
+   * Why "Add Stream Query" is not offered right now, or null: the button is
+   * then shown disabled with this reason.
+   */
+  getStreamQueryDisabledTooltip?: (ctx: FieldContext) => string | null;
   /** Stream query support — when provided, "Add Stream Query" button appears */
   streamQueryFields?: FieldDef[];
   streamQuerySections?: SectionDef[];

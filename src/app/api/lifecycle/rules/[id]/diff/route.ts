@@ -141,7 +141,10 @@ export const POST = withSession(async (
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
   const arrInstanceId = data.arrInstanceId !== undefined ? data.arrInstanceId : ruleSet.arrInstanceId;
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
+  // Series/artist scope read as the evaluation below routes it.
+  const evaluability = await checkLifecycleRuleEvaluability(
+    session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false,
+  );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }

@@ -23,6 +23,7 @@ import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import { actsOnMembers, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { actionHoldOf } from "@/lib/lifecycle/held-actions";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -144,12 +145,20 @@ async function retryAction(
       { status: 400 }
     );
   }
-  // Held since a save changed what the rule set matches (`actionsHeldSince`):
-  // the stale-match guard below reads matches the old rules made until a
-  // detection run re-checks them, so a retry waits for that run too.
-  if (ruleSet.actionsHeldSince) {
+  // Held (`actionHoldOf`, as the scheduled executor and Execute check it): a
+  // save changed what the rule set matches (`actionsHeldSince`), so the
+  // stale-match guard below reads matches the old rules made until a
+  // detection run re-checks them; or it judges whole shows or artists on
+  // per-episode/per-track criteria, whose matches detection never re-checks
+  // until it is edited. Either way a retry waits too.
+  const hold = actionHoldOf(ruleSet);
+  if (hold) {
     return NextResponse.json(
-      { error: "This rule set's rules or servers changed since its matches were detected — re-run detection before retrying" },
+      {
+        error: hold.kind === "groupScope"
+          ? hold.reason
+          : "This rule set's rules or servers changed since its matches were detected — re-run detection before retrying",
+      },
       { status: 409 }
     );
   }

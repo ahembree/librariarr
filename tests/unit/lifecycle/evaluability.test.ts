@@ -73,6 +73,38 @@ describe("checkLifecycleRuleEvaluability", () => {
     mockServerFindMany.mockResolvedValue([]);
   });
 
+  describe("per-episode and per-track criteria at series or artist scope", () => {
+    it("skips a series- or artist-scoped rule set using one, transiently and before any lookup", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      for (const [type, member] of [["SERIES", "episode"], ["MUSIC", "track"]] as const) {
+        const result = await checkLifecycleRuleEvaluability("u1", type, groupsWith("resolution"), ["s1"], null, true);
+        expect(result).toEqual({
+          evaluable: false,
+          // An edit resolves it: matches and actions are left in place (held).
+          permanent: false,
+          reason: expect.stringMatching(new RegExp(`^This rule set uses per-${member} criteria \\(Resolution\\)`)),
+        });
+      }
+      expect(mockHasEnabledArrInstances).not.toHaveBeenCalled();
+      expect(mockServerFindMany).not.toHaveBeenCalled();
+    });
+
+    it("reads an omitted scope as on, the rule set default", async () => {
+      const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("year"));
+      expect(result.evaluable).toBe(false);
+    });
+
+    it("evaluates the same rules with the scope off, and on a movie rule set", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false)).toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "MUSIC", groupsWith("audioCodec"), ["s1"], null, false)).toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("resolution"), ["s1"], null, true)).toEqual({ evaluable: true });
+    });
+
+    it("evaluates show-level criteria with the scope on", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("genre"), ["s1"], null, true)).toEqual({ evaluable: true });
+    });
+  });
+
   it("is evaluable for plain DB rules without touching instance lookups", async () => {
     const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("title"));
     expect(result).toEqual({ evaluable: true });
