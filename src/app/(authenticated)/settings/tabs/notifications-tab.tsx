@@ -1,17 +1,12 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  CheckCircle,
-  Loader2,
-  Save,
-  Webhook,
-  XCircle,
-} from "lucide-react";
+import { Save, Webhook } from "lucide-react";
+import { LoadingButton } from "@/components/loading-button";
+import { ConnectionTestResult } from "@/components/connection-test-result";
 import { SettingsSection } from "../components";
 import type { TestResult } from "../types";
 
@@ -49,7 +44,7 @@ export function NotificationsTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">Notifications</h2>
+        <h2 className="text-xl font-bold font-display">Notifications</h2>
         <p className="text-sm text-muted-foreground">
           Configure how Librariarr notifies you about important events like lifecycle actions and maintenance changes.
         </p>
@@ -111,34 +106,19 @@ export function NotificationsTab({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={onSaveDiscordSettings} disabled={discordSaving}>
-              {discordSaving ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="mr-2 h-4 w-4" />
-              )}
+            <LoadingButton onClick={onSaveDiscordSettings} loading={discordSaving} icon={Save}>
               Save
-            </Button>
-            <Button
+            </LoadingButton>
+            <LoadingButton
               variant="outline"
               onClick={onTestDiscordWebhook}
-              disabled={discordTesting || !discordWebhookUrl}
+              loading={discordTesting}
+              disabled={!discordWebhookUrl}
             >
-              {discordTesting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
               Test Webhook
-            </Button>
+            </LoadingButton>
             {discordTestResult && (
-              discordTestResult.ok ? (
-                <span className="flex items-center gap-1 text-sm text-green-500">
-                  <CheckCircle className="h-4 w-4" /> Success
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-sm text-destructive">
-                  <XCircle className="h-4 w-4" /> {discordTestResult.error || "Failed"}
-                </span>
-              )
+              <ConnectionTestResult result={{ appName: "Discord", ...discordTestResult }} variant="badge" />
             )}
           </div>
       </SettingsSection>

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   MEDIA_TYPE_BADGE_COLORS,
   MEDIA_TYPE_LABELS,
@@ -7,11 +9,17 @@ import {
 
 describe("media-type colors", () => {
   it("defines a badge color for every media type", () => {
-    expect(MEDIA_TYPE_BADGE_COLORS.MOVIE).toBe("bg-sky/20 text-sky border-sky/30");
-    expect(MEDIA_TYPE_BADGE_COLORS.SERIES).toBe(
-      "bg-purple-500/20 text-purple-400 border-purple-500/30",
-    );
-    expect(MEDIA_TYPE_BADGE_COLORS.MUSIC).toBe("bg-green/20 text-green border-green/30");
+    expect(MEDIA_TYPE_BADGE_COLORS.MOVIE).toBe("bg-media-movie/20 text-media-movie border-media-movie/30");
+    expect(MEDIA_TYPE_BADGE_COLORS.SERIES).toBe("bg-media-series/20 text-media-series border-media-series/30");
+    expect(MEDIA_TYPE_BADGE_COLORS.MUSIC).toBe("bg-media-music/20 text-media-music border-media-music/30");
+  });
+
+  // The original colours: Movie the sky blue, Series purple, Music the green.
+  it("keeps the type chips' original colours", () => {
+    const css = readFileSync(path.join(process.cwd(), "src/app/globals.css"), "utf8");
+    expect(css).toContain("--media-movie: var(--sky);");
+    expect(css).toContain("--media-series: oklch(71.4% 0.203 305.504);");
+    expect(css).toContain("--media-music: var(--green);");
   });
 
   it("each badge color carries background, text, and border classes", () => {

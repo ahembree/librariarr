@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -22,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineError } from "@/components/inline-error";
 import { PageHeader } from "@/components/page-header";
 import { DayOfWeekPicker } from "@/components/day-of-week-picker";
 import { formatScheduleWindow } from "@/lib/schedule-format";
@@ -660,9 +662,9 @@ export default function PrerollManagerPage() {
       />
 
       {!loading && !hasPlexServers && (
-        <Card className="border-yellow-500/50 bg-yellow-500/5">
+        <Card className="border-amber/30 bg-amber-dim">
           <CardContent className="flex items-center gap-3 py-4">
-            <AlertTriangle className="h-5 w-5 text-yellow-500 shrink-0" />
+            <AlertTriangle className="h-5 w-5 text-amber shrink-0" />
             <p className="text-sm text-muted-foreground">
               Preroll management requires a Plex media server. Add a Plex server in Settings to use this feature.
             </p>
@@ -690,19 +692,17 @@ export default function PrerollManagerPage() {
               <code className="flex-1 rounded-md bg-muted px-3 py-2 text-sm font-mono break-all">
                 {currentPreroll}
               </code>
-              <Button
+              <LoadingButton
                 variant="outline"
                 size="sm"
                 onClick={clearPreroll}
                 disabled={applying}
+                loading={applying}
+                icon={Trash2}
+                iconClassName="h-4 w-4 mr-1.5"
               >
-                {applying ? (
-                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4 mr-1.5" />
-                )}
                 Clear
-              </Button>
+              </LoadingButton>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No preroll configured</p>
@@ -751,17 +751,15 @@ export default function PrerollManagerPage() {
                 onChange={(e) => setQuickSetPath(e.target.value)}
               />
             </div>
-            <Button
+            <LoadingButton
               onClick={() => validateAndApply(quickSetPath)}
               disabled={!quickSetPath.trim() || applying}
+              loading={applying}
+              icon={Play}
+              iconClassName="h-4 w-4 mr-1.5"
             >
-              {applying ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4 mr-1.5" />
-              )}
               Apply
-            </Button>
+            </LoadingButton>
           </div>
         </CardContent>
       </Card>
@@ -897,18 +895,16 @@ export default function PrerollManagerPage() {
                 <code className="block rounded-md bg-muted px-3 py-2 text-xs font-mono break-all">
                   {combinedPath}
                 </code>
-                <Button
+                <LoadingButton
                   onClick={() => validateAndApply(combinedPath)}
                   disabled={applying}
                   className="w-full sm:w-auto"
+                  loading={applying}
+                  icon={Play}
+                  iconClassName="h-4 w-4 mr-1.5"
                 >
-                  {applying ? (
-                    <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                  ) : (
-                    <Play className="h-4 w-4 mr-1.5" />
-                  )}
                   Apply Combined Preroll
-                </Button>
+                </LoadingButton>
               </div>
             )}
           </CardContent>
@@ -920,7 +916,7 @@ export default function PrerollManagerPage() {
       {/* Section 3: Saved Presets */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <Clapperboard className="h-5 w-5" />
             Saved Presets
           </h2>
@@ -962,20 +958,18 @@ export default function PrerollManagerPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button
+                    <LoadingButton
                       variant="outline"
                       size="sm"
                       className="flex-1"
                       onClick={() => validateAndApply(preset.path)}
                       disabled={applying}
+                      loading={applying}
+                      icon={Play}
+                      iconClassName="h-3.5 w-3.5 mr-1.5"
                     >
-                      {applying ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                      ) : (
-                        <Play className="h-3.5 w-3.5 mr-1.5" />
-                      )}
                       Apply
-                    </Button>
+                    </LoadingButton>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1015,7 +1009,7 @@ export default function PrerollManagerPage() {
       {/* Section 4: Schedules */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="text-xl font-bold font-display flex items-center gap-2">
             <Calendar className="h-5 w-5" />
             Schedules
           </h2>
@@ -1043,7 +1037,7 @@ export default function PrerollManagerPage() {
                 className={cn(
                   "relative",
                   !schedule.enabled && "opacity-60",
-                  isScheduleCurrentlyActive(schedule) && "border-l-2 border-l-emerald-500"
+                  isScheduleCurrentlyActive(schedule) && "border-green/40"
                 )}
               >
                 <CardContent className="p-4">
@@ -1153,19 +1147,15 @@ export default function PrerollManagerPage() {
             >
               Cancel
             </Button>
-            <Button
+            <LoadingButton
               onClick={savePreset}
               disabled={!presetName.trim() || !presetPath.trim() || presetSaving}
+              loading={presetSaving}
+              icon={editingPreset ? Pencil : Plus}
+              iconClassName="h-4 w-4 mr-1.5"
             >
-              {presetSaving ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : editingPreset ? (
-                <Pencil className="h-4 w-4 mr-1.5" />
-              ) : (
-                <Plus className="h-4 w-4 mr-1.5" />
-              )}
               {editingPreset ? "Update" : "Save"}
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1436,10 +1426,7 @@ export default function PrerollManagerPage() {
 
             {/* Conflict error */}
             {scheduleError && (
-              <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3">
-                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                <p className="text-sm text-destructive">{scheduleError}</p>
-              </div>
+              <InlineError multiline>{scheduleError}</InlineError>
             )}
           </div>
 
@@ -1455,23 +1442,19 @@ export default function PrerollManagerPage() {
             >
               Cancel
             </Button>
-            <Button
+            <LoadingButton
               onClick={saveSchedule}
               disabled={
                 !scheduleForm.name.trim() ||
                 !scheduleForm.prerollPath.trim() ||
                 scheduleSaving
               }
+              loading={scheduleSaving}
+              icon={editingSchedule ? Pencil : Plus}
+              iconClassName="h-4 w-4 mr-1.5"
             >
-              {scheduleSaving ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : editingSchedule ? (
-                <Pencil className="h-4 w-4 mr-1.5" />
-              ) : (
-                <Plus className="h-4 w-4 mr-1.5" />
-              )}
               {editingSchedule ? "Update" : "Create"}
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

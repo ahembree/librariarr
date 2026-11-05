@@ -24,15 +24,20 @@ export function connectionTestLabel(result: ConnectionTestOutcome): string {
 /**
  * A connection test's answer. `banner` is the full-width box under a server
  * form ("Connection successful" / "Connection failed — <reason>"); `badge` the
- * pill beside an integration's Test button, naming what answered.
+ * chip beside an integration's Test button, naming what answered. `label`
+ * replaces the badge's text, for a test that is not a connection (an OIDC
+ * discovery fetch). The badge wraps a long answer — an issuer URL, an error —
+ * rather than running past the card at 320px.
  */
 export function ConnectionTestResult({
   result,
   variant = "banner",
+  label,
   className,
 }: {
   result: ConnectionTestOutcome;
   variant?: "banner" | "badge";
+  label?: string;
   className?: string;
 }) {
   if (variant === "badge") {
@@ -42,15 +47,15 @@ export function ConnectionTestResult({
         role="status"
         aria-live="polite"
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+          "inline-flex min-w-0 max-w-full items-start gap-1.5 rounded-md border px-2 py-1 text-xs font-medium",
           result.ok
-            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+            ? "border-green/30 bg-green-dim text-green"
             : "border-destructive/30 bg-destructive/10 text-destructive",
           className,
         )}
       >
-        <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
-        {connectionTestLabel(result)}
+        <Icon className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 [overflow-wrap:anywhere]">{label ?? connectionTestLabel(result)}</span>
       </span>
     );
   }
@@ -61,7 +66,7 @@ export function ConnectionTestResult({
       aria-live="polite"
       className={cn(
         "flex items-center gap-2 rounded-md p-3 text-sm",
-        result.ok ? "bg-green-500/10 text-green-500" : "bg-destructive/10 text-destructive",
+        result.ok ? "bg-green-dim text-green" : "bg-destructive/10 text-destructive",
         className,
       )}
     >

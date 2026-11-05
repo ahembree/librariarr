@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, FileJson, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import "swagger-ui-dist/swagger-ui.css";
 import "./swagger-dark.css";
 
@@ -50,38 +51,40 @@ export default function ApiDocsPage() {
 
   return (
     <div className="api-docs space-y-6 p-4 sm:p-6 lg:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">API Docs</h1>
-          <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="API Docs"
+        description={
+          <>
             The public <code className="font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5">/api/v1</code> API,
             generated from this version. To try a request, click <strong>Authorize</strong> and paste an API key —
             the browser session does not apply here, and the key is not saved.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* A plain anchor: the settings tabs read the hash on mount, which a
-              client-side navigation to the same route does not trigger. */}
-          <Button variant="outline" size="sm" asChild>
-            <a href="/settings#authentication">
-              <ArrowLeft className="mr-1.5 h-4 w-4" />
-              API Keys
-            </a>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <a href={SPEC_URL} target="_blank" rel="noopener noreferrer">
-              <FileJson className="mr-1.5 h-4 w-4" />
-              Raw JSON
-            </a>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <a href={`${SPEC_URL}?download=1`} download="librariarr-openapi.json">
-              <Download className="mr-1.5 h-4 w-4" />
-              Download
-            </a>
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            {/* A plain anchor: the settings tabs read the hash on mount, which a
+                client-side navigation to the same route does not trigger. */}
+            <Button variant="outline" size="sm" asChild>
+              <a href="/settings#authentication">
+                <ArrowLeft className="mr-1.5 h-4 w-4" />
+                API Keys
+              </a>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={SPEC_URL} target="_blank" rel="noopener noreferrer">
+                <FileJson className="mr-1.5 h-4 w-4" />
+                Raw JSON
+              </a>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={`${SPEC_URL}?download=1`} download="librariarr-openapi.json">
+                <Download className="mr-1.5 h-4 w-4" />
+                Download
+              </a>
+            </Button>
+          </>
+        }
+      />
 
       {loading && (
         <div className="flex items-center justify-center py-16">

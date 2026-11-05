@@ -52,7 +52,7 @@ export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, com
   if (loading) {
     return (
       <section>
-        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        <h3 className="eyebrow mb-3 flex items-center gap-1.5">
           <Plug className="h-3.5 w-3.5" />
           Integrations
         </h3>
@@ -70,7 +70,7 @@ export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, com
 
   return (
     <section>
-      <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+      <h3 className="eyebrow mb-3 flex items-center gap-1.5">
         <Plug className="h-3.5 w-3.5" />
         Integrations
         {totalCount > 1 && (

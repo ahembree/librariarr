@@ -137,7 +137,7 @@ function InstanceRow<I extends IntegrationInstance>({
           <div className="flex items-center gap-2">
             <p className="truncate font-medium">{instance.name}</p>
             {!instance.enabled && (
-              <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
+              <ColorChip className="border-amber/25 bg-amber-dim text-[10px] font-medium text-amber">
                 Disabled
               </ColorChip>
             )}

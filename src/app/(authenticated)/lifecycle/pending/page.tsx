@@ -234,7 +234,7 @@ function VirtualizedActionTable({
                         {hasMediaItem && exceptedItemIds.has(action.mediaItem.id!) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                              <ShieldOff className="h-3.5 w-3.5 text-excluded shrink-0" />
                             </TooltipTrigger>
                             <TooltipContent>Excluded from lifecycle actions</TooltipContent>
                           </Tooltip>
@@ -327,32 +327,26 @@ function VirtualizedActionTable({
                   {isPending && (
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <Button
+                        <LoadingButton
                           variant="ghost"
                           size="icon"
                           onClick={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
-                          disabled={isItemExecuting || !hasMediaItem}
+                          disabled={!hasMediaItem}
+                          loading={isItemExecuting}
+                          icon={Play}
+                          iconClassName="h-4 w-4"
                           title="Execute now"
-                        >
-                          {isItemExecuting ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Play className="h-4 w-4" />
-                          )}
-                        </Button>
-                        <Button
+                        />
+                        <LoadingButton
                           variant="ghost"
                           size="icon"
                           onClick={() => onExclude(action)}
-                          disabled={!hasMediaItem || excludingItems.has(action.mediaItem.id!)}
+                          disabled={!hasMediaItem}
+                          loading={hasMediaItem && excludingItems.has(action.mediaItem.id!)}
+                          icon={ShieldOff}
+                          iconClassName="h-4 w-4 text-excluded"
                           title="Exclude from lifecycle actions"
-                        >
-                          {hasMediaItem && excludingItems.has(action.mediaItem.id!) ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ShieldOff className="h-4 w-4 text-orange-400" />
-                          )}
-                        </Button>
+                        />
                       </div>
                     </td>
                   )}
@@ -360,19 +354,15 @@ function VirtualizedActionTable({
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {action.status === "FAILED" && !isDeletedRuleSet && hasMediaItem && (
-                          <Button
+                          <LoadingButton
                             variant="ghost"
                             size="icon"
                             onClick={() => onRetryAction(action)}
-                            disabled={retryingItems.has(action.id)}
+                            loading={retryingItems.has(action.id)}
+                            icon={Play}
+                            iconClassName="h-4 w-4 text-amber"
                             title="Force retry"
-                          >
-                            {retryingItems.has(action.id) ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Play className="h-4 w-4 text-yellow-500" />
-                            )}
-                          </Button>
+                          />
                         )}
                         <Button
                           variant="ghost"
@@ -445,8 +435,8 @@ const PendingActionCard = memo(function PendingActionCard({
       {excepted && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-excluded/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-background" />
             </div>
           </TooltipTrigger>
           <TooltipContent>Excluded from lifecycle actions</TooltipContent>
@@ -1035,7 +1025,7 @@ export default function PendingActionsPage() {
                                 {result.executed} executed
                               </span>
                             ) : (
-                              <span className="text-yellow-500 flex items-center gap-1">
+                              <span className="text-amber flex items-center gap-1">
                                 <AlertTriangle className="h-3.5 w-3.5" />
                                 {result.executed} ok, {result.failed} failed
                               </span>
@@ -1140,7 +1130,7 @@ export default function PendingActionsPage() {
             return (
               <div className="space-y-2">
                 {arrTitleMatch && (
-                  <p className="text-sm text-yellow-500">
+                  <p className="text-sm text-amber">
                     Arr title: &quot;{arrTitleMatch[1]}&quot;
                   </p>
                 )}

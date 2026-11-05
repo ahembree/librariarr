@@ -15,6 +15,14 @@ interface ServerStyle {
     glowColor: string;
   };
   /** Manual server form Tailwind classes (Jellyfin/Emby only) */
+  /**
+   * The "Sign in with <server>" button (Plex only): the chip's orange border
+   * and text over a much dimmer fill than the chip's 15%, so a full-width
+   * button does not read as a solid orange block. The `dark:hover:` entry is
+   * needed because the ghost variant's own dark hover (`bg-accent/50`) would
+   * otherwise win over a plain `hover:`.
+   */
+  signInButton?: string;
   manual?: {
     btn: string;
     btnHover: string;
@@ -31,6 +39,8 @@ export const SERVER_TYPE_STYLES: Record<string, ServerStyle> = {
   PLEX: {
     label: "Plex",
     classes: "text-orange-400 bg-orange-500/15 border-orange-500/30",
+    signInButton:
+      "border border-orange-500/30 bg-orange-500/5 text-orange-400 hover:bg-orange-500/10 hover:text-orange-400 dark:hover:bg-orange-500/10",
     color: "#fb923c",
     rgba: { bg: "rgba(229,160,13,0.25)", hover: "rgba(229,160,13,0.4)", text: "rgba(229,160,13,0.95)" },
     onboarding: {

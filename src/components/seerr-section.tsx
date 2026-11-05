@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { QualityChip } from "@/components/quality-chips";
+import { INTEGRATION_APP_STYLES } from "@/lib/theme/integration-colors";
 
 export interface SeerrRequestSummary {
   id: number;
@@ -28,37 +30,42 @@ export interface SeerrInfoResponse {
   matches: SeerrMatch[];
 }
 
-const SEERR_TYPE_STYLE = {
-  text: "text-violet-400",
-  dot: "bg-violet-400 shadow-[0_0_6px] shadow-violet-400/60",
-};
+const SEERR_TYPE_STYLE = INTEGRATION_APP_STYLES.seerr;
+
+const STATUS_TONES = {
+  amber: "border-amber/25 bg-amber-dim text-amber",
+  sky: "border-sky/25 bg-sky-dim text-sky",
+  green: "border-green/25 bg-green-dim text-green",
+  red: "border-red/25 bg-red-dim text-red",
+  neutral: "bg-muted/40 text-muted-foreground",
+} as const;
 
 // Seerr MediaStatus: 1=UNKNOWN, 2=PENDING, 3=PROCESSING, 4=PARTIALLY_AVAILABLE,
 // 5=AVAILABLE, 6=BLOCKLISTED, 7=DELETED (legacy Overseerr used 6 for DELETED)
 const MEDIA_STATUS_STYLES: Record<number, { label: string; classes: string }> = {
-  1: { label: "Unknown", classes: "border-muted-foreground/30 bg-muted/40 text-muted-foreground" },
-  2: { label: "Pending", classes: "border-amber-500/30 bg-amber-500/10 text-amber-400" },
-  3: { label: "Processing", classes: "border-sky-500/30 bg-sky-500/10 text-sky-400" },
-  4: { label: "Partial", classes: "border-blue-500/30 bg-blue-500/10 text-blue-400" },
-  5: { label: "Available", classes: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" },
-  6: { label: "Blocklisted", classes: "border-zinc-500/30 bg-zinc-500/10 text-zinc-400" },
-  7: { label: "Deleted", classes: "border-red-500/30 bg-red-500/10 text-red-400" },
+  1: { label: "Unknown", classes: STATUS_TONES.neutral },
+  2: { label: "Pending", classes: STATUS_TONES.amber },
+  3: { label: "Processing", classes: STATUS_TONES.sky },
+  4: { label: "Partial", classes: STATUS_TONES.sky },
+  5: { label: "Available", classes: STATUS_TONES.green },
+  6: { label: "Blocklisted", classes: STATUS_TONES.neutral },
+  7: { label: "Deleted", classes: STATUS_TONES.red },
 };
 
 // Seerr MediaRequestStatus: 1=PENDING, 2=APPROVED, 3=DECLINED, 4=FAILED, 5=COMPLETED.
 // Seerr moves an approved request to COMPLETED once its media arrives, so
 // COMPLETED is the usual status of anything requested that is in the library.
 const REQUEST_STATUS_STYLES: Record<number, { label: string; classes: string }> = {
-  1: { label: "Pending", classes: "border-amber-500/30 bg-amber-500/10 text-amber-400" },
-  2: { label: "Approved", classes: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" },
-  3: { label: "Declined", classes: "border-red-500/30 bg-red-500/10 text-red-400" },
-  4: { label: "Failed", classes: "border-red-500/30 bg-red-500/10 text-red-400" },
-  5: { label: "Completed", classes: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" },
+  1: { label: "Pending", classes: STATUS_TONES.amber },
+  2: { label: "Approved", classes: STATUS_TONES.green },
+  3: { label: "Declined", classes: STATUS_TONES.red },
+  4: { label: "Failed", classes: STATUS_TONES.red },
+  5: { label: "Completed", classes: STATUS_TONES.green },
 };
 
 const MIXED_REQUEST_STATUS_STYLE = {
   label: "Mixed",
-  classes: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
+  classes: STATUS_TONES.neutral,
 };
 
 function formatDate(value: string | null): string {
@@ -153,11 +160,7 @@ export function SeerrInstanceCard({ match }: { match: SeerrMatch }) {
                 {requestStatusStyle && (
                   <ColorChip className={cn("text-[10px] font-medium", requestStatusStyle.classes)}>{requestStatusStyle.label}</ColorChip>
                 )}
-                {has4k && (
-                  <ColorChip className="border-fuchsia-500/30 bg-fuchsia-500/10 text-[10px] font-medium text-fuchsia-300">
-                    4K
-                  </ColorChip>
-                )}
+                {has4k && <QualityChip chip={{ category: "resolution", label: "4K" }} title="4K request" />}
               </span>
             }
           />

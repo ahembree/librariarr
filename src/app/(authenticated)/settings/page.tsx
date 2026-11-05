@@ -23,6 +23,7 @@ import {
 import type { ChipColorMap, ChipColorCategory } from "@/lib/theme/chip-colors";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import {
   Server,
   Clock,
@@ -2257,12 +2258,11 @@ export default function SettingsPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Settings</h1>
-        <p className="text-muted-foreground mt-1">
-          Manage servers, integrations, schedules, and application preferences.
-        </p>
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Settings"
+        description="Manage servers, integrations, schedules, and application preferences."
+      />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SettingsTab)}>
         <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">

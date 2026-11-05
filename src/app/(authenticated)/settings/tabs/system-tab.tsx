@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
 import { ColorChip } from "@/components/color-chip";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { SettingsSection } from "../components";
@@ -99,7 +99,7 @@ export function SystemTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">System</h2>
+        <h2 className="text-xl font-bold font-display">System</h2>
         <p className="text-sm text-muted-foreground">
           Application status, storage, and release history.
         </p>
@@ -116,7 +116,7 @@ export function SystemTab({
                   href={updateCheck.releaseUrl ?? "#"}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                  className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-green-dim px-2 py-0.5 text-xs font-medium text-green hover:bg-green/25 transition-colors"
                 >
                   <ArrowUpCircle className="h-3 w-3" />
                   v{updateCheck.latestVersion} available
@@ -167,19 +167,15 @@ export function SystemTab({
                   : "..."}
               </p>
             </div>
-            <Button
+            <LoadingButton
               variant="outline"
               size="sm"
-              disabled={clearingImageCache}
               onClick={() => setConfirmClearCache(true)}
+              loading={clearingImageCache}
+              icon={Trash2}
             >
-              {clearingImageCache ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
-              )}
               Clear Image Cache
-            </Button>
+            </LoadingButton>
           </div>
 
           <ConfirmDialog

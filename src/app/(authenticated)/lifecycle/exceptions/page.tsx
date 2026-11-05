@@ -508,27 +508,18 @@ function AddExceptionDialog({
                           <p className="text-xs text-muted-foreground">{subtitle}</p>
                         )}
                       </div>
-                      <Button
+                      <LoadingButton
                         size="sm"
                         variant="outline"
                         className="ml-3 shrink-0"
-                        disabled={alreadyExcluded || addingItemId === item.id}
+                        disabled={alreadyExcluded}
+                        loading={addingItemId === item.id}
+                        icon={alreadyExcluded ? Check : Plus}
+                        iconClassName={alreadyExcluded ? "h-3.5 w-3.5 mr-1 text-green" : "h-3.5 w-3.5 mr-1"}
                         onClick={() => handleAddException(item)}
                       >
-                        {addingItemId === item.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : alreadyExcluded ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
-                            Excluded
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="h-3.5 w-3.5 mr-1" />
-                            Add
-                          </>
-                        )}
-                      </Button>
+                        {alreadyExcluded ? "Excluded" : "Add"}
+                      </LoadingButton>
                     </div>
                   );
                 })}
@@ -845,19 +836,15 @@ export default function LifecycleExceptionsPage() {
           >
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button
+          <LoadingButton
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-muted-foreground hover:text-destructive"
             onClick={() => setConfirmRemove(row)}
-            disabled={removing === row.id}
-          >
-            {removing === row.id ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Trash2 className="h-4 w-4" />
-            )}
-          </Button>
+            loading={removing === row.id}
+            icon={Trash2}
+            iconClassName="h-4 w-4"
+          />
         </div>
       ),
     },
