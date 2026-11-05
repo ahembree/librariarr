@@ -3,6 +3,7 @@
 import { Layers } from "lucide-react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import type { CardDisplay } from "@/lib/dashboard/card-display";
 import {
   BreakdownCard,
   type BreakdownEntry,
@@ -18,6 +19,9 @@ interface QualityChartProps {
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
   lockedFilterType?: boolean;
   availableTypes?: string[];
+  /** The card's saved display choices (see `BreakdownCard`). */
+  display?: CardDisplay;
+  onDisplayChange?: (next: CardDisplay | undefined) => void;
 }
 
 /** Display order: quality ladder, not count. */
@@ -32,6 +36,8 @@ export function QualityChart({
   filterType,
   lockedFilterType,
   availableTypes,
+  display,
+  onDisplayChange,
 }: QualityChartProps) {
   const { getHex } = useChipColors();
 
@@ -64,6 +70,8 @@ export function QualityChart({
       lockedFilterType={lockedFilterType}
       availableTypes={availableTypes}
       emptyMessage="No media data yet. Sync a server to see quality breakdown."
+      display={display}
+      onDisplayChange={onDisplayChange}
     />
   );
 }

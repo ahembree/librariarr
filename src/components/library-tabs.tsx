@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
 import type { LucideIcon } from "lucide-react";
 import { Tv, Layers, List, Music, Disc3, ListMusic } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,10 +33,10 @@ export function LibraryTabs({ tabs, active }: { tabs: LibraryTab[]; active: stri
       className="mb-6 inline-flex h-9 max-w-full items-center gap-1 overflow-x-auto rounded-lg border p-1"
     >
       {tabs.map(({ href, label, icon: Icon }) => (
-        <Link
+        <DeferredPrefetchLink
           key={href}
           href={href}
-          // Full prefetch — see the sidebar's nav links.
+          // Full prefetch, once the page has loaded — see the sidebar's nav links.
           prefetch
           aria-current={active === href ? "page" : undefined}
           className={cn(
@@ -50,7 +50,7 @@ export function LibraryTabs({ tabs, active }: { tabs: LibraryTab[]; active: stri
               would not otherwise fit beside one another. */}
           <Icon className="hidden h-3.5 w-3.5 min-[360px]:block" />
           {label}
-        </Link>
+        </DeferredPrefetchLink>
       ))}
     </nav>
   );

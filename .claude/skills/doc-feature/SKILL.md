@@ -1,6 +1,6 @@
 ---
 name: doc-feature
-description: Create or update feature documentation in the Astro Starlight docs site. Use when adding new features or updating existing documentation.
+description: Create or update documentation in the Astro Starlight docs site (librariarr.dev) — which page covers each area, MDX format, sidebar, SEO frontmatter, guides and the rule-set library, and how the site is built. Use when adding features, changing behaviour that docs describe, or editing anything under docs/.
 argument-hint: <feature-name> [new|update]
 ---
 
@@ -20,10 +20,12 @@ The docs site is **completely isolated** from the Next.js app:
 
 ```
 docs/src/content/docs/docs/
-  getting-started/    — Installation, configuration, server setup
-  features/           — Dashboard, library, lifecycle rules, stream manager, etc.
-  integrations/       — Sonarr, Radarr, Lidarr, Seerr, Plex, Jellyfin/Emby
-  advanced/           — Development guide
+  getting-started/    — installation, configuration, connecting a server, Unraid
+  features/           — dashboard, library, query, lifecycle rules, deletion safety, stream manager, …
+  guides/             — use-case guides and the importable rule-set library
+  integrations/       — Plex, Jellyfin/Emby, Sonarr, Radarr, Lidarr, Seerr, Tracearr
+  advanced/           — API, API reference, SSO, security hardening, development
+  development/        — style guide
 ```
 
 ## MDX File Format
@@ -63,16 +65,13 @@ The `slug` must match the file path relative to `docs/src/content/docs/` without
 
 ## Existing Sidebar Sections
 
-- **Getting Started**: installation, configuration, connecting-a-server
-- **Features**: dashboard, library, lifecycle-rules, stream-manager, preroll-manager, backup-restore, notifications, system-logs
-- **Integrations**: plex, jellyfin-emby, sonarr, radarr, lidarr, seerr
-- **Advanced**: development, security-hardening, sso
+Read `docs/astro.config.mjs` for the current sidebar; add every new page there.
 
 ## Steps
 
 ### For new documentation pages:
 1. Create MDX file at `docs/src/content/docs/docs/<category>/<name>.mdx`
-2. Add frontmatter with `title` and `description`
+2. Add frontmatter with `title`, a specific keyword-bearing `description` (quoted when it contains `: `) and, where the H1 is short, a `seoTitle`
 3. Write content covering: what the feature does, how to configure it, key options
 4. Add sidebar entry in `docs/astro.config.mjs` under the correct section
 5. Verify: `pnpm docs:build` (catches broken links/formatting)
@@ -81,3 +80,49 @@ The `slug` must match the file path relative to `docs/src/content/docs/` without
 1. Find the existing MDX file in `docs/src/content/docs/docs/`
 2. Update content to reflect changes
 3. Verify: `pnpm docs:build`
+
+## Which page to update
+
+| Area | Documentation file |
+|------|--------------------|
+| Installation & env vars | `getting-started/installation.mdx`, `getting-started/configuration.mdx` |
+| Server setup | `getting-started/connecting-a-server.mdx` |
+| Library browsing & filters | `features/library.mdx` |
+| Query Builder (criteria, criterion columns, saved queries, convert to rule set, ad-hoc actions) | `features/query.mdx` |
+| Dashboard | `features/dashboard.mdx` |
+| Lifecycle rules & actions | `features/lifecycle-rules.mdx` |
+| Deletion safeguards (evaluability, ceiling, guards) | `features/deletion-safety.mdx` |
+| Use-case guides & importable rule sets | `guides/delete-unwatched-media.mdx`, `guides/leaving-soon-collection.mdx`, `guides/seerr-request-cleanup.mdx`, `guides/replace-low-quality-files.mdx`, `guides/ended-shows.mdx`, `guides/rule-set-library.mdx` |
+| Backup & restore | `features/backup-restore.mdx` |
+| Notifications | `features/notifications.mdx` |
+| Stream manager & maintenance | `features/stream-manager.mdx` |
+| AI Analysis | `features/ai-analysis.mdx` |
+| Real-time media-server sync | `features/real-time-sync.mdx` |
+| Preroll manager | `features/preroll-manager.mdx` |
+| TRaSH Guide Sync | `features/trash-guide-sync.mdx` |
+| System logs | `features/system-logs.mdx` |
+| Integrations | `integrations/plex.mdx`, `integrations/jellyfin-emby.mdx`, `integrations/sonarr.mdx`, `integrations/radarr.mdx`, `integrations/lidarr.mdx`, `integrations/seerr.mdx`, `integrations/tracearr.mdx` |
+| Unraid | `getting-started/unraid.mdx` |
+| Style guide | `development/style-guide.mdx` |
+| Security | `advanced/security-hardening.mdx` |
+| SSO (OIDC & forward-auth) | `advanced/sso.mdx` |
+| Public API & API keys | `advanced/api.mdx`, `advanced/api-reference.mdx` (renders the generated OpenAPI document) |
+| Development | `advanced/development.mdx` |
+| Docs home & disclaimer | `index.mdx`, `disclaimer.mdx` (landing page: `docs/src/pages/index.astro`) |
+
+## Documentation Site
+
+`docs/` is an **Astro + Starlight** site deployed to GitHub Pages at `librariarr.dev`, isolated from the app: its own `package.json`, `tsconfig.json`, and pnpm workspace (`docs/pnpm-workspace.yaml`, `docs/pnpm-lock.yaml`, the same supply-chain controls and its own `overrides` — the root's overrides do not reach it; keep `packageManager` in step with the root's). Root `tsconfig.json`, `eslint.config.mjs` and `.dockerignore` exclude `docs/`.
+
+```bash
+pnpm docs:dev      # Start docs dev server (localhost:4321)
+pnpm docs:build    # Production build
+pnpm docs:preview  # Preview built docs
+```
+
+- `docs/src/pages/index.astro` — the custom landing page (outside Starlight, so it carries its own `<head>`: title, description, canonical, robots, Open Graph/Twitter, JSON-LD whose `softwareVersion` comes from the generated `public/openapi.json`).
+- `docs/src/route-data.ts` — Starlight route middleware adding per-page SEO: `<title>`/`og:title` from the **`seoTitle`** frontmatter (a `docsSchema` extension in `content.config.ts`; the H1 stays `title`), the page's social image, and `BreadcrumbList` + `TechArticle` JSON-LD with `dateModified` from git (`lastUpdated: true`, so `docs-deploy.yml` checks out with `fetch-depth: 0`). Every page keeps a specific `description` (quoted when it contains `: `).
+- `docs/src/pages/og/[...slug].png.ts` — a 1200×630 social image per page (satori → `sharp`), in Sora from `@fontsource/sora`'s static files.
+- Fonts are self-hosted (`@fontsource-variable/*`), never Google Fonts.
+- `docs/src/content/docs/docs/guides/` — use-case guides. `rule-set-library.mdx` holds importable rule sets as Export JSON (`RuleSetExport` in `src/components/lifecycle-rule-page.tsx`; every one with `actionEnabled: false`, each folded in a `<details>`). `scripts/rule-set-library-check.ts` (alias-free) validates every json block against `CONDITION_FIELDS`, `CONDITION_OPERATORS` and the action lists in both the docs build (`validate:rulesets`) and `tests/unit/docs/rule-set-library.test.ts` (which also checks `ruleSetCreateSchema` and that every field is described in `lifecycle-rules.mdx`). Renaming a field, operator or action type fails both until the docs follow.
+- `docs/src/content/docs/docs/` — MDX docs at `librariarr.dev/docs/...`; `docs/astro.config.mjs` — sidebar and site config; `.github/workflows/docs-deploy.yml` — deploy (on `docs/**` and the OpenAPI source files).

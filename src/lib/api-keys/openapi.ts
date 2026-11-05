@@ -1,5 +1,5 @@
 import { API_SCOPE_INFO, API_SCOPES, type ApiScope } from "./scopes";
-import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST } from "./limits";
+import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST, MAX_SEARCH_QUERY_LENGTH } from "./limits";
 
 // The list routes' limits (`src/lib/api/pagination.ts`), repeated rather than
 // imported: this module is read by the docs build and must stay free of path
@@ -229,7 +229,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Library",
     summary: "Search by title",
     query: [
-      { name: "q", description: "Search text.", required: true },
+      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters.`, schema: { type: "string", maxLength: MAX_SEARCH_QUERY_LENGTH }, required: true },
       { name: "type", description: "Library type. Required unless `types` is given; the answer is `{ items }`.", schema: MEDIA_TYPE },
       {
         name: "types",
@@ -290,7 +290,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       { name: "w", description: "Width.", schema: { type: "integer", enum: [400, 640, 800] } },
     ],
   },
-  { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets" },
+  { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets (owner omitted)" },
   { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: `Each match carries the item snapshot detection stored, without its file path, cast and crew lists, tagline or original title (read \`/media/{id}\` for those). Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.` },
   {
     method: "get",
@@ -298,7 +298,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Actions by status",
-    description: `A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. Each action's \`error\` is redacted of internal addresses and paths. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
+    description: `A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
   {
@@ -306,7 +306,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     path: "/lifecycle/exceptions",
     scope: "lifecycle:read",
     tag: "Lifecycle",
-    summary: "Exceptions",
+    summary: "Exceptions (owner omitted)",
     description: `Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "type", description: "Library type, or ALL.", schema: { type: "string", enum: ["MOVIE", "SERIES", "MUSIC", "ALL"] } }],
   },
@@ -407,7 +407,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       `when it would delete more than ${PER_REQUEST} items or exceed the ${PER_HOUR}-an-hour deletion budget.`,
     responses: { "202": "Queued: `{ queued: true, jobs: 1 }`", "500": "The job could not be queued" },
   },
-  { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server", description: "Who is watching what, on which player and from which address. The path of the file being played is omitted." },
+  { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server", description: "Who is watching what, on which player and from which address. The path of the file being played is omitted. Answered from a listing at most 5 seconds old, so polling faster than that returns the same answer." },
   { method: "get", path: "/tools/maintenance", scope: "streams:read", tag: "Streams", summary: "Maintenance mode status" },
   {
     method: "post",

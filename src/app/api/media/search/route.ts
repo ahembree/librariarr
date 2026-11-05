@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { Prisma } from "@/generated/prisma/client";
+import { MAX_SEARCH_QUERY_LENGTH } from "@/lib/api-keys/limits";
 
 /**
  * How many distinct items a group of matching rows holds — the "N eps" /
@@ -42,6 +43,15 @@ export const GET = withSession(async (session, request: NextRequest) => {
   const type = searchParams.get("type");
   const seriesScope = searchParams.get("seriesScope") === "true";
   const musicScope = searchParams.get("musicScope") === "true";
+
+  // Bounded (see `limits.ts`): a title search is never this long, and the
+  // public API reaches this route.
+  if (q && q.length > MAX_SEARCH_QUERY_LENGTH) {
+    return NextResponse.json(
+      { error: `Search text must be ${MAX_SEARCH_QUERY_LENGTH} characters or fewer` },
+      { status: 400 }
+    );
+  }
 
   if (typesParam !== null) {
     const types = [...new Set(typesParam.split(",").map((t) => t.trim()).filter(Boolean))];

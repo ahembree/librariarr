@@ -1,6 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useDashboardCardDisplay } from "@/hooks/use-dashboard-card-display";
+import {
+  effectiveCardType,
+  toggleHiddenValue,
+  type CardDisplay,
+} from "@/lib/dashboard/card-display";
 import type { LucideIcon } from "lucide-react";
 import { BarChart3, PieChart as PieChartIcon } from "lucide-react";
 import {
@@ -54,6 +60,9 @@ interface BreakdownCardProps {
   lockedFilterType?: boolean;
   availableTypes?: string[];
   emptyMessage?: string;
+  /** The card's saved display choices and their setter (see `useDashboardCardDisplay`). */
+  display?: CardDisplay;
+  onDisplayChange?: (next: CardDisplay | undefined) => void;
 }
 
 function valueOf(entry: BreakdownEntry, type: MediaType | undefined): number {
@@ -157,18 +166,15 @@ export function BreakdownCard({
   lockedFilterType,
   availableTypes,
   emptyMessage = "No data available.",
+  display: savedDisplay,
+  onDisplayChange,
 }: BreakdownCardProps) {
-  const [view, setView] = useState<"bars" | "donut">("bars");
-  const [topN, setTopN] = useState<number | null>(5);
-  const [localType, setLocalType] = useState<MediaType | undefined>(filterType);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-
-  // Sync local override when the page-level filter changes (React 19 idiom).
-  const [prevFilterType, setPrevFilterType] = useState(filterType);
-  if (prevFilterType !== filterType) {
-    setPrevFilterType(filterType);
-    setLocalType(filterType);
-  }
+  // View, Top N, type pick and hidden values are the card's saved choices.
+  const [choices, updateChoices] = useDashboardCardDisplay(savedDisplay, onDisplayChange, filterType);
+  const view = choices.view ?? "bars";
+  const topN = choices.topN === undefined ? 5 : choices.topN;
+  const localType = effectiveCardType(choices.type, filterType, availableTypes);
+  const hidden = new Set(choices.hidden);
   const effectiveType = lockedFilterType ? filterType : localType;
 
   const showType = (t: MediaType) =>
@@ -217,12 +223,7 @@ export function BreakdownCard({
   const maxValue = Math.max(...visible.map((e) => e.value), 1);
 
   const toggleHidden = (label: string) => {
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
+    updateChoices({ hidden: toggleHiddenValue(choices.hidden, label) });
   };
 
   // Adapters own color fallbacks (incl. the synthetic "Other" bucket) —
@@ -232,9 +233,9 @@ export function BreakdownCard({
   const typeSelect = !lockedFilterType && (
     <Select
       value={localType ?? "all"}
-      onValueChange={(v) => setLocalType(v === "all" ? undefined : (v as MediaType))}
+      onValueChange={(v) => updateChoices({ type: v === "all" ? "ALL" : (v as MediaType) })}
     >
-      <SelectTrigger size="sm" className="w-28 text-xs">
+      <SelectTrigger size="sm" className="w-28 min-w-0 max-w-full text-xs">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -273,9 +274,9 @@ export function BreakdownCard({
           {typeSelect}
           <Select
             value={topN === null ? "all" : String(topN)}
-            onValueChange={(v) => setTopN(v === "all" ? null : Number(v))}
+            onValueChange={(v) => updateChoices({ topN: v === "all" ? null : Number(v) })}
           >
-            <SelectTrigger size="sm" className="w-22 text-xs">
+            <SelectTrigger size="sm" className="w-22 min-w-0 max-w-full text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -288,7 +289,7 @@ export function BreakdownCard({
           </Select>
           <SegmentedToggle
             value={view}
-            onChange={setView}
+            onChange={(next) => updateChoices({ view: next === "donut" ? "donut" : undefined })}
             options={[
               { value: "bars", icon: BarChart3, label: "Bars view" },
               { value: "donut", icon: PieChartIcon, label: "Donut view" },

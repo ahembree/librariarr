@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState, useEffect } from "react";
+import { widthForKey } from "@/lib/dashboard/resize-keys";
 
 interface ResizeHandleProps {
   currentSize: number;
@@ -113,15 +114,38 @@ export function ResizeHandle({
     };
   }, [isDragging, minSize, maxSize, onResize, onPreviewChange]);
 
+  // The keyboard's way to resize: a focusable separator (the window-splitter
+  // pattern) that ArrowLeft/ArrowRight move a column at a time.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const next = widthForKey(e.key, currentSize, minSize, maxSize);
+      if (next === null) return;
+      e.preventDefault();
+      if (next !== currentSize) onResize(next);
+    },
+    [currentSize, minSize, maxSize, onResize]
+  );
+
   return (
     <>
-      {/* Resize handle bar */}
+      {/* Resize handle bar: in the gap beside the card, so it never sits over
+          the card's own content (its scrollbar runs down that edge) */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize z-20 group/resize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Card width"
+        aria-valuemin={minSize}
+        aria-valuemax={maxSize}
+        aria-valuenow={currentSize}
+        aria-valuetext={`${currentSize} of 12 columns`}
+        tabIndex={0}
+        title="Drag, or use the arrow keys, to set the width"
+        className="absolute -right-5 top-0 bottom-0 w-4 cursor-col-resize z-20 rounded group/resize flex items-center justify-center hover:bg-primary/10 transition-colors touch-none outline-none focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
+        onKeyDown={handleKeyDown}
       >
-        <div className="w-0.5 h-8 rounded-full bg-muted-foreground/40 group-hover/resize:bg-primary transition-colors" />
+        <div className="w-0.5 h-8 rounded-full bg-muted-foreground/40 group-hover/resize:bg-primary group-focus-visible/resize:bg-primary transition-colors" />
       </div>
 
       {/* Size indicator while dragging */}

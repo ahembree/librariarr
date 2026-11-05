@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
@@ -16,11 +16,9 @@ import { Tv, List, HardDrive, Play } from "lucide-react";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useListFetch } from "@/hooks/use-list-fetch";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -31,7 +29,6 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { loadCachedList } from "@/lib/media/list-cache";
 
 interface SeasonEntry {
   parentTitle: string;
@@ -55,7 +52,6 @@ interface SeasonEntry {
   audienceRatingImage?: string | null;
   year?: number | null;
 }
-
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Series Name" },
@@ -150,20 +146,30 @@ function seasonHover(season: SeasonEntry) {
   );
 }
 
+const selectSeasons = (body: { seasons?: SeasonEntry[] }) => body.seasons;
+
 export default function AllSeasonsPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
   const { servers } = useServers();
-  const [seasons, setSeasons] = useState<SeasonEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, filters, onFilterChange, clearFilters, hasFilters } =
     useLibraryListState("seasons", "parentTitle");
   const filterPanel = useFilterPanelReset(undefined, clearFilters);
   const { size, setSize, columns } = useCardSize();
-  // Guards against a stale slow response landing after a quick filter/sort
-  // flip and overwriting state with the wrong items.
-  const latest = useLatestRequest();
+  const listParams = new URLSearchParams();
+  listParams.set("sortBy", sortBy);
+  listParams.set("sortOrder", sortOrder);
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) listParams.set(key, value);
+  }
+  const { items: seasons, loading } = useLibraryList({
+    url: "/api/media/series/all-seasons",
+    params: listParams,
+    mode: "grouped",
+    select: selectSeasons,
+    syncScope: { types: "SERIES" },
+  });
 
   const grid = useVirtualPosterGrid({
     count: seasons.length,
@@ -178,42 +184,6 @@ export default function AllSeasonsPage() {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
-
-  const fetchSeasons = useCallback(async () => {
-    const token = latest.begin();
-    setLoading(true);
-    // Set once this request's list is on screen, from the cache or the server.
-    let applied = false;
-    try {
-      const params = new URLSearchParams();
-      params.set("sortBy", sortBy);
-      params.set("sortOrder", sortOrder);
-      for (const [key, value] of Object.entries(filters)) {
-        if (value) params.set(key, value);
-      }
-      // Through the tab's list cache: a list loaded in the last minute is
-      // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ seasons?: SeasonEntry[] }>("/api/media/series/all-seasons", params, (data) => {
-        if (!latest.isCurrent(token)) return;
-        applied = true;
-        setSeasons(data.seasons || []);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Failed to fetch seasons:", error);
-      // A failed load with nothing shown for it empties the list, as it did
-      // before the cache: the previous list under the new filters would read
-      // as their result.
-      if (!applied && latest.isCurrent(token)) setSeasons([]);
-    } finally {
-      if (latest.isCurrent(token)) setLoading(false);
-    }
-  }, [filters, sortBy, sortOrder, latest]);
-
-  useListFetch(fetchSeasons);
-
-  // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useLibrarySyncRefetch({ types: "SERIES" }, fetchSeasons);
 
   const navigateToSeason = useCallback(
     (season: SeasonEntry) => {

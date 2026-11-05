@@ -30,7 +30,9 @@ const eventHandlers = new Map<string, Set<(e: MessageEvent) => void>>();
 // reconnected page can be correct is to refetch. Each entry returns the
 // subscriber's callback rather than calling it, so a callback subscribed to
 // several event types (a sync card listens to four) runs once, not once per type.
-const resyncListeners = new Set<() => RealtimeCallback>();
+// Each maps to the event types it subscribes to, for a resync limited to some
+// (`resyncTypes`).
+const resyncListeners = new Map<() => RealtimeCallback, readonly string[]>();
 
 // Whether the current source has delivered an event — the route's own
 // `connected` event or any other. `connected` turns true on the response
@@ -219,10 +221,25 @@ function fireResync() {
   if (now - lastResyncAt < MIN_RESYNC_INTERVAL_MS) return;
   lastResyncAt = now;
 
-  const callbacks = new Set<RealtimeCallback>();
-  for (const current of resyncListeners) callbacks.add(current());
+  runResync([...resyncListeners.keys()].map((current) => current()));
+}
+
+/**
+ * A resync of the subscribers to `types` only, with the pre-handlers for them:
+ * as if one event of each type had arrived, but each callback runs once.
+ */
+function resyncTypes(types: ReadonlySet<string>) {
+  runPreHandlers(new Set([...types].flatMap((type) => [...(preHandlers.get(type) ?? [])])));
+  const callbacks: RealtimeCallback[] = [];
+  for (const [current, subscribed] of resyncListeners) {
+    if (subscribed.some((type) => types.has(type))) callbacks.push(current());
+  }
+  runResync(callbacks);
+}
+
+function runResync(callbacks: Iterable<RealtimeCallback>) {
   const scope = newRequestScope();
-  for (const callback of callbacks) {
+  for (const callback of new Set(callbacks)) {
     try {
       runInRequestScope(scope, () => callback({}));
     } catch {
@@ -254,12 +271,65 @@ async function checkAuthFailure(): Promise<boolean> {
   }
 }
 
+// The server time a page's server-rendered data was read at, until the
+// stream's first `connected` event says whether anything was emitted since
+// (see `resyncIfEventsSince`).
+let pendingSnapshotAt: number | null = null;
+
+/**
+ * For a page whose server render carried its data (the dashboard): that data
+ * was read at `serverTime`, before this tab's stream existed, so an event
+ * emitted between the two reached nobody. The stream's first `connected` event
+ * names when each event type last went out; the subscribers of every type
+ * emitted that late or later refetch once, as on a reconnect. Only those: a
+ * playback in progress emits `session-changed` every few seconds, and a
+ * resync of every subscriber then re-read everything the render had just read.
+ * A page that fetched its own data on mount never needs this — the stream
+ * opens before its answers arrive.
+ */
+export function resyncIfEventsSince(serverTime: number): void {
+  if (liveState) {
+    // Already delivering: the `connected` event that would have answered has
+    // gone by, so the gap cannot be checked.
+    fireResync();
+    return;
+  }
+  pendingSnapshotAt = pendingSnapshotAt === null ? serverTime : Math.min(pendingSnapshotAt, serverTime);
+}
+
+/**
+ * The event types a `connected` event reports emitted at or after `since`,
+ * or null when it cannot tell (refetch everything rather than trust data that
+ * may be stale).
+ */
+function typesEmittedSince(e: Event, since: number): Set<string> | null {
+  try {
+    const { lastEventAtByType } = JSON.parse((e as MessageEvent).data) as { lastEventAtByType?: unknown };
+    if (typeof lastEventAtByType !== "object" || lastEventAtByType === null) return null;
+    const types = new Set<string>();
+    for (const [type, at] of Object.entries(lastEventAtByType)) {
+      if (typeof at !== "number") return null;
+      if (at >= since) types.add(type);
+    }
+    return types;
+  } catch {
+    return null;
+  }
+}
+
 function createSource(): EventSource | null {
   try {
     const source = new EventSource("/api/events/stream");
-    source.addEventListener("connected", () => {
+    source.addEventListener("connected", (e) => {
       setConnected(true);
       setLive(true);
+      if (pendingSnapshotAt !== null) {
+        const since = pendingSnapshotAt;
+        pendingSnapshotAt = null;
+        const types = typesEmittedSince(e, since);
+        if (types === null) fireResync();
+        else if (types.size > 0) resyncTypes(types);
+      }
     });
     source.onopen = () => {
       // Successful (re)open — reset backoff.
@@ -425,7 +495,7 @@ function releaseSource() {
 export const __testing = {
   acquireSource,
   releaseSource,
-  registerResync: (fn: () => void) => resyncListeners.add(() => fn),
+  registerResync: (fn: () => void, types: readonly string[] = []) => resyncListeners.set(() => fn, types),
 };
 
 /**
@@ -540,7 +610,7 @@ function useRealtimeSubscription(
     // down is unrecoverable. Callbacks here are refetches, so re-running one is
     // exactly the right recovery.
     const resync = () => callbackRef.current;
-    resyncListeners.add(resync);
+    resyncListeners.set(resync, eventTypes);
 
     return () => {
       for (const { eventType, handler, handlers } of attached) {

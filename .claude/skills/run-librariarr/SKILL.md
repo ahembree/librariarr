@@ -33,7 +33,7 @@ Defaults — override via env:
 | `LIBRARIARR_ADMIN_USER` | `admin` |
 | `LIBRARIARR_ADMIN_PASS` | `librariarr-dev-pw-1234` (8-char min per `authSetupSchema`) |
 | `LIBRARIARR_APP_CONTAINER` | `librariarr-dev` |
-| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v1.61.0-noble` |
+| `LIBRARIARR_PLAYWRIGHT_IMAGE` | `mcr.microsoft.com/playwright:v<version>-noble`, `<version>` read from this skill's `package.json` `playwright` dependency (the image's browsers only work with that exact version) |
 
 ## Run (human path)
 
@@ -64,7 +64,7 @@ pnpm e2e:docker        # docker-compose.e2e.yml: postgres + app + playwright, ru
 pnpm e2e:docker:down   # tear down + wipe the ephemeral e2e DB
 ```
 
-It uses a dedicated `librariarr_e2e` database and an in-suite first-run flow to create the admin (no manual `setup` step needed). See CLAUDE.md → "Browser E2E (Playwright)". Add new user-journey specs there, not here.
+It uses a dedicated `librariarr_e2e` database and an in-suite first-run flow to create the admin (no manual `setup` step needed). See the `e2e-tests` skill. Add new user-journey specs there, not here.
 
 ## Reset between runs
 
@@ -92,7 +92,7 @@ Pick these because they don't depend on any user-supplied state. Adding more (me
 - **`pnpm install` in this skill dir silently no-ops without `--ignore-workspace`.** `pnpm-workspace.yaml` lives at the repo root with global supply-chain config but no `packages:` key. pnpm still walks up and treats the skill dir as part of the parent project, so a bare `pnpm install` reports "Already up to date" against the wrong lockfile. The driver passes `--ignore-workspace` for this exact reason.
 - **The official Playwright Docker image ships browsers + OS libs but no Playwright JS package.** That's intentional — you BYO the SDK version. The driver installs `playwright` into the skill dir's `node_modules` and bind-mounts it into the container with `NODE_PATH=/node_modules`.
 - **curl's Netscape cookie jar prefixes HttpOnly entries with `#HttpOnly_`.** A naive `!line.startsWith("#")` filter (used by most "parse Netscape cookie jar" snippets) drops the only cookie we care about. `screenshot.mjs` strips the prefix before filtering.
-- **Plex login is disabled on a local-only setup.** `/api/auth/setup` creates the admin with `plexLoginEnabled:false` ([src/app/api/auth/setup/route.ts:52](src/app/api/auth/setup/route.ts#L52)) because no Plex account is linked yet. Don't expect the Plex OAuth button on the screenshot of `/login`.
+- **Plex login is disabled on a local-only setup.** `/api/auth/setup` creates the admin with `plexLoginEnabled:false` ([src/app/api/auth/setup/route.ts:59](src/app/api/auth/setup/route.ts#L59)) because no Plex account is linked yet. Don't expect the Plex OAuth button on the screenshot of `/login`.
 - **DB volume survives `down`.** A second `up` reuses the existing admin user — `setup` will hit the 403 path and log in instead of creating. Use `clean` if you need a virgin DB (slower: re-pushes schema + reruns Prisma generate).
 - **`/api/auth/setup` 403 on `setupRequired:false` is the success-case fallthrough**, not an error. The driver logs `"setup already done — falling back to local login"` and continues.
 - **Cookie's `domain` is rewritten on injection.** `curl` saves it as `localhost`; the screenshot runs inside the docker network where the host is `librariarr-dev`. `screenshot.mjs` overrides `domain` to match `LIBRARIARR_BASE_URL`'s hostname so the cookie is sent.

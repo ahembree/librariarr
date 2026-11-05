@@ -102,15 +102,31 @@ const EVENT_KEY = "app-event";
 
 class AppEventBus {
   private emitter: EventEmitter;
+  private lastEmittedAt = new Map<string, number>();
 
   constructor() {
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(50);
   }
 
+  /**
+   * When each event type was last emitted (epoch ms); a type not yet emitted
+   * is absent. The stream sends it with its `connected` event: a page the
+   * server rendered with its data (the dashboard) asks whether anything it
+   * listens for happened between that render and the stream opening, which no
+   * event can tell it. Per type, because something is nearly always being
+   * emitted — a playback's `session-changed` every few seconds — and only the
+   * subscribers of the types that went out need to read again.
+   */
+  lastEventAtByType(): Record<string, number> {
+    return Object.fromEntries(this.lastEmittedAt);
+  }
+
   emit(event: Omit<AppEvent, "timestamp">) {
+    const timestamp = Date.now();
+    this.lastEmittedAt.set(event.type, timestamp);
     try {
-      this.emitter.emit(EVENT_KEY, { ...event, timestamp: Date.now() });
+      this.emitter.emit(EVENT_KEY, { ...event, timestamp });
     } catch {
       // Fire-and-forget — never let event emission break the caller
     }

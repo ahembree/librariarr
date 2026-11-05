@@ -52,8 +52,10 @@ export const GET = withSession(async (session) => {
         send(event.type, { timestamp: event.timestamp, ...event.meta });
       });
 
-      // Send initial connected event
-      send("connected", { timestamp: Date.now() });
+      // Send initial connected event. `lastEventAtByType` lets a page rendered
+      // with its data on the server tell which events went out before this
+      // stream was there to deliver them (see `resyncIfEventsSince`).
+      send("connected", { timestamp: Date.now(), lastEventAtByType: eventBus.lastEventAtByType() });
 
       // Heartbeat to keep connection alive
       const heartbeatTimer = setInterval(() => {

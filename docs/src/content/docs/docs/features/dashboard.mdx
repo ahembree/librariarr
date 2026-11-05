@@ -12,7 +12,7 @@ The dashboard is the landing page after login — an operations console for your
 
 ## Zones
 
-The page appears at once and every zone loads on its own, filling in as its data arrives — a slow source never holds up the rest of the dashboard.
+When you open or reload the dashboard, the server sends it with the library figures, the sync and schedule tiles, and the lifecycle pipeline already filled in, so they show as soon as the page appears — even on a phone, before the app's code has finished starting. Recently Added and the Insights grid follow a moment later, without a further round trip for their data. Moving to the dashboard from another page loads each zone on its own, filling in as its data arrives — a slow source never holds up the rest of the dashboard.
 
 ### Status Strip
 
@@ -26,7 +26,7 @@ A compact row of live operational tiles at the top of the page. Each tile links 
 | Next runs | Countdown to the next lifecycle detection and execution runs | Settings → Scheduling |
 | Update | Appears only when a newer Librariarr version is available | Settings → System |
 
-Slow data sources (streams and integration health probe your servers) load in the background without blocking the rest of the page.
+Slow data sources (streams and integration health probe your servers, and the update check asks GitHub) always load in the background, never holding up the rest of the page.
 
 ### Library Overview
 
@@ -60,7 +60,15 @@ Clicking a grouped tile opens that season or album; clicking a single item opens
 
 ### Insights
 
-A fully customizable chart grid — this is the only zone with a layout editor. Click **Customize** to rearrange, resize, remove, or add cards. Your layout is saved automatically and persists across sessions. A change made in one tab or on one device appears in every other open tab. If two tabs change the layout at the same moment, the later save is refused with a message and that tab loads the current layout, so neither edit silently overwrites the other.
+A fully customizable chart grid — this is the only zone with a layout editor. Click **Customize** to rearrange, resize, remove, or add cards:
+
+- **Move** a card by dragging its **Drag** handle. A bar between cards shows where it will land — before or after the card under the pointer, by which half of it the pointer is over (above or below a card that fills its row). With the keyboard, focus the handle, press Space, use the arrow keys to step past the neighbouring cards, and press Space again (Escape cancels).
+- **Resize** by dragging the handle beside a card's right edge (width, in twelfths of the row) or below its bottom edge (height). Both handles also work from the keyboard: Tab to one, then use the arrow keys (a column, or 50 px, at a time) or Home and End (the smallest and largest size). The **Auto height** button beside the drag handle (shown once a height is set), or a double-click on the bottom handle, returns the card to the height of its content. A set height applies from tablet width up; on a phone every card takes the height of its content.
+- **Remove** a card with its **×** button. The notice that follows has an **Undo** that puts the card back where it was, custom card settings included.
+- **Reset** puts the default Insights cards back. Its notice also has an **Undo**, which restores the layout it replaced.
+- A card set narrower or shorter than its content keeps it inside its own border: the content scrolls within the card rather than spilling over the cards around it, and the card's controls move below its title, and narrow or wrap, when it is too narrow for them.
+
+Your layout is saved automatically and persists across sessions, together with each card's own choices: a distribution card's view (bars or donut), how many values it lists, its type pick and the values clicked off its totals, and a custom card's type pick and hidden legend entries. They stay as they were when you open and close **Customize**, and after a reload. A change made in one tab or on one device appears in every other open tab. If two tabs change the layout at the same moment, the later save is refused with a message and that tab loads the current layout, so neither edit silently overwrites the other.
 
 ![The Recently Added shelf and the Insights grid with a quality breakdown card](/screenshots/insights.webp)
 
@@ -80,7 +88,7 @@ Distribution cards share one design: per-type proportion strips (or a donut with
 | Genre Breakdown | Genre distribution across your library |
 | Seerr Requests | Top requesters and watch follow-through |
 
-The **media type filter** above the grid scopes every chart, custom cards included, to Movies, Series, or Music. A card's own type selector overrides it until the grid filter changes again. If the selected type leaves the library, the filter falls back to all types.
+The **media type filter** above the grid scopes every chart, custom cards included, to Movies, Series, or Music. A card's own type selector overrides it until the grid filter changes again (changing the grid filter clears every card's own pick). If the selected type leaves the library, the filter falls back to all types.
 
 #### Custom Cards
 

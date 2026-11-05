@@ -3,6 +3,7 @@ import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
 import { jsonResponse, MIN_COMPRESS_BYTES } from "@/lib/api/json-response";
 import { trimServerInternals, withoutServerInternals } from "@/lib/api-keys/trim-internals";
+import { runAsApiKey } from "@/lib/api-keys/principal";
 
 const request = (headers: Record<string, string> = {}) =>
   new NextRequest("http://localhost/api/v1/servers", { headers });
@@ -91,9 +92,33 @@ describe("trimServerInternals", () => {
     });
   });
 
-  it("keeps url and userId on objects that are not servers", () => {
+  it("keeps url and userId on objects that are not servers when no owner is given", () => {
     const body = { rule: { id: "r1", userId: "u1", url: "https://example.com", type: "MOVIE" }, items: [{ url: "keep" }] };
     expect(trimServerInternals(body)).toEqual(body);
+  });
+
+  // Rule sets, actions and exceptions carry the admin's user id as their owner
+  // column; a playback session's `userId` is the viewer's media-server id.
+  it("drops the owner's userId from every object, at any depth, and keeps any other", () => {
+    const body = {
+      ruleSets: [{ id: "r1", userId: "owner", name: "Unwatched", collection: { id: "c1", userId: "owner" } }],
+      actions: [{ id: "a1", userId: "owner", ruleSet: { userId: "owner" }, mediaItem: { id: "i1" } }],
+      exceptions: [{ id: "e1", userId: "owner", reason: "keep" }],
+      sessions: [{ sessionId: "s1", userId: "plex-viewer-7", username: "alice" }],
+      nested: { deeper: { userId: "owner", other: "kept" } },
+    };
+    expect(trimServerInternals(body, { ownerId: "owner" })).toEqual({
+      ruleSets: [{ id: "r1", name: "Unwatched", collection: { id: "c1" } }],
+      actions: [{ id: "a1", ruleSet: {}, mediaItem: { id: "i1" } }],
+      exceptions: [{ id: "e1", reason: "keep" }],
+      sessions: [{ sessionId: "s1", userId: "plex-viewer-7", username: "alice" }],
+      nested: { deeper: { other: "kept" } },
+    });
+  });
+
+  it("matches the owner by value only — a userId under another key, or another value, stays", () => {
+    const body = { ownerUserId: "owner", row: { userId: "someone-else" } };
+    expect(trimServerInternals(body, { ownerId: "owner" })).toEqual(body);
   });
 
   it("sanitizes string error fields and leaves other errors alone", () => {
@@ -139,6 +164,27 @@ describe("withoutServerInternals", () => {
     expect(await res.json()).toEqual({ servers: [{ id: "s1", name: "Home", type: "JELLYFIN" }] });
   });
 
+  it("reads the owner off the request's API-key principal", async () => {
+    const wrapped = withoutServerInternals(async () =>
+      NextResponse.json({
+        ruleSets: [{ id: "r1", userId: "owner" }],
+        sessions: [{ sessionId: "s1", userId: "viewer" }],
+      }),
+    );
+    const principal = { keyId: "k1", userId: "owner", name: "ci", prefix: "lbr_abcdef", scopes: [] as const };
+    const res = await runAsApiKey(principal, () => wrapped(request()));
+    expect(await res.json()).toEqual({
+      ruleSets: [{ id: "r1" }],
+      sessions: [{ sessionId: "s1", userId: "viewer" }],
+    });
+    // Outside a principal nothing names an owner, so nothing is dropped by value.
+    const bare = await wrapped(request());
+    expect(await bare.json()).toEqual({
+      ruleSets: [{ id: "r1", userId: "owner" }],
+      sessions: [{ sessionId: "s1", userId: "viewer" }],
+    });
+  });
+
   it("passes the route context through", async () => {
     const wrapped = withoutServerInternals(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) =>
       NextResponse.json({ id: (await ctx.params).id, machineId: "m1" }),
@@ -179,6 +225,24 @@ describe("withoutServerInternals", () => {
     expect(body.servers).toHaveLength(200);
     expect(body.servers[0]).toEqual({ id: "s0", name: big[0].name, type: "PLEX" });
     expect(JSON.stringify(body)).not.toContain("machineId");
+  });
+
+  // A POST is passed through with its body, so its Accept-Encoding stays and
+  // a handler answering through jsonResponse gzips a large body.
+  it("inflates a gzipped answer before trimming, on a method whose request is passed through", async () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({ id: `e${i}`, userId: "owner", reason: "keep".padEnd(30, ".") }));
+    const wrapped = withoutServerInternals(async (req: NextRequest) => jsonResponse(req, { exceptions: rows }));
+    const post = new NextRequest("http://localhost/api/v1/lifecycle/exceptions", {
+      method: "POST",
+      headers: { "accept-encoding": "gzip", "content-type": "application/json" },
+      body: "{}",
+    });
+    const principal = { keyId: "k1", userId: "owner", name: "ci", prefix: "lbr_abcdef", scopes: [] as const };
+    const res = await runAsApiKey(principal, () => wrapped(post));
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    const body = JSON.parse(gunzipSync(new Uint8Array(await res.arrayBuffer())).toString("utf8")) as { exceptions: Record<string, unknown>[] };
+    expect(body.exceptions).toHaveLength(300);
+    expect(body.exceptions[0]).toEqual({ id: "e0", reason: rows[0].reason });
   });
 
   it("returns a non-JSON response untouched", async () => {

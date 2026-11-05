@@ -41,7 +41,8 @@ validated and merged ten PRs without it is a skipped step, not a fast one.
 5. Wait for CI on the final head, including Browser E2E, then squash-merge
    (`expectedHeadSha` must be the full 40-character SHA — `git ls-remote origin <branch>`).
    Take the version for `commit_title` from the lockfile on that head
-   (`git show <sha>:pnpm-lock.yaml | grep "^  '<pkg>@"`), never from the PR title or the
+   (`git show <sha>:pnpm-lock.yaml | grep -E "^  '?<pkg>@"` — only scoped names are quoted:
+   `'@playwright/test@1.64.1':` but `next@16.4.3:`), never from the PR title or the
    branch name: Dependabot's rebase moves the version without renaming the branch. Put the
    step-1 evaluation in `commit_message`.
 6. Check the CI run the merge starts on `main`. If it fails, fix that before the next PR —

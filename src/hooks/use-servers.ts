@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
 import { createRealtimeResource, useRealtimeResource } from "@/hooks/use-realtime-resource";
+import { SERVERS_URL } from "@/lib/dashboard/seed-urls";
 
 export interface ServerInfo {
   id: string;
@@ -10,10 +11,6 @@ export interface ServerInfo {
   type: string;
   enabled: boolean;
 }
-
-// The pickers read only these four fields; the full answer carries every
-// server's libraries, item counts and latest sync job.
-export const SERVERS_URL = "/api/servers?fields=basic";
 
 const NO_SERVERS: ServerInfo[] = [];
 
@@ -34,13 +31,18 @@ function parseServers(body: unknown): ServerInfo[] {
  * emits `server:changed`.
  */
 export const serversResource = createRealtimeResource<ServerInfo[]>({
+  // The pickers read only these four fields (`?fields=basic`); the full answer
+  // carries every server's libraries, item counts and latest sync job.
   url: SERVERS_URL,
   events: ["server:changed"],
   parse: parseServers,
 });
 
-export function useServers() {
-  const servers = useRealtimeResource(serversResource) ?? NO_SERVERS;
+/** `seedBody`: `GET /api/servers?fields=basic`'s body as the server render read it, if it did. */
+export function useServers(seedBody?: unknown) {
+  // Parsed once: the store takes the seed on mount only.
+  const [seed] = useState(() => (seedBody === undefined ? null : parseServers(seedBody)));
+  const servers = useRealtimeResource(serversResource, seed) ?? NO_SERVERS;
   const [selectedServerId, setSelectedServerId] = useState<string>("all");
 
   // Adding, renaming or removing a server must reach every open picker.

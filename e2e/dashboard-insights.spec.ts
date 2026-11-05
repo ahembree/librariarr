@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { storeDashboardLayout } from "./seed";
+import { openDashboardInBrowser } from "./dashboard-nav";
 
 /**
  * Dashboard rendering details that only show in a real browser: card labels,
@@ -30,6 +31,7 @@ test.afterEach(async () => {
   restoreLayout = undefined;
 });
 
+/** Open the dashboard with `openDashboardInBrowser`: a full load reads the stats on the server. */
 async function stubDashboard(page: Page, cards: string[], statsBody: object) {
   const layout = { main: cards.map((id) => ({ id, size: 12 })), movies: [], series: [], music: [] };
   restoreLayout = await storeDashboardLayout(layout);
@@ -54,7 +56,7 @@ test.describe("dashboard insights", () => {
         { audioChannels: 6, type: "MOVIE", _count: 2 },
       ],
     }));
-    await page.goto("/");
+    await openDashboardInBrowser(page);
 
     await expect(page.getByText("Stereo (2.0)", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("5.1 Surround", { exact: true }).first()).toBeVisible();
@@ -68,7 +70,7 @@ test.describe("dashboard insights", () => {
       _count: 100 - i,
     }));
     await stubDashboard(page, ["genre"], stats({ genreBreakdown: genres }));
-    await page.goto("/");
+    await openDashboardInBrowser(page);
 
     const genreCard = insights(page);
     await expect(genreCard.getByText("Genre Breakdown")).toBeVisible();

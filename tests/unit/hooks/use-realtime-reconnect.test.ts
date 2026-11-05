@@ -52,6 +52,12 @@ class FakeEventSource {
     this.readyState = FakeEventSource.OPEN;
     this.onopen?.();
   }
+
+  /** The route's first event, as the stream sends it. */
+  fireConnected(data: unknown) {
+    const event = new MessageEvent("connected", { data: typeof data === "string" ? data : JSON.stringify(data) });
+    for (const fn of this.listeners.get("connected") ?? []) fn(event);
+  }
 }
 
 const fetchMock = vi.fn();
@@ -233,5 +239,110 @@ describe("useRealtime reconnect machinery", () => {
     expect((first as unknown as FakeEventSource).closed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect((first as unknown as FakeEventSource).closed).toBe(true);
+  });
+
+  describe("resyncIfEventsSince — a page rendered with its data on the server", () => {
+    const RENDERED_AT = 1_000_000;
+
+    function connectedStream() {
+      const source = subscribe() as unknown as FakeEventSource;
+      source.fireOpen();
+      return source;
+    }
+
+    /** Subscribers to "sync:completed" and to "session-changed", counted. */
+    function registerSubscribers() {
+      const resyncs = { sync: 0, sessions: 0 };
+      mod.__testing.registerResync(() => resyncs.sync++, ["sync:completed", "sync:failed"]);
+      mod.__testing.registerResync(() => resyncs.sessions++, ["session-changed"]);
+      return resyncs;
+    }
+
+    it("resyncs the subscribers of a type emitted since the render, and only those", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+
+      source.fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400, "session-changed": RENDERED_AT - 5_000 },
+      });
+      expect(resyncs).toEqual({ sync: 1, sessions: 0 });
+    });
+
+    it("runs a subscriber of several emitted types once", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400, "sync:failed": RENDERED_AT + 500 },
+      });
+      expect(resyncs).toEqual({ sync: 1, sessions: 0 });
+    });
+
+    it("runs the pre-handlers of the emitted types before the subscribers", () => {
+      const order: string[] = [];
+      mod.__testing.registerResync(() => order.push("subscriber"), ["sync:completed"]);
+      mod.beforeRealtimeEvents(["sync:completed"], () => order.push("cache drop"));
+      mod.beforeRealtimeEvents(["session-changed"], () => order.push("other drop"));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({
+        timestamp: RENDERED_AT + 900,
+        lastEventAtByType: { "sync:completed": RENDERED_AT + 400 },
+      });
+      expect(order).toEqual(["cache drop", "subscriber"]);
+    });
+
+    it("an event at the render's own millisecond counts", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "session-changed": RENDERED_AT } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 1 });
+    });
+
+    it("does nothing when every event predates the render, or there was none", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "sync:completed": RENDERED_AT - 1 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("does nothing when the server has emitted nothing since it started", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: {} });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("resyncs every subscriber when it cannot tell (no report, unreadable data)", () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900 });
+      expect(resyncs).toEqual({ sync: 1, sessions: 1 });
+    });
+
+    it("checks only the first connected event after the render", async () => {
+      const resyncs = registerSubscribers();
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      source.fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: {} });
+      await vi.advanceTimersByTimeAsync(10_000);
+      source.fireConnected({ timestamp: RENDERED_AT + 20_000, lastEventAtByType: { "sync:completed": RENDERED_AT + 15_000 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("a page with no server-rendered data never resyncs on the first connected event", () => {
+      const resyncs = registerSubscribers();
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAtByType: { "sync:completed": RENDERED_AT + 400 } });
+      expect(resyncs).toEqual({ sync: 0, sessions: 0 });
+    });
+
+    it("resyncs at once when the stream is already delivering", () => {
+      const resyncs = registerSubscribers();
+      connectedStream().fireConnected({ timestamp: RENDERED_AT, lastEventAtByType: {} });
+      mod.resyncIfEventsSince(RENDERED_AT);
+      expect(resyncs).toEqual({ sync: 1, sessions: 1 });
+    });
   });
 });

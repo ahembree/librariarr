@@ -361,6 +361,25 @@ tr[data-clickable]:hover > .data-table-pinned {
   box-shadow: inset -1px 0 0 var(--border);
 }
 
+/* A dashboard card's cell (dashboard-card-cell.tsx). A card's width is a
+   share of the row and its height can be set by the user, so its content can
+   need more room than the cell has: the card clips at its own border and its
+   body scrolls, rather than painting over the cards around it. The cell is a
+   size container, so a card's content can lay out by the card's width (@sm:
+   and the like) rather than the window's. */
+.dashboard-cell {
+  container-type: inline-size;
+  min-width: 0;
+}
+.dashboard-cell > [data-slot="card"] {
+  min-height: 0;
+  overflow: hidden;
+}
+.dashboard-cell > [data-slot="card"] > [data-slot="card-content"] {
+  min-height: 0;
+  overflow: auto;
+}
+
 /* Selection color */
 ::selection {
   background: oklch(0.50 0.15 270 / 30%);

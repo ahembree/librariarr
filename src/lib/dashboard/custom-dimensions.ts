@@ -1,4 +1,4 @@
-import type { CustomDimension } from "./card-registry";
+import type { CustomCardConfig, CustomDimension } from "./card-registry";
 
 export type DimensionCategory =
   | "direct"
@@ -262,4 +262,19 @@ export function isSubmittableCustomCard(
     return !!meta2 && supportsTimelineBreakdown(meta2);
   }
   return true;
+}
+
+/**
+ * A custom card's title: the one the user gave it, else one named after its
+ * chart and dimensions. Shared by the card and the edit grid's drag label.
+ */
+export function customCardTitle(config: Pick<CustomCardConfig, "chartType" | "dimension" | "dimension2" | "title">): string {
+  if (config.title) return config.title;
+  const meta = getDimensionMeta(config.dimension);
+  const meta2 = config.dimension2 ? getDimensionMeta(config.dimension2) : undefined;
+  if (!meta) return "Custom Chart";
+  if (config.chartType === "timeline") return meta2 ? `${meta.label} by ${meta2.label}` : `${meta.label} Timeline`;
+  if (config.chartType === "heatmap" && meta2) return `${meta.label} vs ${meta2.label}`;
+  if (config.chartType === "count") return `${meta.label} Count`;
+  return `${meta.label} Breakdown`;
 }
