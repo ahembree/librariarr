@@ -4,8 +4,8 @@
  * Single source of truth for the "Movie" / "Series" / "Music" chips shown
  * across the app — Watch History, Query Builder, Rule Matches, and Pending
  * Actions — so a media-type chip reads the same everywhere. Uses the
- * `media-*` identity tokens in globals.css: a type is not a status, so it
- * never borrows the status colours (green, amber, red, sky).
+ * `media-*` tokens in globals.css: Movie the sky blue, Series purple, Music
+ * the green — the chips' original colours.
  */
 
 /** Tailwind classes (background + text + border) for each media type's chip. */

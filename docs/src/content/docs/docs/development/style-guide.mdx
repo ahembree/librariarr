@@ -88,7 +88,7 @@ A neutral label is `bg-muted/40 text-muted-foreground`. Never write a raw Tailwi
 
 ### Identity Colors
 
-What a thing **is**, never how it is doing — so they never borrow the status hues. The same in both themes.
+What a thing **is**, never how it is doing — so they never borrow the status hues, with one deliberate exception: the media type chips keep their original colours, Movie in the sky blue and Music in the green (the word on the chip tells a type from a status). The same in both themes unless they alias a status token.
 
 | Token | Value | Used for |
 |-|-|-|
@@ -98,11 +98,11 @@ What a thing **is**, never how it is doing — so they never borrow the status h
 | `--app-lidarr` | `oklch(76.5% 0.177 163.223)` | Lidarr |
 | `--app-seerr` | `oklch(70.2% 0.183 293.541)` | Seerr |
 | `--app-tracearr` | `oklch(78.9% 0.154 211.53)` | Tracearr |
-| `--media-movie` | `oklch(67.3% 0.182 276.935)` | Movie type chip (indigo) |
-| `--media-series` | `oklch(84.1% 0.238 128.85)` | Series type chip (lime) |
-| `--media-music` | `oklch(71.8% 0.202 349.761)` | Music type chip (pink) |
+| `--media-movie` | `var(--sky)` | Movie type chip (blue) |
+| `--media-series` | `oklch(71.4% 0.203 305.504)` | Series type chip (purple) |
+| `--media-music` | `var(--green)` | Music type chip (green) |
 
-The three media types sit well apart from each other and from the status hues, measured in OKLab (`tests/unit/theme/media-type-colors.test.ts`): Movie and Series were once indigo beside purple and read as one colour.
+The three media types keep their original colours — blue, purple and green — pinned by `tests/unit/theme/media-type-colors.test.ts`.
 
 Read an integration's classes from `INTEGRATION_APP_STYLES` (`src/lib/theme/integration-colors.ts`), a media type's from `MEDIA_TYPE_BADGE_COLORS` (`src/lib/theme/media-type-colors.ts`), and a server type's from `SERVER_TYPE_STYLES` (`src/lib/server-styles.ts`) — Plex is orange everywhere, the login button and onboarding included.
 
