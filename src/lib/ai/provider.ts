@@ -83,8 +83,11 @@ async function postWithTokenCap(
       }
       if (isServerError(error) && serverErrors < MODEL_ERROR_RETRIES && !options.signal?.aborted) {
         serverErrors++;
+        // Status and code only: the message carries the provider's own error
+        // text, which may echo request content.
         logger.debug("AI", `Model server error, retrying (${serverErrors}/${MODEL_ERROR_RETRIES})`, {
-          message: (error as Error).message,
+          status: (error as IntegrationError).status,
+          code: (error as IntegrationError).code,
         });
         continue;
       }

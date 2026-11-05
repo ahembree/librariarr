@@ -22,6 +22,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { AxiosError } from "axios";
+import { logger } from "@/lib/logger";
 import {
   createProvider,
   TEST_TIMEOUT_MS,
@@ -304,6 +305,10 @@ describe("model server errors", () => {
     expect((await createProvider(QWEN).chat([{ role: "user", content: "q" }], [])).content).toBe("ok");
     expect(adapter).toHaveBeenCalledTimes(2);
     expect(lastRequest().body.model).toBe("qwen3.5:9b");
+    // The retry log carries status and code, never the provider's error text.
+    const retryLog = vi.mocked(logger.debug).mock.calls.find((c) => String(c[1]).includes("retrying"));
+    expect(retryLog?.[2]).toEqual({ status: 500, code: "ERR_BAD_RESPONSE" });
+    expect(JSON.stringify(vi.mocked(logger.debug).mock.calls)).not.toContain("invalid character");
   });
 
   it("gives up after MODEL_ERROR_RETRIES and explains a parse failure", async () => {
