@@ -47,6 +47,12 @@ export interface ConfirmDialogProps {
   /** Block content between the description and the buttons (a checkbox, a list, a field). */
   children?: ReactNode;
   size?: "default" | "sm";
+  /**
+   * Where focus goes when the dialog closes (Radix's `onCloseAutoFocus`):
+   * call `event.preventDefault()` and focus something else when the element
+   * that opened the dialog is gone — a deleted row's button.
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -69,6 +75,7 @@ export function ConfirmDialog({
   onConfirm,
   children,
   size,
+  onCloseAutoFocus,
 }: ConfirmDialogProps) {
   const [running, setRunning] = useState(false);
   const busy = pending || running;
@@ -97,7 +104,7 @@ export function ConfirmDialog({
         onOpenChange(next);
       }}
     >
-      <AlertDialogContent size={size}>
+      <AlertDialogContent size={size} onCloseAutoFocus={onCloseAutoFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           {description !== undefined && description !== null && (

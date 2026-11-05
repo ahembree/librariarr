@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/inline-error";
 import { AlertTriangle, Info } from "lucide-react";
 import type { LibraryType } from "@/lib/conditions";
 import type { QueryDefinition } from "@/lib/query/types";
@@ -330,13 +331,10 @@ function ConvertDialogBody({
         </div>
 
         {initialTypes.length === 0 && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>
-              This query has no media types selected. Pick at least one media
-              type in the query first.
-            </p>
-          </div>
+          <InlineError multiline>
+            This query has no media types selected. Pick at least one media
+            type in the query first.
+          </InlineError>
         )}
 
         {initialTypes.length > 1 && (
@@ -417,14 +415,11 @@ function ConvertDialogBody({
         )}
 
         {targetType && wouldHaveNoRules && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>
-              No rules in this query apply to {TYPE_LABEL[targetType]}. Pick a
-              different target type, or update the query to include rules
-              compatible with {TYPE_LABEL[targetType]}.
-            </p>
-          </div>
+          <InlineError multiline>
+            No rules in this query apply to {TYPE_LABEL[targetType]}. Pick a
+            different target type, or update the query to include rules
+            compatible with {TYPE_LABEL[targetType]}.
+          </InlineError>
         )}
 
         {targetType && !wouldHaveNoRules && incompatible.length > 0 && (
@@ -491,10 +486,9 @@ function ConvertDialogBody({
         )}
 
         {submitError && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <pre className="whitespace-pre-wrap font-sans">{submitError}</pre>
-          </div>
+          <InlineError multiline>
+            <span className="whitespace-pre-wrap">{submitError}</span>
+          </InlineError>
         )}
       </div>
 

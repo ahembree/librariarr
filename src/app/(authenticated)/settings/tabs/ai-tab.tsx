@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle, Loader2, Save, Sparkles, XCircle } from "lucide-react";
+import { Save, Sparkles } from "lucide-react";
+import { LoadingButton } from "@/components/loading-button";
+import { ConnectionTestResult } from "@/components/connection-test-result";
 import { SettingsSection, SetRow } from "../components";
 import type { TestResult } from "../types";
 
@@ -64,7 +65,7 @@ export function AiTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">AI Analysis</h2>
+        <h2 className="text-xl font-bold font-display">AI Analysis</h2>
         <p className="text-sm text-muted-foreground">
           Connect an AI provider to ask questions about your library in plain language. Works with any
           OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, OpenRouter, Groq, vLLM…) or the native
@@ -144,28 +145,18 @@ export function AiTab({
         </div>
 
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          <Button onClick={onSaveAiSettings} disabled={aiSaving}>
-            {aiSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+          <LoadingButton onClick={onSaveAiSettings} loading={aiSaving} icon={Save}>
             Save
-          </Button>
-          <Button
+          </LoadingButton>
+          <LoadingButton
             variant="outline"
             onClick={onTestAiConnection}
-            disabled={aiTesting || !aiModel.trim()}
+            loading={aiTesting}
+            disabled={!aiModel.trim()}
           >
-            {aiTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Test connection
-          </Button>
-          {aiTestResult &&
-            (aiTestResult.ok ? (
-              <span className="flex items-center gap-1 text-sm text-green-500">
-                <CheckCircle className="h-4 w-4" /> Connected
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-sm text-destructive">
-                <XCircle className="h-4 w-4" /> {aiTestResult.error || "Failed"}
-              </span>
-            ))}
+            Test Connection
+          </LoadingButton>
+          {aiTestResult && <ConnectionTestResult result={aiTestResult} variant="badge" />}
         </div>
       </SettingsSection>
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -113,14 +113,14 @@ function ScheduleRow({
                 onChange={(e) => setting.setCustomCron(e.target.value)}
                 className="w-48 font-mono"
               />
-              <Button
+              <LoadingButton
                 size="sm"
                 onClick={() => void setting.save(customCron)}
-                disabled={!customCron || saving}
+                disabled={!customCron}
+                loading={saving}
               >
-                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save
-              </Button>
+              </LoadingButton>
             </div>
             {cronError && (
               <p className="mt-1 text-sm text-destructive">{cronError}</p>
@@ -138,20 +138,18 @@ function ScheduleRow({
           <>
             <div>Last run: {formatDateTime(lastRun, "Never")}</div>
             <div>Next run: {formatNextRun(nextRun, lastRun)}</div>
-            <Button
+            <LoadingButton
               variant="outline"
               size="sm"
               className="mt-1"
               onClick={() => onRunNow(jobKey)}
               disabled={!!runningJob}
+              loading={runningJob === jobKey}
+              icon={Play}
+              iconClassName="h-3 w-3 mr-1"
             >
-              {runningJob === jobKey ? (
-                <Loader2 className="h-3 w-3 animate-spin mr-1" />
-              ) : (
-                <Play className="h-3 w-3 mr-1" />
-              )}
               Run Now
-            </Button>
+            </LoadingButton>
           </>
         )}
       </div>
@@ -177,7 +175,7 @@ export function SchedulingTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">Scheduling</h2>
+        <h2 className="text-xl font-bold font-display">Scheduling</h2>
         <p className="text-sm text-muted-foreground">
           Configure when Librariarr runs library syncs and lifecycle rules.
         </p>

@@ -45,14 +45,6 @@ function StatCard({
         "relative flex h-full flex-col overflow-hidden rounded-[14px] border bg-card px-[18px] pt-[17px] pb-4 shadow-[var(--shadow-card)]",
         accent ? "border-brand-dim" : "border-border"
       )}
-      style={
-        accent
-          ? {
-              background:
-                "radial-gradient(120% 120% at 0% 0%, var(--brand-faint), transparent 60%), var(--card)",
-            }
-          : undefined
-      }
     >
       <div className="mb-3.5 flex items-center justify-between">
         <span

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
 import { SettingsSection } from "../components";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -183,7 +184,7 @@ export function GeneralTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">General</h2>
+        <h2 className="text-xl font-bold font-display">General</h2>
         <p className="text-sm text-muted-foreground">
           Theme, display options, retention, and backup settings.
         </p>
@@ -191,7 +192,7 @@ export function GeneralTab({
 
       {/* Appearance */}
       <section className="space-y-4">
-        <h3 className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">Appearance</h3>
+        <h3 className="eyebrow">Appearance</h3>
 
         <SettingsSection icon={Palette} title="Accent Color" description="Choose a color theme for buttons, active items, and highlights.">
             <div className="flex flex-wrap gap-3">
@@ -209,7 +210,7 @@ export function GeneralTab({
                   title={preset.label}
                 >
                   {accentColor === preset.name && (
-                    <CheckCircle className="absolute inset-0 m-auto h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />
+                    <CheckCircle className="absolute inset-0 m-auto h-4 w-4 text-white drop-shadow-[0_1px_2px_oklch(0_0_0/0.5)]" />
                   )}
                 </button>
               ))}
@@ -222,7 +223,7 @@ export function GeneralTab({
           description="Customize colors for resolution, dynamic range, and audio profile badges and charts."
           action={
             <Button variant="ghost" size="sm" className="text-xs" onClick={onResetChipColors}>
-              Reset to defaults
+              Reset to Defaults
             </Button>
           }
         >
@@ -386,17 +387,14 @@ export function GeneralTab({
                   className="w-20"
                 />
                 <span className="text-sm text-muted-foreground">days</span>
-                <Button
+                <LoadingButton
                   size="sm"
                   onClick={onSaveLogRetention}
-                  disabled={
-                    savingLogRetention ||
-                    logRetentionInput === String(logRetentionDays)
-                  }
+                  disabled={logRetentionInput === String(logRetentionDays)}
+                  loading={savingLogRetention}
                 >
-                  {savingLogRetention && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
-                </Button>
+                </LoadingButton>
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
                 Previous days&apos; logs are archived to compressed tarballs in the config folder. Archives older than this are pruned.
@@ -415,17 +413,14 @@ export function GeneralTab({
                   className="w-20"
                 />
                 <span className="text-sm text-muted-foreground">days</span>
-                <Button
+                <LoadingButton
                   size="sm"
                   onClick={onSaveActionRetention}
-                  disabled={
-                    savingActionRetention ||
-                    actionRetentionInput === String(actionRetentionDays)
-                  }
+                  disabled={actionRetentionInput === String(actionRetentionDays)}
+                  loading={savingActionRetention}
                 >
-                  {savingActionRetention && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
-                </Button>
+                </LoadingButton>
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
                 Completed and failed actions that ran more than this long ago are automatically deleted. Set to 0 to keep forever.
@@ -444,14 +439,14 @@ export function GeneralTab({
                   className="w-28"
                 />
                 <span className="text-sm text-muted-foreground">items per run</span>
-                <Button
+                <LoadingButton
                   size="sm"
                   onClick={onSaveDeleteCeiling}
-                  disabled={savingDeleteCeiling || deleteCeilingInput === savedDeleteCeiling}
+                  disabled={deleteCeilingInput === savedDeleteCeiling}
+                  loading={savingDeleteCeiling}
                 >
-                  {savingDeleteCeiling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
-                </Button>
+                </LoadingButton>
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
                 A run that would delete more than this is held instead: nothing is deleted, the
@@ -518,7 +513,7 @@ export function GeneralTab({
             <h4 className="text-sm font-medium mb-3">Encryption</h4>
             {hasBackupPassword && !showPasswordForm ? (
               <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1.5 text-sm text-green-500">
+                <div className="flex items-center gap-1.5 text-sm text-green">
                   <Lock className="h-3.5 w-3.5" />
                   Password is set — all backups are encrypted
                 </div>
@@ -546,18 +541,18 @@ export function GeneralTab({
                   onChange={(e) => setEncryptionPasswordInput(e.target.value)}
                   className="max-w-xs h-9 text-sm"
                 />
-                <Button
+                <LoadingButton
                   size="sm"
-                  disabled={savingBackupPassword || encryptionPasswordInput.length < 8}
+                  disabled={encryptionPasswordInput.length < 8}
                   onClick={() => {
                     onSaveBackupPassword(encryptionPasswordInput);
                     setEncryptionPasswordInput("");
                     setShowPasswordForm(false);
                   }}
+                  loading={savingBackupPassword}
                 >
-                  {savingBackupPassword ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Save
-                </Button>
+                </LoadingButton>
                 <Button variant="ghost" size="sm" onClick={() => { setShowPasswordForm(false); setEncryptionPasswordInput(""); }}>
                   Cancel
                 </Button>
@@ -571,14 +566,14 @@ export function GeneralTab({
           <div>
             <h4 className="text-sm font-medium mb-3">Create Backup</h4>
             <div className="flex items-center gap-3">
-              <Button
+              <LoadingButton
                 size="sm"
-                disabled={creatingBackup}
                 onClick={() => onCreateBackup(includeMediaData)}
+                loading={creatingBackup}
+                icon={DatabaseBackup}
               >
-                {creatingBackup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DatabaseBackup className="mr-2 h-4 w-4" />}
                 Create Backup
-              </Button>
+              </LoadingButton>
               <Label className="flex items-center gap-2 text-sm cursor-pointer font-normal">
                 <Checkbox
                   checked={includeMediaData}
@@ -591,7 +586,7 @@ export function GeneralTab({
               By default, backups only include settings and configuration. Media data, streams, and logs are retrieved during a full sync.
             </p>
             {!hasBackupPassword && (
-              <p className="mt-2 text-xs text-amber-500">
+              <p className="mt-2 text-xs text-amber">
                 No encryption password is set, so this backup will be written unencrypted. Backups contain your Plex token, integration API keys and SSO client secret in plaintext — set an encryption password above before creating or downloading one.
               </p>
             )}
@@ -622,29 +617,31 @@ export function GeneralTab({
                         </p>
                       </div>
                       <div className="flex gap-1 shrink-0 ml-2">
-                        <Button
+                        <LoadingButton
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
                           aria-label={`Download backup ${b.filename}`}
-                          disabled={downloadingBackups.includes(b.filename)}
                           onClick={() => onDownloadBackup(b.filename)}
+                          loading={downloadingBackups.includes(b.filename)}
+                          icon={Download}
+                          iconClassName="h-3.5 w-3.5"
                         >
-                          {downloadingBackups.includes(b.filename) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                        </Button>
-                        <Button
+                        </LoadingButton>
+                        <LoadingButton
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
                           aria-label={`Restore backup ${b.filename}`}
-                          disabled={restoringBackup === b.filename}
                           onClick={() => {
                             setConfirmRestore(b);
                             setRestorePassphraseInput("");
                           }}
+                          loading={restoringBackup === b.filename}
+                          icon={RotateCcw}
+                          iconClassName="h-3.5 w-3.5"
                         >
-                          {restoringBackup === b.filename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                        </Button>
+                        </LoadingButton>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -736,9 +733,9 @@ export function GeneralTab({
 }
 
 const REALTIME_STATUS_DISPLAY: Record<RealtimeServerStatus["status"], { label: string; dot: string }> = {
-  connected: { label: "Connected", dot: "bg-emerald-500" },
-  connecting: { label: "Connecting…", dot: "bg-amber-500" },
-  disconnected: { label: "Not connected", dot: "bg-red-500" },
+  connected: { label: "Connected", dot: "bg-green" },
+  connecting: { label: "Connecting…", dot: "bg-amber" },
+  disconnected: { label: "Not connected", dot: "bg-red" },
 };
 
 /**

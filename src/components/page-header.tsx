@@ -49,7 +49,9 @@ export function PageHeader({
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
             {Icon && <Icon className="h-7 w-7 shrink-0" aria-hidden="true" />}
-            {title}
+            {/* One flex item, so a title of text and elements ("Good morning,
+                <name>") flows and wraps as one sentence beside the icon. */}
+            <span className="min-w-0">{title}</span>
           </h1>
           {meta}
         </div>

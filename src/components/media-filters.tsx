@@ -36,7 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { X, SlidersHorizontal, ChevronRight, ChevronDown, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines, Languages, Search, MonitorPlay, Volume2, Layers, BookOpen, Tv, File, type LucideIcon } from "lucide-react";
+import { X, Check, SlidersHorizontal, ChevronRight, ChevronDown, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines, Languages, Search, MonitorPlay, Volume2, Layers, BookOpen, Tv, File, type LucideIcon } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 
 interface MediaFilterValues {
@@ -135,7 +135,7 @@ function CategoryTrigger({ name, isOpen, activeCount }: { name: string; isOpen: 
   return (
     <CollapsibleTrigger className="flex w-full items-center gap-2 px-2 py-1.5 hover:bg-accent/50 transition-colors">
       {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground" />}
-      <span className="flex-1 text-left text-xs font-semibold text-muted-foreground tracking-wide uppercase">
+      <span className="eyebrow flex-1 text-left">
         {name}
       </span>
       {!!activeCount && activeCount > 0 && (
@@ -318,7 +318,7 @@ function FilterCombobox({
                   className="w-full text-xs"
                   onClick={() => onSelect(option.key, [])}
                 >
-                  Clear all
+                  Clear All
                 </Button>
               </div>
             </>
@@ -439,7 +439,7 @@ function ComparisonPopover({
             <span className="flex items-center gap-2 min-w-0">
               {isActive ? (
                 <div className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-primary text-primary-foreground shrink-0">
-                  <span className="text-[9px] font-bold">&#10003;</span>
+                  <Check className="h-2.5 w-2.5" strokeWidth={3} aria-hidden="true" />
                 </div>
               ) : (
                 <span className="w-3.5 shrink-0" />
@@ -557,7 +557,7 @@ function ComparisonPopover({
           onClick={addCondition}
         >
           <Plus className="h-3.5 w-3.5" />
-          Add condition
+          Add Condition
         </Button>
 
         <Button
@@ -633,7 +633,7 @@ function DateFilterPopover({
             <span className="flex items-center gap-2 min-w-0">
               {isActive ? (
                 <div className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-primary text-primary-foreground shrink-0">
-                  <span className="text-[9px] font-bold">&#10003;</span>
+                  <Check className="h-2.5 w-2.5" strokeWidth={3} aria-hidden="true" />
                 </div>
               ) : (
                 <span className="w-3.5 shrink-0" />
@@ -852,7 +852,7 @@ function FileSizePopover({
           <span className="flex items-center gap-2 min-w-0">
             {isActive ? (
               <div className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-primary text-primary-foreground shrink-0">
-                <span className="text-[9px] font-bold">&#10003;</span>
+                <Check className="h-2.5 w-2.5" strokeWidth={3} aria-hidden="true" />
               </div>
             ) : (
               <span className="w-3.5 shrink-0" />
@@ -983,7 +983,7 @@ function InlineSliderPopover({
           <span className="flex items-center gap-2 min-w-0">
             {isActive ? (
               <div className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-primary text-primary-foreground shrink-0">
-                <span className="text-[9px] font-bold">&#10003;</span>
+                <Check className="h-2.5 w-2.5" strokeWidth={3} aria-hidden="true" />
               </div>
             ) : (
               <span className="w-3.5 shrink-0" />
@@ -1925,7 +1925,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                         setFiltersOpen(false);
                       }}
                     >
-                      Clear all filters
+                      Clear All Filters
                     </Button>
                   </div>
                 </>
@@ -2206,7 +2206,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
 
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground hover:text-foreground">
             <X className="mr-1 h-3.5 w-3.5" />
-            Clear all
+            Clear All
           </Button>
           </div>
         </>

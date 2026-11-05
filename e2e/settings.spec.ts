@@ -27,7 +27,7 @@ test.describe("settings", () => {
       );
 
     // Accent swatches are title-labelled buttons; the selected one shows a check.
-    // exact: true avoids matching e.g. the "Reset to defaults" button.
+    // exact: true avoids matching e.g. the "Reset to Defaults" button.
     const violet = page.getByRole("button", { name: "Violet", exact: true });
     const [saved] = await Promise.all([savedPut(), violet.click()]);
     expect(saved.ok()).toBe(true);

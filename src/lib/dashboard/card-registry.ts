@@ -117,12 +117,17 @@ export interface CustomCardConfig {
   timelineBin?: TimelineBin;
 }
 
+/**
+ * Heatmap colour ramps, each from the design tokens (globals.css) so a ramp
+ * follows the theme — and, for the ones built on chart-1, the accent preset.
+ * A cell's colour is a color-mix() between the two ends.
+ */
 export const HEATMAP_GRADIENTS = [
-  { id: "red-green", label: "Red \u2192 Green", low: "#ef4444", high: "#22c55e" },
-  { id: "cool-warm", label: "Blue \u2192 Red", low: "#3b82f6", high: "#ef4444" },
-  { id: "blue", label: "Blue", low: "#172554", high: "#3b82f6" },
-  { id: "purple-orange", label: "Purple \u2192 Orange", low: "#7c3aed", high: "#f97316" },
-  { id: "teal-yellow", label: "Teal \u2192 Yellow", low: "#0d9488", high: "#eab308" },
+  { id: "red-green", label: "Red \u2192 Green", low: "var(--red)", high: "var(--green)" },
+  { id: "cool-warm", label: "Blue \u2192 Red", low: "var(--chart-1)", high: "var(--red)" },
+  { id: "blue", label: "Blue", low: "color-mix(in oklab, var(--chart-1) 20%, var(--background))", high: "var(--chart-1)" },
+  { id: "purple-orange", label: "Purple \u2192 Orange", low: "var(--chart-4)", high: "var(--chart-10)" },
+  { id: "teal-yellow", label: "Teal \u2192 Yellow", low: "var(--chart-11)", high: "var(--chart-3)" },
 ] as const;
 
 const VALID_HEATMAP_GRADIENT_IDS = new Set<string>(HEATMAP_GRADIENTS.map((g) => g.id));

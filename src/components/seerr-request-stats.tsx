@@ -107,9 +107,9 @@ function fmtPct(p: number | null): string {
 
 function pctTone(p: number | null): string {
   if (p == null) return "text-muted-foreground";
-  if (p >= 75) return "text-emerald-300";
+  if (p >= 75) return "text-green";
   if (p >= 40) return "text-foreground";
-  if (p > 0) return "text-amber-300";
+  if (p > 0) return "text-amber";
   return "text-muted-foreground";
 }
 
@@ -120,7 +120,7 @@ function ProgressBar({ value, className }: { value: number | null; className?: s
       <div
         className={cn(
           "h-full rounded-full transition-[width] duration-300",
-          v >= 75 ? "bg-emerald-500/70" : v >= 40 ? "bg-primary/70" : v > 0 ? "bg-amber-500/70" : "bg-muted-foreground/30"
+          v >= 75 ? "bg-green/70" : v >= 40 ? "bg-primary/70" : v > 0 ? "bg-amber/70" : "bg-muted-foreground/30"
         )}
         style={{ width: `${Math.max(0, Math.min(100, v))}%` }}
       />

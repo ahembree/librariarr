@@ -557,7 +557,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                         <div
                           className={`mr-2 flex h-4 w-4 items-center justify-center rounded-sm border ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/50"}`}
                         >
-                          {isSelected && <span className="text-xs">✓</span>}
+                          {isSelected && <Check className="h-3 w-3" aria-hidden="true" />}
                         </div>
                         {v}
                       </CommandItem>
@@ -576,7 +576,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                     onUpdate(groupId, rule.id, { value: "" } as Partial<R>)
                   }
                 >
-                  Clear all
+                  Clear All
                 </Button>
               </div>
             )}
@@ -761,11 +761,13 @@ const SortableRuleRow = memo(SortableRuleRowImpl) as typeof SortableRuleRowImpl;
 
 // ─── Shared constants ────────────────────────────────────────────────────────
 
+// The nesting depth's colour, on the group card's whole border (accent → sky →
+// green → amber, cycling) — never a coloured left bar.
 const BORDER_COLORS = [
-  "border-brand/25",
-  "border-sky/25",
-  "border-green/25",
-  "border-amber/25",
+  "border-brand/40",
+  "border-sky/40",
+  "border-green/40",
+  "border-amber/40",
 ];
 const ACTIVE_BORDER_COLORS = [
   "border-2 border-brand/70",
@@ -778,14 +780,6 @@ const BG_COLORS = [
   "bg-sky/5",
   "bg-green/5",
   "bg-amber/5",
-];
-// Colored left spine per nesting depth — the handoff's group-card spine
-// (accent → sky → green → amber, cycling).
-const SPINE_COLORS = [
-  "border-l-[3px] border-l-brand",
-  "border-l-[3px] border-l-sky",
-  "border-l-[3px] border-l-green",
-  "border-l-[3px] border-l-amber",
 ];
 
 // ─── GroupCard ───────────────────────────────────────────────────────────────
@@ -975,7 +969,7 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
   return (
     <Card
       ref={setDropRef}
-      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${SPINE_COLORS[depth % SPINE_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : group.negate ? "border-red/35" : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
+      className={`p-3 sm:p-4 space-y-2 overflow-hidden ${BG_COLORS[depth % BG_COLORS.length]} ${isOver ? ACTIVE_BORDER_COLORS[depth % ACTIVE_BORDER_COLORS.length] : group.negate ? "border-red/35" : BORDER_COLORS[depth % BORDER_COLORS.length]} ${group.enabled === false ? "opacity-50" : ""} ${isStreamQuery ? "border-primary/30" : ""}`}
     >
       {/* Stream query name - positioned at top-left, separate from the query logic */}
       {isStreamQuery && (
