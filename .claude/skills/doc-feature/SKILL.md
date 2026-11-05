@@ -67,6 +67,10 @@ The `slug` must match the file path relative to `docs/src/content/docs/` without
 
 MDX reads `<` followed by a letter as a JSX tag, so a bare placeholder such as `"Discovery OK: <issuer>"` or `<name>` fails the whole site's build (`Expected a closing tag for <issuer>`). Put literal angle brackets in a code span (`` `Discovery OK: <issuer>` ``) or escape them (`&lt;issuer&gt;`); `{` and `}` outside code are JSX expressions too. Lowercase HTML tags (`<details>`, `<summary>`, `<br />`) and imported Starlight components (`<Aside>`, `<Tabs>`) are real elements and must be closed.
 
+### Always build the docs
+
+Whenever a change touches `docs/` — or a source the build reads (`scripts/generate-openapi.ts`, `scripts/validate-rule-set-library.ts`, `scripts/rule-set-library-check.ts`, `src/lib/api-keys/{openapi,scopes,limits}.ts`, `src/lib/conditions/{fields,operators,types}.ts`, `src/lib/lifecycle/action-types.ts`, `package.json`) — run `pnpm docs:build` and see it pass before committing. `.claude/hooks/docs-build-before-commit.sh` (wired in `.claude/settings.json`) does this on every `git commit` Claude runs whose changes touch those paths, and blocks the commit with the build's error when it fails; keep its path list in step with what the build reads.
+
 ## Existing Sidebar Sections
 
 Read `docs/astro.config.mjs` for the current sidebar; add every new page there.
