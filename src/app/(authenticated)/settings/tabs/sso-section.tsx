@@ -316,7 +316,8 @@ export function SsoSection({
     }
   };
 
-  const handleUnlink = async () => {
+  // Resolves false on failure, which keeps the confirmation open beside the error.
+  const handleUnlink = async (): Promise<boolean> => {
     setLinkError(null);
     setLinkNotice(null);
     setLinking(true);
@@ -327,7 +328,7 @@ export function SsoSection({
       if (!res.ok) {
         setLinkError(data.error || "Failed to unlink");
         toast.error("Couldn't unlink SSO identity", { description: data.error });
-        return;
+        return false;
       }
       setLink({
         ssoSubject: data.ssoSubject ?? null,
@@ -342,8 +343,11 @@ export function SsoSection({
           "SSO login has been turned off automatically since no identity is linked. Link an identity above and toggle Enable SSO Login below to use SSO again."
         );
       }
+      return true;
     } catch {
       setLinkError("Network error");
+      toast.error("Couldn't unlink SSO identity", { description: "Network error" });
+      return false;
     } finally {
       setLinking(false);
     }
@@ -529,7 +533,7 @@ export function SsoSection({
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <LoadingButton
                 type="button"
                 variant="outline"
@@ -540,7 +544,14 @@ export function SsoSection({
               >
                 Test Discovery
               </LoadingButton>
-              {testResult && <ConnectionTestResult result={testResult} variant="badge" />}
+              {testResult && (
+                <ConnectionTestResult
+                  result={testResult}
+                  variant="badge"
+                  // Discovery only fetched the IdP's metadata; nothing signed in.
+                  label={testResult.ok ? `Discovery OK: ${testResult.appName ?? "issuer found"}` : undefined}
+                />
+              )}
             </div>
             <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
               Register a confidential client at your IdP and set the redirect
@@ -831,9 +842,7 @@ export function SsoSection({
         confirmIcon={ShieldOff}
         destructive
         pending={linking}
-        onConfirm={() => {
-          void handleUnlink();
-        }}
+        onConfirm={handleUnlink}
       />
 
       {/* Revert-config confirmation. Restores the snapshot from before the

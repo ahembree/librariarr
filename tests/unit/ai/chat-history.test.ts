@@ -62,6 +62,34 @@ describe("chatHistoryForRequest", () => {
     ]);
   });
 
+  // A failed answer is shown as an error on the page; sent on, its text read to
+  // the model as its own reply.
+  it("leaves out a failed answer and the question it answered", () => {
+    expect(
+      chatHistoryForRequest([
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "a1" },
+        { role: "user", content: "q2" },
+        { role: "assistant", content: "Request timed out", error: true },
+        { role: "user", content: "q3" },
+      ]),
+    ).toEqual([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "q3" },
+    ]);
+  });
+
+  it("sends nothing but the new question after only failures", () => {
+    expect(
+      chatHistoryForRequest([
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "Something went wrong.", error: true },
+        { role: "user", content: "q2" },
+      ]),
+    ).toEqual([{ role: "user", content: "q2" }]);
+  });
+
   it("passes a short conversation through unchanged", () => {
     expect(chatHistoryForRequest(conversation(3))).toEqual(conversation(3));
   });

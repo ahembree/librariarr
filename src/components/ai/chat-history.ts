@@ -18,15 +18,35 @@ export const MAX_CHAT_CONTENT = 8000;
 interface ChatTurn {
   role: "user" | "assistant";
   content: string;
+  /** A failed answer: the page shows its text as an error, never as a reply. */
+  error?: boolean;
+}
+
+/**
+ * The turns without the failed exchanges: an error turn and the question it
+ * answered. Sent on, the error text ("Request timed out") reached the model as
+ * its own previous answer, and the question as one it had left unanswered.
+ */
+function withoutFailedExchanges(history: readonly ChatTurn[]): ChatTurn[] {
+  const kept: ChatTurn[] = [];
+  for (const turn of history) {
+    if (turn.error) {
+      if (kept.at(-1)?.role === "user") kept.pop();
+      continue;
+    }
+    kept.push(turn);
+  }
+  return kept;
 }
 
 /**
  * The most recent turns that fit the route's limits, starting on a user turn
  * (the native Anthropic API refuses a conversation that opens with the
- * assistant), each cut to the content limit and none empty.
+ * assistant), each cut to the content limit and none empty. Failed exchanges
+ * are left out (`withoutFailedExchanges`).
  */
 export function chatHistoryForRequest(history: readonly ChatTurn[]): ChatTurn[] {
-  const recent = history.slice(-MAX_CHAT_MESSAGES);
+  const recent = withoutFailedExchanges(history).slice(-MAX_CHAT_MESSAGES);
   const firstUser = recent.findIndex((turn) => turn.role === "user");
   if (firstUser === -1) return [];
   return recent

@@ -27,7 +27,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   evidence?: AiEvidence[];
-  /** A failed answer: shown as an error, sent back as plain text. */
+  /** A failed answer: shown as an error, and left out of the history sent with the next question. */
   error?: boolean;
 }
 

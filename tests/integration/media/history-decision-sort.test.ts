@@ -68,6 +68,11 @@ describe("GET /api/media/history — the Decision column sorts by the chip's ver
       { isTranscode: false, videoDecision: "copy", audioDecision: "copy" },
       { isTranscode: false, videoDecision: "directplay", audioDecision: "directplay" },
       { isTranscode: false, videoDecision: null, audioDecision: null },
+      // No flag, only a decision: the decision decides, as it does for the chip.
+      { isTranscode: null, videoDecision: "transcode", audioDecision: null },
+      { isTranscode: null, videoDecision: null, audioDecision: "copy" },
+      // Empty decisions are absent ones: nothing known, no chip.
+      { isTranscode: null, videoDecision: "", audioDecision: "" },
       // A native row: nothing known, no chip.
       {},
     ];
@@ -104,10 +109,10 @@ describe("GET /api/media/history — the Decision column sorts by the chip's ver
   }
 
   it("puts every transcode first, then remuxes, then direct plays, unknown last", async () => {
-    expect(await ranks("desc")).toEqual([2, 2, 1, 0, 0, null]);
+    expect(await ranks("desc")).toEqual([2, 2, 2, 1, 1, 0, 0, null, null]);
   });
 
   it("reverses the known decisions ascending, unknown still last", async () => {
-    expect(await ranks("asc")).toEqual([0, 0, 1, 2, 2, null]);
+    expect(await ranks("asc")).toEqual([0, 0, 1, 1, 2, 2, 2, null, null]);
   });
 });

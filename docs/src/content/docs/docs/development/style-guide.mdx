@@ -438,9 +438,9 @@ An "Are you sure?" prompt is a `ConfirmDialog` (`src/components/confirm-dialog.t
 ### Forms: Buttons, Errors and Connection Tests
 
 - **Button labels are Title Case** ("New Rule Set", "Reset to Defaults", "Test Connection", "Clear All"); descriptions, toasts and dialog bodies are sentence case.
-- **A button that starts an action is a `LoadingButton`** (`src/components/loading-button.tsx`): its `icon` turns into a spinner of the same size while `loading`, and the button is disabled meanwhile, so the label never moves. Don't write `{busy ? <Loader2 … /> : <Icon … />}` by hand.
+- **A button that starts an action is a `LoadingButton`** (`src/components/loading-button.tsx`): its `icon` turns into a spinner of the same size while `loading`, and the button is disabled meanwhile, so the label never moves. Don't write `{busy ? <Loader2 … /> : <Icon … />}` by hand. Size an icon smaller than 16px with a `size-*` class (`iconClassName="size-3.5"`): `Button` makes every icon without one `size-4`, which overrides `h-3.5 w-3.5`.
 - **A failure message inside a form or a card is an `InlineError`** (`src/components/inline-error.tsx`): the red box with an alert icon. Use `multiline` when the message can wrap, so the icon stays on the first line. A failure that is not tied to a form is a toast.
-- **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2").
+- **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2"). A test that is not a connection passes its own `label` (the OIDC discovery check reads "Discovery OK: <issuer>"). The badge wraps a long answer instead of running past the card.
 
 ### Toasts
 

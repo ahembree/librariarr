@@ -369,14 +369,14 @@ function MatchItemsTableView({
                   <td className="px-2 py-2 text-center" style={{ width: columnWidths.action }}>
                     <LoadingButton
                       variant="ghost"
-                      className="h-7 gap-1.5 border border-excluded/40 px-2 text-xs text-excluded hover:border-excluded/60 hover:bg-excluded/10 hover:text-excluded dark:hover:bg-excluded/10"
+                      className="h-7 gap-1.5 border border-excluded/40 px-2 text-xs text-excluded hover:border-excluded/60 hover:bg-excluded/10 hover:text-excluded has-[>svg]:px-2 dark:hover:bg-excluded/10"
                       onClick={(e) => {
                         e.stopPropagation();
                         onExclude(item);
                       }}
                       loading={excludingItems.has(item.id)}
                       icon={ShieldOff}
-                      iconClassName="h-3.5 w-3.5"
+                      iconClassName="size-3.5"
                     >
                       Exclude
                     </LoadingButton>
@@ -449,7 +449,7 @@ const MatchCard = memo(function MatchCard({
             }}
             loading={excluding}
             icon={ShieldOff}
-            iconClassName="h-3.5 w-3.5"
+            iconClassName="size-3.5"
           />
         </TooltipTrigger>
         <TooltipContent>Exclude from lifecycle actions</TooltipContent>
