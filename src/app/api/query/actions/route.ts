@@ -15,7 +15,7 @@ import {
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { ARR_FAMILY_FOR_TYPE, ARR_TYPE_FOR_FAMILY, familyOfArrInstance, findArrInstance } from "@/lib/arr/instances";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules, hasEpisodeLevelRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
@@ -358,9 +358,14 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // Whole-record series actions (DELETE_SONARR, CHANGE_QUALITY_PROFILE_SONARR,
     // …) hit the ENTIRE series and ignore the member list; member-scoped
     // actions (DELETE_FILES_SONARR, …) act only on the named episodes, as do
-    // Unmonitor and Search in episode view (`episodeScope`).
+    // Unmonitor and Search in episode view (`episodeScope`) — and in the
+    // grouped view of a query with a season/episode criterion, whose show row
+    // stands for the episodes it matched (the rule set it converts to has
+    // series scope off): "Unmonitor seasons 1–3" must not unmonitor the show.
     const episodeScope =
-      resolvedType === "SERIES" && !!query.includeEpisodes && actionCanScopeToEpisodes(actionType);
+      resolvedType === "SERIES" &&
+      (!!query.includeEpisodes || hasEpisodeLevelRules(queryGroups)) &&
+      actionCanScopeToEpisodes(actionType);
     const isMemberScoped = actsOnMembers(actionType, episodeScope);
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 

@@ -2158,6 +2158,12 @@ export async function evaluateSeriesScope(
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
           });
         series.memberIds = matchedEpisodes.map((ep) => ep.id);
+        // The match stands for its member episodes from here on, as the
+        // Pending page and the diff total it (`aggregateGroupMembers`): its size
+        // is theirs, not the whole show's. (The aggregate gate above already
+        // read the show's total.)
+        const memberSize = matchedEpisodes.reduce((sum, ep) => sum + (ep.fileSize ?? BigInt(0)), BigInt(0));
+        series.fileSize = memberSize > BigInt(0) ? memberSize.toString() : null;
         // What the matched episodes' seasons and numbers are, for the criteria
         // and values the match reports (episode-fields.ts).
         if (episodeLevel) {
@@ -2176,7 +2182,8 @@ export async function evaluateSeriesScope(
   return matching.map((item) => ({
     ...item,
     fileSize: item.fileSize ?? null,
-    matchedEpisodes: item.episodeCount,
+    // Restricted to its matching episodes, a match reports how many it acts on.
+    matchedEpisodes: restrictMembers ? item.memberIds.length : item.episodeCount,
     memberIds: item.memberIds,
     // Expose computed fields so getMatchedCriteriaForItems can evaluate
     // series-scope rules (these only exist on the enriched evaluation object,

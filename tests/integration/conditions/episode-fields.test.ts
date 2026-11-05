@@ -14,11 +14,16 @@
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
+  callRouteWithParams,
+  expectJson,
   createTestUser,
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
+  createTestRuleSet,
+  createTestRuleMatch,
 } from "../../setup/test-helpers";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { QueryDefinition, QueryGroup } from "@/lib/query/types";
@@ -46,6 +51,7 @@ import {
   getActualValuesForAllRules,
 } from "@/lib/rules/lifecycle-engine";
 import { executeQuery } from "@/lib/query/query-engine";
+import { POST as diffRoute } from "@/app/api/lifecycle/rules/[id]/diff/route";
 
 type Rule = { field: string; operator: string; value: string | number; negate?: boolean };
 
@@ -143,6 +149,27 @@ describe("per-episode criteria", () => {
       expect(await loadLatestSeasons([])).toEqual(new Map());
     });
 
+    it("does not count a virtual (missing, fileless) episode as the newest season", async () => {
+      const s = await seed();
+      // Jellyfin/Emby list an announced season's episodes as virtual items:
+      // no media source, so no file path and no size.
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const virtual = await createTestMediaItem(s.libraryId, {
+        type: "SERIES", title: "Long S5E1", parentTitle: "Long Show", seasonNumber: 5, episodeNumber: 1,
+      });
+      await getTestPrisma().mediaItem.update({ where: { id: virtual.id }, data: { fileSize: null, filePath: null } });
+
+      const latest = await loadLatestSeasons([s.libraryId]);
+      expect(latest.get(latestSeasonKey(s.libraryId, "title:long show"))).toBe(4);
+
+      const raw = await evaluateLifecycleRules(
+        groups({ field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: "2" }),
+        "SERIES", [s.serverId],
+      );
+      // Seasons 1–2, as without the virtual season — never season 3.
+      expect(ids(raw)).toEqual([s.ep["Long-S1E1"], s.ep["Long-S1E2"], s.ep["Long-S2E1"], s.ep["Long-S2E2"]].sort());
+    });
+
     it("measures each episode against its own show, and gives specials and non-episodes no value", async () => {
       const s = await seed();
       const { getTestPrisma } = await import("../../setup/test-db");
@@ -233,6 +260,10 @@ describe("per-episode criteria", () => {
           [s.ep["Long-S1E1"], s.ep["Long-S1E2"], s.ep["Long-S2E1"], s.ep["Long-S2E2"]].sort(),
         );
         expect(m.episodeFieldValues).toMatchObject({ seasonNumber: [1, 2] });
+        // Reported as the episodes it acts on, not the whole show.
+        const shown = matched[0] as unknown as { matchedEpisodes: number; fileSize: string | null };
+        expect(shown.matchedEpisodes).toBe(4);
+        expect(shown.fileSize).toBe((BigInt(1073741824) * BigInt(4)).toString());
       }
     });
 
@@ -250,6 +281,30 @@ describe("per-episode criteria", () => {
       const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;
       expect(members).toHaveLength(7);
       expect(members).not.toContain(s.ep["Long-S1E1"]);
+    });
+  });
+
+  describe("rule diff", () => {
+    it("reports a removed episode's Seasons Behind Latest under the edited rules", async () => {
+      const s = await seed();
+      clearMockSession();
+      setMockSession({ isLoggedIn: true, userId: s.userId });
+      const ruleSet = await createTestRuleSet(s.userId, { type: "SERIES", seriesScope: false, serverIds: [s.serverId] });
+      // Held: season 2 (2 behind). The edit asks for 3 behind, so it is removed.
+      await createTestRuleMatch(ruleSet.id, s.ep["Long-S2E1"], { title: "Long Show", parentTitle: null });
+      const response = await callRouteWithParams(diffRoute, { id: ruleSet.id }, {
+        method: "POST",
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        body: {
+          type: "SERIES",
+          seriesScope: false,
+          serverIds: [s.serverId],
+          rules: groups({ field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: "3" }),
+        },
+      });
+      const body = await expectJson<{ removed: Array<{ id: string }>; removedItems: Array<{ id: string; actualValues: Record<string, string> }> }>(response, 200);
+      expect(body.removed.map((r) => r.id)).toEqual([s.ep["Long-S2E1"]]);
+      expect(body.removedItems[0].actualValues.r0).toBe("2");
     });
   });
 

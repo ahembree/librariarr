@@ -5,7 +5,8 @@
  * `seasonNumber` and `episodeNumber` are `MediaItem` columns and compile to
  * Phase 1 WHERE like any numeric column. `seasonsBehindLatest` has no column:
  * it is how many season numbers an episode's season lies behind the newest
- * numbered season of its show in the same library — 0 for the newest season,
+ * numbered season of its show with a file in the same library (virtual
+ * "missing" episodes do not count — see `loadLatestSeasons`) — 0 for the newest season,
  * 1 for the one before, and so on. Specials (season 0) and episodes without a
  * season number have no value (NULL). The show is the episode's `seriesKey`
  * within its library, the per-library identity both rule engines group on, so
@@ -41,6 +42,13 @@ export function latestSeasonKey(libraryId: string, seriesKey: string): string {
 /**
  * The newest numbered season (season > 0) of every show in the given
  * libraries, keyed by `latestSeasonKey`. One row per show.
+ *
+ * Only episodes with a file count. Jellyfin and Emby list "missing" episodes
+ * as virtual items (no media source, so no file path or size) when missing
+ * episodes are shown or a metadata plugin creates them; an announced season
+ * that is not on disk would otherwise become the "newest", and every season
+ * actually held would read one further behind — deleting the newest seasons a
+ * "keep the latest N" rule exists to keep.
  */
 export async function loadLatestSeasons(libraryIds: string[]): Promise<Map<string, number>> {
   const latest = new Map<string, number>();
@@ -53,6 +61,7 @@ export async function loadLatestSeasons(libraryIds: string[]): Promise<Map<strin
       AND "libraryId" = ANY(${ids}::text[])
       AND "seriesKey" IS NOT NULL
       AND "seasonNumber" > 0
+      AND ("filePath" IS NOT NULL OR "fileSize" IS NOT NULL)
     GROUP BY "libraryId", "seriesKey"
   `;
   for (const row of rows) latest.set(latestSeasonKey(row.libraryId, row.seriesKey), row.latest);
