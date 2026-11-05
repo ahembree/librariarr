@@ -3,7 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { validateRequest, ruleSetCreateSchema } from "@/lib/validation";
-import { findFieldsInvalidForType } from "@/lib/conditions";
+import { findFieldsInvalidForType, findEpisodeLevelFields, SERIES_SCOPE_EPISODE_CRITERIA_REASON } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 
@@ -66,6 +66,13 @@ export const POST = withSession(async (session, request: NextRequest) => {
       },
       { status: 400 }
     );
+  }
+
+  // Season/episode criteria are judged per episode; a show matched as a whole
+  // (series scope, the default) has neither. Detection refuses such a rule set
+  // too (checkLifecycleRuleEvaluability) — refuse to store it.
+  if (type === "SERIES" && (seriesScope ?? true) && findEpisodeLevelFields(rules).length > 0) {
+    return NextResponse.json({ error: SERIES_SCOPE_EPISODE_CRITERIA_REASON }, { status: 400 });
   }
 
   // Refuse to persist an enabled CHANGE_QUALITY_PROFILE_* action without a

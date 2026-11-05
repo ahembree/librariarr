@@ -77,3 +77,21 @@ export function findFieldsInvalidForTypes(
   }
   return [...invalid];
 }
+
+/**
+ * Why a SERIES rule set in series scope cannot use the per-episode fields
+ * (Season Number, Episode Number, Seasons Behind Latest): it matches whole
+ * shows, which have no season or episode number. Shared by the rule set
+ * routes, `checkLifecycleRuleEvaluability` and the rule builder.
+ */
+export const SERIES_SCOPE_EPISODE_CRITERIA_REASON =
+  "Season and episode criteria are judged per episode — turn off series scope to use them";
+
+/** Distinct per-episode (`episodeLevel`) field values in a flat-or-grouped tree. */
+export function findEpisodeLevelFields(rules: unknown[]): string[] {
+  const found = new Set<string>();
+  for (const field of collectRuleFields(rules)) {
+    if (getConditionField(field)?.episodeLevel) found.add(field);
+  }
+  return [...found];
+}

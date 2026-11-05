@@ -28,6 +28,7 @@ import {
   isExternalField,
   isCrossSystemField,
   isSeriesAggregateField,
+  SEASONS_BEHIND_LATEST_FIELD,
 } from "./helpers";
 import { isStreamQueryField } from "./stream-query";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
@@ -378,6 +379,45 @@ const numericHandler: FieldHandler = (operator, value, field, negate) => {
       return {};
   }
   return applyNegate(clause, negate);
+};
+
+/**
+ * Season Number / Episode Number. A music track keeps its disc and track
+ * numbers in the same columns, so the field reads NULL on anything but a
+ * SERIES row — in Phase 1 here, in Phase 2 through `episodeLevelValue`. Every
+ * clause is the numeric handler's over that value: a positive comparison
+ * requires an episode, and "no value" also covers every non-episode row.
+ */
+const episodeNumberHandler: FieldHandler = (operator, value, field, negate) => {
+  const numValue = Number(value);
+  const isEpisode: Prisma.MediaItemWhereInput = { type: "SERIES" };
+  const noValue: Prisma.MediaItemWhereInput = { OR: [{ [field]: null }, { type: { not: "SERIES" } }] };
+  let comparison: Prisma.MediaItemWhereInput;
+  switch (operator) {
+    case "equals": comparison = { [field]: numValue }; break;
+    case "greaterThan": comparison = { [field]: { gt: numValue } }; break;
+    case "greaterThanOrEqual": comparison = { [field]: { gte: numValue } }; break;
+    case "lessThan": comparison = { [field]: { lt: numValue } }; break;
+    case "lessThanOrEqual": comparison = { [field]: { lte: numValue } }; break;
+    case "between": {
+      const [minStr, maxStr] = String(value).split(",");
+      comparison = { [field]: { gte: Number(minStr), lte: Number(maxStr) } };
+      break;
+    }
+    // Negative-shaped: a row without a value matches (withNullSafety's rule).
+    case "notEquals":
+      return applyNegate({ OR: [{ [field]: null }, { type: { not: "SERIES" } }, { [field]: { not: numValue } }] }, negate);
+    case "isNull":
+      return applyNegate(noValue, negate);
+    case "isNotNull":
+      return applyNegate({ AND: [isEpisode, { [field]: { not: null } }] }, negate);
+    default:
+      return {};
+  }
+  // Positive: NULL-safe on negate, as applyNegateNullable — NOT(episode AND
+  // comparison) is already true on a non-episode row, and the `field IS NULL`
+  // arm covers an episode without a number.
+  return applyNegateNullable(field, { AND: [isEpisode, comparison] }, negate);
 };
 
 const resolutionHandler: FieldHandler = () => {
@@ -742,6 +782,8 @@ export const FIELD_HANDLERS: Record<string, FieldHandler> = (() => {
     subtitleLanguage: streamRelationHandler,
     streamAudioCodec: streamRelationHandler,
     watchedByUser: watchedByUserHandler,
+    seasonNumber: episodeNumberHandler,
+    episodeNumber: episodeNumberHandler,
   };
   for (const f of DATE_HANDLER_FIELDS) handlers[f] = dateHandler;
   for (const f of NUMERIC_HANDLER_FIELDS) handlers[f] = numericHandler;
@@ -759,7 +801,8 @@ export const STREAM_COUNT_FIELDS = new Set(["audioStreamCount", "subtitleStreamC
  * `isCrossSystemField`/`isCrossSystemQueryField`) resolve to the same sets.
  *
  * Fields handled only in Phase 2 return `{}` (no constraint): external
- * Arr/Seerr, cross-system, series-aggregate and stream-count here, plus
+ * Arr/Seerr, cross-system, series-aggregate, `seasonsBehindLatest`
+ * (`hasSeasonsBehindLatestRules`) and stream-count here, plus
  * `resolution` and the JSON-array fields (`genre`/`labels`/`country`) via their
  * handlers — SQL cannot express those two families' normalization. Every one of
  * them has a detector (`hasArrRules`, `hasResolutionRules`,
@@ -776,6 +819,9 @@ export function ruleToWhere(rule: Condition): Prisma.MediaItemWhereInput {
 
   if (isExternalField(field)) return {};
   if (isSeriesAggregateField(field)) return {};
+  // Computed from the show's newest season (episode-fields.ts); forced into
+  // Phase 2 by hasSeasonsBehindLatestRules.
+  if (field === SEASONS_BEHIND_LATEST_FIELD) return {};
   if (isCrossSystemField(field)) return {};
   // Stream-query fields only make sense inside a stream-query group (handled by
   // buildStreamQueryClause). One reaching this dispatcher is a misplaced rule.

@@ -4,7 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, hasEpisodeLevelRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
@@ -141,7 +141,7 @@ export const POST = withSession(async (
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
   const arrInstanceId = data.arrInstanceId !== undefined ? data.arrInstanceId : ruleSet.arrInstanceId;
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -161,7 +161,9 @@ export const POST = withSession(async (
     items = await evaluateMusicScope(typedRules, serverIds, arrData, crossSystemOptions);
   } else {
     const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData, crossSystemOptions);
-    items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
+    items = type === "SERIES"
+      ? groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(typedRules) })
+      : rawItems;
   }
 
   // Filter out excluded items — an exception on another server's copy of an

@@ -82,6 +82,20 @@ describe("convertQueryToRuleSetBody", () => {
     expect(seriesDefault.seriesScope).toBe(true);
   });
 
+  it("turns series scope off for a query using a season or episode criterion", () => {
+    const groups: QueryDefinition["groups"] = [{
+      id: "g1",
+      condition: "AND",
+      rules: [{ id: "r1", field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: 2, condition: "AND" }],
+      groups: [],
+    }];
+    const grouped = convertQueryToRuleSetBody(
+      makeQuery({ mediaTypes: ["SERIES"], includeEpisodes: false, groups }),
+      { name: "Old seasons", targetLibraryType: "SERIES", serverIds: ["srv1"] },
+    );
+    expect(grouped.seriesScope).toBe(false);
+  });
+
   it("removes incompatible rules from the cleaned rules tree", () => {
     const query = makeQuery({
       mediaTypes: ["MOVIE", "SERIES"],

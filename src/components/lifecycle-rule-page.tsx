@@ -1470,10 +1470,11 @@ export function LifecycleRulePage({
           seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
           seerrUnreachable={seerrUnreachable}
           libraryType={mediaType}
+          seriesScope={mediaType === "SERIES" ? seriesScope : undefined}
         />
       </BuilderWithPseudocode>
     ),
-    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable],
+    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable, seriesScope],
   );
 
   return (

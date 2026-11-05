@@ -29,6 +29,7 @@ What the scope changes in the builder:
 
 - **Fields that can't apply to any selected media type are disabled**, with a tooltip saying why (for example a Sonarr-only field when only Movies is selected). A field is allowed as long as it applies to at least one selected type.
 - **Series criteria** (episode counts, watched %, Series Last Played, …) need Series in scope and are hidden in episode mode ("Series criteria are not available in episode mode"), because they describe a whole show, not one episode.
+- **Episode criteria** (**Season Number**, **Episode Number**, **Seasons Behind Latest**) need Series in scope and work in both views: episodes are matched on them, then grouped by show unless episode mode is on. *Seasons Behind Latest ≥ 2*, for example, finds every episode outside each show's two newest seasons. They read as empty on movies and tracks. See [Season and episode criteria](/docs/features/lifecycle-rules/#season-and-episode-criteria).
 - ***arr criteria** appear once an **Arr server** is picked in the scope.
 - **Seerr criteria** need an enabled Seerr instance. Every enabled instance is read and their requests merged, as for lifecycle rules.
 
@@ -70,6 +71,7 @@ Turning a column on loads its values for the rows already on screen — the quer
 - **Arr columns** read the *arr instance selected in the query scope. With none selected they stay empty and a note above the table says why. Radarr's **Custom Format Score** is the slowest *arr value to read (one request per 100 movies), so it is fetched only when that column is shown or a criterion uses it.
 - **Seerr columns** read every enabled Seerr instance. If none can be reached, the columns stay empty and the note gives the reason.
 - **Series columns** (episode counts, watched %, last played) apply to a grouped show row. A show row has no single value for per-episode detail such as bitrate or the number of audio tracks, so those cells show "-".
+- **Episode columns** (**Season Number**, **Episode Number**, **Seasons Behind Latest**) apply to episode rows (episode mode); a grouped show row, a movie and a track show "-".
 
 A source that can't answer leaves its cells empty and explains why in the note — it never guesses a value. Columns sort like the fixed ones: numbers and dates in order, empty cells last.
 
@@ -110,7 +112,7 @@ What the conversion does:
 - Drops any rules that don't apply to the chosen library type and lists them before submitting. For example, when targeting **Movies**, any series-aggregate or music-only rules are removed. If none would remain it says so and won't create the rule set.
 - Uses the query's servers. A query that searches all servers asks you to confirm **Apply the rule set to all my servers**, since a rule set needs its servers listed; that is every enabled server (disabled ones are not added).
 - Carries over the Arr server picked for the target type, which you can change in the rule set editor.
-- For Series, maps **Include individual episodes** to the rule set's series scope: grouped by show becomes series scope on, episode mode becomes series scope off.
+- For Series, maps **Include individual episodes** to the rule set's series scope: grouped by show becomes series scope on, episode mode becomes series scope off. A query using an episode criterion (Season Number, Episode Number, Seasons Behind Latest) always becomes series scope off, the only scope those criteria work in.
 - Creates the rule set enabled, with **actionEnabled off** and no action configured — matches will be detected on the next scheduler run, but nothing is deleted or unmonitored until you choose an action.
 
 After conversion you're taken to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.

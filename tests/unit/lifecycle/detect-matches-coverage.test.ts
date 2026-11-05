@@ -105,6 +105,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   hasPlayActivityRules: mockHasPlayActivityRules,
+  hasEpisodeLevelRules: vi.fn(() => false),
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
 }));

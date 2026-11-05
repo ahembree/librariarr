@@ -196,6 +196,16 @@ TMDB id specifically", use `notEquals TMDB`.
 | Matched By Rule Set | `matchedByRuleSet` | Names of the rule sets currently matching the item — multi-select |
 | Has Pending Action | `hasPendingAction` | Whether another rule set already has an action pending on the item or another copy of it |
 
+### Episode Fields
+
+Series rule sets (and Series on the Query page) only. These are judged on each episode, so a rule set using one must have **series scope off** — see [Season and episode criteria](#season-and-episode-criteria).
+
+| Label | Field | Description |
+|-|-------|-------------|
+| Season Number | `seasonNumber` | The episode's season number (specials are season `0`) |
+| Episode Number | `episodeNumber` | The episode's number within its season |
+| Seasons Behind Latest | `seasonsBehindLatest` | How many seasons the episode's season is behind the show's newest season in your library: `0` for the newest season, `1` for the one before, and so on. Specials and episodes without a season number have no value |
+
 ### Series Fields
 
 Series rule sets only. See [Series scope and aggregate fields](#series-scope-and-aggregate-fields).
@@ -374,6 +384,15 @@ Create a rule set with an OR group:
 - `resolution` equals `480P`
 - `resolution` equals `SD`
 - `videoCodec` equals `mpeg2video`
+
+### Example: Clear Out Older Seasons
+
+Keep the two newest seasons of every show and free the space taken by the rest. Create a **Series** rule set, turn **Match against entire series** off, and add:
+
+- `seasonsBehindLatest` greaterThanOrEqual `2` — Every season older than the two newest
+- `playCount` greaterThan `0` — Already watched (optional)
+
+With the action **Unmonitor & Delete Files**, each show's older seasons are unmonitored in Sonarr and their files deleted, while the two newest seasons are left alone. **Unmonitor Only** unmonitors those episodes and keeps the files. When a new season arrives, the window moves with it on the next run. Use `seasonNumber` instead to target fixed seasons (for example `seasonNumber` between `1,3`).
 
 ### Example: Watched Only By Departed Household Members
 
@@ -586,6 +605,14 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 **Matched By Rule Set**, **Has Pending Action** and **Server Count** are read across the whole show in series scope, and across the artist's tracks in artist scope: a show is matched by a rule set if any of its episodes is (every episode a series match covers counts), has a pending action if any episode does (every episode a show or artist action acts on counts as pending, not only the one it is stored against), and takes the highest server count of its episodes. So *NOT Matched By Rule Set = Keep* excludes a show the Keep rule set matched, in either scope, and *Has Pending Action = false* skips every episode another rule set has already scheduled. **Has Pending Action** also counts another server's copy of an item an action is pending on — the copies a merged match lists, and the same title on another server — since every copy is backed by the one *arr record the action acts on; and it never counts the rule set's own actions, so *Has Pending Action = false* does not cancel the action its own rule set scheduled on the previous run.
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
+
+### Season and episode criteria
+
+**Season Number**, **Episode Number** and **Seasons Behind Latest** describe a single episode, so they need **series scope off**: a whole show has no season or episode number. The editor disables them while series scope is on, a rule set saved with one in series scope is refused, and an existing one is skipped by detection (its matches and pending actions are cleared) until series scope is turned off. With series scope off the show is matched through the episodes that satisfy the rule, and episode actions — **Unmonitor Only**, **Search for New Copy** and the file deletes — act on exactly those episodes.
+
+**Seasons Behind Latest** is measured by season number against the newest numbered season of the same show **in the same library**: with seasons 1–5 in the library, season 5 is `0` and season 1 is `4`. A gap in numbering counts (seasons 1, 2 and 5 give season 2 a value of `3`), and the value is re-measured on every run, so it follows the show as new seasons are added. Specials (season 0) and episodes without a season number have no value: they never match a comparison such as *≥ 2*, and match *Is Empty*.
+
+A rule that mixes these with a series-aggregate field (for example, *watched episode % ≥ 90 **and** seasons behind latest ≥ 2*) first qualifies the show on the aggregate, then keeps the episodes that satisfy the per-episode conditions.
 
 ### Artist scope
 

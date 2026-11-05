@@ -108,6 +108,40 @@ describe("checkLifecycleRuleEvaluability", () => {
     }
   });
 
+  describe("season and episode criteria", () => {
+    it.each(["seasonNumber", "episodeNumber", "seasonsBehindLatest"])(
+      "refuses %s on a SERIES rule set in series scope, permanently",
+      async (field) => {
+        const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), undefined, undefined, true);
+        if (result.evaluable) throw new Error("expected not evaluable");
+        expect(result.permanent).toBe(true);
+        expect(result.reason).toMatch(/turn off series scope/);
+      },
+    );
+
+    it("evaluates them with series scope off, or when the scope is not given", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("seasonNumber"), undefined, undefined, false))
+        .toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("seasonNumber")))
+        .toEqual({ evaluable: true });
+    });
+
+    it("ignores series scope for rule sets without them, and for other library types", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("title"), undefined, undefined, true))
+        .toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "MUSIC", groupsWith("seasonNumber"), undefined, undefined, true))
+        .toEqual({ evaluable: true });
+    });
+
+    it("ignores a disabled per-episode rule", async () => {
+      const rules = groupsWith("seasonNumber");
+      rules[0].rules[0].enabled = false;
+      rules[0].rules.push({ id: "r2", field: "title", operator: "contains", value: "x", condition: "AND" });
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", rules, undefined, undefined, true))
+        .toEqual({ evaluable: true });
+    });
+  });
+
   it("names the right Arr family per library type", async () => {
     mockHasEnabledArrInstances.mockResolvedValue(false);
     const series = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("foundInArr"));

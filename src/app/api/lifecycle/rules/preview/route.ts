@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasSeriesAggregateRules, hasEpisodeLevelRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { loadPreviewMetadata, previewMetadataPhase } from "@/lib/lifecycle/preview-metadata";
@@ -33,7 +33,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -94,7 +94,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
         seerrData,
         crossSystemOptions,
       );
-      items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
+      items = type === "SERIES"
+        ? groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(typedRules) })
+        : rawItems;
     }
 
     emit({ type: "phase", key: "finalize" });

@@ -1093,3 +1093,83 @@ describe("action configuration validation", () => {
     expect(stored.actionType).toBe("DELETE_RADARR");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Season and episode criteria need series scope off
+// ---------------------------------------------------------------------------
+
+describe("season and episode criteria", () => {
+  const seasonRule = { id: "r1", field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: 2, condition: "AND" };
+  const body = (serverId: string, seriesScope?: boolean) => ({
+    name: "Old Seasons",
+    type: "SERIES" as const,
+    rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }],
+    serverIds: [serverId],
+    ...(seriesScope !== undefined ? { seriesScope } : {}),
+  });
+
+  it("refuses them in series scope, the default", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    for (const seriesScope of [undefined, true]) {
+      const response = await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, seriesScope) });
+      const json = await expectJson<{ error: string }>(response, 400);
+      expect(json.error).toMatch(/turn off series scope/i);
+    }
+    expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it("accepts them with series scope off", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, false) });
+    const json = await expectJson<{ ruleSet: { seriesScope: boolean } }>(response, 201);
+    expect(json.ruleSet.seriesScope).toBe(false);
+  });
+
+  it("refuses an update that turns series scope on, or adds them in series scope", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const created = await expectJson<{ ruleSet: { id: string } }>(
+      await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, false) }),
+      201,
+    );
+    const id = created.ruleSet.id;
+
+    const scopeOn = await callRouteWithParams(PUT, { id }, { method: "PUT", url: `/api/lifecycle/rules/${id}`, body: { seriesScope: true } });
+    expect((await expectJson<{ error: string }>(scopeOn, 400)).error).toMatch(/turn off series scope/i);
+
+    const scoped = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true, rules: [dummyRule] });
+    const addRule = await callRouteWithParams(PUT, { id: scoped.id }, {
+      method: "PUT",
+      url: `/api/lifecycle/rules/${scoped.id}`,
+      body: { rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }] },
+    });
+    expect((await expectJson<{ error: string }>(addRule, 400)).error).toMatch(/turn off series scope/i);
+
+    // Turning scope off together with the new rules is accepted.
+    const both = await callRouteWithParams(PUT, { id: scoped.id }, {
+      method: "PUT",
+      url: `/api/lifecycle/rules/${scoped.id}`,
+      body: { seriesScope: false, rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }] },
+    });
+    await expectJson(both, 200);
+    const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id } });
+    expect(stored.seriesScope).toBe(false);
+  });
+
+  it("refuses them on a movie rule set", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...body(server.id), type: "MOVIE" },
+    });
+    expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(/not valid for movie rules: seasonsBehindLatest/);
+  });
+});
