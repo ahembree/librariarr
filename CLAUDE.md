@@ -317,7 +317,7 @@ When adding features or changing behaviour, **update the documentation in `docs/
 - `.github/workflows/docker-nightly.yml` — on push to `main` (or manual dispatch) pushes the rolling `nightly` tag and immutable `nightly-<sha>` tags; never `latest`/semver.
 - `.github/workflows/docker-publish.yml` — manual Docker Hub publish.
 - `.github/workflows/e2e.yml` — Playwright compose stack on PRs.
-- `.github/workflows/docs-deploy.yml` — docs site.
+- `.github/workflows/docs-deploy.yml` — docs site: the **Build Docs** check on every PR (build only), the deploy on a push to main. A docs change is verified with `pnpm docs:build` before pushing; MDX reads a bare `<word>` as a JSX tag (see the `doc-feature` skill).
 - `.github/workflows/pr-title-lint.yml` — validates every PR **title** against Conventional Commits (see below).
 
 ### Git Conventions
