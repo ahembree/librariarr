@@ -130,6 +130,13 @@ export const queryBuilderConfig: BuilderConfig<QueryRule, QueryGroup> = {
         || ctx.mediaTypes.includes("SERIES");
       if (!seriesSelected || ctx.includeEpisodes) return true;
     }
+    // Per-episode fields work in both views (episodes are matched, then grouped).
+    if (sectionKey === "episode") {
+      const seriesSelected = !ctx.mediaTypes
+        || ctx.mediaTypes.length === 0
+        || ctx.mediaTypes.includes("SERIES");
+      if (!seriesSelected) return true;
+    }
     return false;
   },
 

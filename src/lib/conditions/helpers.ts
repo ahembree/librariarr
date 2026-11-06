@@ -15,6 +15,9 @@ const SEERR_FIELD_VALUES = new Set(
 const SERIES_AGGREGATE_FIELD_VALUES = new Set(
   CONDITION_FIELDS.filter((f) => f.isSeriesAggregate).map((f) => f.value),
 );
+const EPISODE_LEVEL_FIELD_VALUES = new Set(
+  CONDITION_FIELDS.filter((f) => f.episodeLevel).map((f) => f.value),
+);
 const STREAM_FIELD_VALUES = new Set([
   "audioLanguage",
   "subtitleLanguage",
@@ -55,6 +58,22 @@ export function isCrossSystemField(field: string): boolean {
 
 export function isSeriesAggregateField(field: string): boolean {
   return SERIES_AGGREGATE_FIELD_VALUES.has(field);
+}
+
+/** Per-episode fields (`episodeLevel` in the registry): Season Number, Episode Number, Seasons Behind Latest. */
+export function isEpisodeLevelField(field: string): boolean {
+  return EPISODE_LEVEL_FIELD_VALUES.has(field);
+}
+
+/**
+ * The value a per-episode field reads on an in-memory row: the row's own on a
+ * SERIES row (or a record that does not say its type), NULL on anything else —
+ * a music track keeps its disc and track numbers in the season/episode
+ * columns. Phase 1's twin is `episodeNumberHandler` (where-builder.ts).
+ */
+export function episodeLevelValue(item: Record<string, unknown>, field: string): unknown {
+  if (item.type !== undefined && item.type !== "SERIES") return null;
+  return item[field];
 }
 
 /**
@@ -273,6 +292,7 @@ export { isNonNullableField } from "./field-metadata";
 export const ARR_FIELDS = Array.from(ARR_FIELD_VALUES);
 export const SEERR_FIELDS = Array.from(SEERR_FIELD_VALUES);
 export const SERIES_AGGREGATE_FIELDS = Array.from(SERIES_AGGREGATE_FIELD_VALUES);
+export const EPISODE_LEVEL_FIELDS: ReadonlySet<string> = EPISODE_LEVEL_FIELD_VALUES;
 export const STREAM_FIELDS = Array.from(STREAM_FIELD_VALUES);
 export const CROSS_SYSTEM_FIELDS = CROSS_SYSTEM_FIELD_VALUES;
 
@@ -281,6 +301,12 @@ export const GENRE_FIELD = "genre";
 export const LABELS_FIELD = "labels";
 export const COUNTRY_FIELD = "country";
 export const EXTERNAL_ID_FIELD = "hasExternalId";
+/**
+ * Seasons Behind Latest: computed from the show's newest season in the
+ * episode's library (`attachSeasonsBehindLatest`, episode-fields.ts), so it has
+ * no column and is evaluated only in Phase 2.
+ */
+export const SEASONS_BEHIND_LATEST_FIELD = "seasonsBehindLatest";
 
 // ─── Tree walkers ────────────────────────────────────────────────────────
 
@@ -358,6 +384,17 @@ export function hasCrossSystemRules(groups: ConditionGroup[]): boolean {
 
 export function hasSeriesAggregateRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, isSeriesAggregateField);
+}
+
+/** Any per-episode field — judged per episode, never against a series aggregate. */
+export function hasEpisodeLevelRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, isEpisodeLevelField);
+}
+
+/** Seasons Behind Latest has no column: it forces Phase 2 in both engines,
+ *  which attach the value to each candidate first (episode-fields.ts). */
+export function hasSeasonsBehindLatestRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === SEASONS_BEHIND_LATEST_FIELD);
 }
 
 export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {

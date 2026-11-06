@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
-import { findFieldsInvalidForType } from "@/lib/conditions";
+import { findFieldsInvalidForType, findEpisodeLevelFields, SERIES_SCOPE_EPISODE_CRITERIA_REASON } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 import { hasArrRules } from "@/lib/rules/lifecycle-engine";
@@ -95,6 +95,22 @@ export const PUT = withSession(async (
         },
         { status: 400 }
       );
+    }
+  }
+
+  // Season/episode criteria need series scope off (see the POST handler). PUT
+  // sends only what changed, so judge the merged rules and scope.
+  if (rules !== undefined || seriesScope !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { type: true, rules: true, seriesScope: true },
+    });
+    if (current?.type === "SERIES") {
+      const nextRules = rules ?? (Array.isArray(current.rules) ? (current.rules as unknown[]) : []);
+      const nextSeriesScope = seriesScope ?? current.seriesScope;
+      if (nextSeriesScope && findEpisodeLevelFields(nextRules).length > 0) {
+        return NextResponse.json({ error: SERIES_SCOPE_EPISODE_CRITERIA_REASON }, { status: 400 });
+      }
     }
   }
 

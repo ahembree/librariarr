@@ -71,6 +71,8 @@ export interface FieldContext {
   mediaTypes?: ("MOVIE" | "SERIES" | "MUSIC")[];
   /** Whether the query is in episode mode (skips series grouping). */
   includeEpisodes?: boolean;
+  /** A SERIES rule set's series scope — used by the rule builder (per-episode fields need it off). */
+  seriesScope?: boolean;
   [key: string]: unknown;
 }
 

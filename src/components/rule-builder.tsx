@@ -9,6 +9,7 @@ import {
   getStreamQueryFieldsForType,
   getConditionField,
   isValuelessOperator,
+  SERIES_SCOPE_EPISODE_CRITERIA_REASON,
   type Condition,
   type ConditionGroup,
   type ConditionLogic,
@@ -79,6 +80,8 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
       && def.invalidForLibraryType.includes(ctx.libraryType as LibraryType)) {
       return true;
     }
+    // Per-episode fields: a show matched as a whole has no season or episode.
+    if (def.episodeLevel && ctx.seriesScope === true) return true;
     return false;
   },
 
@@ -97,6 +100,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
       && def.invalidForLibraryType.includes(ctx.libraryType as LibraryType)) {
       return `${def.label} is not available for ${String(ctx.libraryType).toLowerCase()}`;
     }
+    if (def.episodeLevel && ctx.seriesScope === true) return SERIES_SCOPE_EPISODE_CRITERIA_REASON;
     return null;
   },
 
@@ -119,7 +123,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   isSectionHidden: (sectionKey, ctx) => {
     if (sectionKey.startsWith("arr") && !ctx.arrConnected) return true;
     if (sectionKey === "seerr" && ctx.seerrConnected === undefined) return true;
-    if (sectionKey === "series" && ctx.libraryType !== "SERIES") return true;
+    if ((sectionKey === "series" || sectionKey === "episode") && ctx.libraryType !== "SERIES") return true;
     return false;
   },
 
@@ -162,6 +166,8 @@ interface RuleBuilderProps {
   seerrConnected?: boolean;
   seerrUnreachable?: boolean;
   libraryType?: LibraryType;
+  /** The rule set's series scope (SERIES only): per-episode criteria need it off. */
+  seriesScope?: boolean;
 }
 
 export function RuleBuilder({
@@ -174,6 +180,7 @@ export function RuleBuilder({
   seerrConnected,
   seerrUnreachable,
   libraryType,
+  seriesScope,
 }: RuleBuilderProps) {
   const fieldContext: FieldContext = {
     arrConnected,
@@ -182,6 +189,7 @@ export function RuleBuilder({
     seerrConnected,
     seerrUnreachable,
     libraryType,
+    seriesScope,
   };
   return (
     <BaseBuilder<LifecycleRule, LifecycleRuleGroup>

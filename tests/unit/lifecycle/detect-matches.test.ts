@@ -123,6 +123,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   hasPlayActivityRules: mockHasPlayActivityRules,
+  hasEpisodeLevelRules: vi.fn(() => false),
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
 }));
@@ -413,7 +414,7 @@ describe("detectAndSaveMatches", () => {
       ["s1"],
     );
 
-    expect(mockGroupSeriesResults).toHaveBeenCalledWith(rawItems);
+    expect(mockGroupSeriesResults).toHaveBeenCalledWith(rawItems, { summarizeEpisodeFields: false });
     expect(result.episodeIdMap.get("grouped1")).toEqual(["ep1"]);
   });
 

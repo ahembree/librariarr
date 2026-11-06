@@ -1,8 +1,9 @@
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/lifecycle-engine";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules, hasEpisodeLevelRules } from "@/lib/rules/lifecycle-engine";
 import { prisma } from "@/lib/db";
 import { hasEnabledArrInstances, arrFamilyLabel, resolveArrInstanceScope } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { SERIES_SCOPE_EPISODE_CRITERIA_REASON } from "@/lib/conditions/library-type-guard";
 
 /**
  * Whether a rule set's external dependencies (Arr/Seerr instances) are
@@ -18,7 +19,9 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
  *    as soon as an instance is re-enabled, so callers skip it and leave its
  *    matches/actions untouched (same as a metadata fetch failure).
  *  - true (permanent): the configuration can NEVER evaluate (Seerr criteria
- *    on a MUSIC rule set — Seerr has no music requests). Detection callers
+ *    on a MUSIC rule set — Seerr has no music requests; season/episode
+ *    criteria on a SERIES rule set in series scope — a whole show has no
+ *    season or episode number). Detection callers
  *    must also DISARM the rule set (clear matches, cancel pending actions):
  *    a vacuous whole-library flood armed before this guard existed would
  *    otherwise stay frozen forever and still execute.
@@ -165,7 +168,21 @@ export async function checkLifecycleRuleEvaluability(
    * (`resolveArrInstanceScope`), so that instance has to be enabled.
    */
   arrInstanceId?: string | null,
+  /**
+   * The rule set's `seriesScope` (the editor's unsaved value in the preview,
+   * diff and Test Media). A SERIES rule set in series scope matches whole
+   * shows, which have no season or episode number, so per-episode criteria
+   * can never be answered there.
+   */
+  seriesScope?: boolean,
 ): Promise<RuleEvaluability> {
+  if (type === "SERIES" && seriesScope === true && hasEpisodeLevelRules(rules)) {
+    return {
+      evaluable: false,
+      permanent: true,
+      reason: SERIES_SCOPE_EPISODE_CRITERIA_REASON,
+    };
+  }
   if (hasArrRules(rules) && !(await hasEnabledArrInstances(userId, type, arrInstanceId))) {
     const scoped = arrInstanceId ? await resolveArrInstanceScope(userId, type, arrInstanceId) : null;
     return {
