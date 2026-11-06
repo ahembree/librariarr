@@ -64,6 +64,13 @@ function StatTiles({ tiles }: { tiles: { label: string; value: string }[] }) {
 
 type Row = Record<string, unknown>;
 
+/** `get_library_overview`'s `topGenres` lists, in order, with the unit each counts in. */
+const GENRE_UNITS = [
+  ["movies", "Top movie genres (movies)"],
+  ["shows", "Top series genres (shows)"],
+  ["artists", "Top music genres (artists)"],
+] as const;
+
 export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
   const d = evidence.data as Row;
 
@@ -71,7 +78,11 @@ export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
     case "overview": {
       const counts = (d.counts ?? {}) as Record<string, number>;
       const storage = (d.storageGB ?? {}) as Record<string, number>;
-      const genres = (d.topGenres ?? []) as { value: string; count: number }[];
+      // Per media type, each in its own unit (movies, shows, artists).
+      const genresByType = (d.topGenres ?? {}) as Partial<Record<"movies" | "shows" | "artists", { value: string; count: number }[]>>;
+      const genreLists = GENRE_UNITS.map(([key, label]) => ({ label, rows: genresByType[key] ?? [] })).filter(
+        (g) => g.rows.length > 0,
+      );
       const res = (d.topResolutions ?? []) as { value: string; count: number }[];
       return (
         <Card title={evidence.title}>
@@ -90,12 +101,12 @@ export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
                 <BarList rows={res.slice(0, 6).map((r) => ({ label: r.value ?? "Unknown", value: r.count }))} />
               </div>
             )}
-            {genres.length > 0 && (
-              <div>
-                <div className="mb-1 text-[11px] text-muted-foreground">Top genres</div>
-                <BarList rows={genres.slice(0, 8).map((r) => ({ label: r.value ?? "Unknown", value: r.count }))} />
+            {genreLists.map((g) => (
+              <div key={g.label}>
+                <div className="mb-1 text-[11px] text-muted-foreground">{g.label}</div>
+                <BarList rows={g.rows.slice(0, 5).map((r) => ({ label: r.value ?? "Unknown", value: r.count }))} />
               </div>
-            )}
+            ))}
           </div>
         </Card>
       );

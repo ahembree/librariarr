@@ -86,7 +86,7 @@ const getLibraryOverview: AiTool = {
   definition: {
     name: "get_library_overview",
     description:
-      "High-level snapshot of the whole library: item counts (movies, series, seasons, episodes, artists, albums, tracks), total and per-type storage in GB, top resolutions / video codecs / genres, and the most-played titles by cumulative play count. Use this first for broad 'what's in my library' or summary questions.",
+      "High-level snapshot of the whole library: item counts (movies, series, seasons, episodes, artists, albums, tracks), total and per-type storage in GB, top resolutions / video codecs, top genres per media type (topGenres.movies counts movies, topGenres.shows counts shows, topGenres.artists counts artists), and the most-played titles by cumulative play count. Use this first for broad 'what's in my library' or summary questions.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
   async execute(userId) {
@@ -119,9 +119,15 @@ const getLibraryOverview: AiTool = {
         undefined,
         8,
       ),
-      topGenres: (stats.genreBreakdown as { value: string; _count: number }[])
-        .slice(0, 10)
-        .map((g) => ({ value: g.value, count: g._count })),
+      // Per media type, each counted in its own unit. The stats count a genre
+      // once per movie, per show (series identity) and per artist, one row
+      // per (genre, type); listed together without the type, a genre came up
+      // two or three times with counts in units that cannot be compared.
+      topGenres: {
+        movies: aggregateByValue(stats.genreBreakdown, "MOVIE", 10),
+        shows: aggregateByValue(stats.genreBreakdown, "SERIES", 10),
+        artists: aggregateByValue(stats.genreBreakdown, "MUSIC", 10),
+      },
       topPlayedMovies: stats.topMovies.map((m) => ({ title: m.title, plays: m.playCount })),
       topPlayedSeries: stats.topSeries.map((s2) => ({ title: s2.parentTitle, plays: s2.totalPlays })),
     };

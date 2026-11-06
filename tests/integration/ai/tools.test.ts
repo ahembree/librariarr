@@ -35,6 +35,8 @@ async function seedLibrary(userId: string) {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** Rows tied on count come back in no fixed order; compare them by value. */
+const byValue = (rows: { value: string }[]) => [...rows].sort((a, b) => a.value.localeCompare(b.value));
 beforeEach(cleanDatabase);
 afterAll(async () => {
   await cleanDatabase();
@@ -51,7 +53,29 @@ describe("ai/tools", () => {
     // 5 GB + 2 GB, in decimal gigabytes.
     expect(data.storageGB).toEqual({ total: 7, movies: 7, series: 0, music: 0 });
     expect(data.topPlayedMovies).toEqual([{ title: "B", plays: 3 }]);
+    expect({ ...data.topGenres, movies: byValue(data.topGenres.movies) }).toEqual({
+      movies: [{ value: "Action", count: 1 }, { value: "Drama", count: 1 }],
+      shows: [],
+      artists: [],
+    });
     expect(res.evidence).toEqual({ tool: "get_library_overview", kind: "overview", title: "Library overview", data });
+  });
+
+  it("get_library_overview lists top genres per media type, each in its own unit", async () => {
+    const user = await createTestUser();
+    const server = await seedLibrary(user.id);
+    const shows = await createTestLibrary(server.id, { type: "SERIES" });
+    // One show of three Drama episodes counts as one show.
+    for (const n of [1, 2, 3]) {
+      await createTestMediaItem(shows.id, { type: "SERIES", title: `E${n}`, parentTitle: "The Wire", episodeNumber: n, genres: ["Drama"] });
+    }
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(music.id, { type: "MUSIC", title: "T1", parentTitle: "Portishead", genres: ["Drama", "Trip Hop"] });
+
+    const data = (await tools.get("get_library_overview")!.execute(user.id, {})).data as any;
+    expect(byValue(data.topGenres.movies)).toEqual([{ value: "Action", count: 1 }, { value: "Drama", count: 1 }]);
+    expect(data.topGenres.shows).toEqual([{ value: "Drama", count: 1 }]);
+    expect(byValue(data.topGenres.artists)).toEqual([{ value: "Drama", count: 1 }, { value: "Trip Hop", count: 1 }]);
   });
 
   it("get_breakdown by resolution returns normalized values", async () => {
