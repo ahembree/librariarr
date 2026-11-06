@@ -68,7 +68,8 @@ describe("Watch History page sort columns vs /api/media/history", () => {
     const page = recordLiteral(read("src/app/(authenticated)/library/history/page.tsx"), "COLUMN_TO_SORT_FIELD");
     const route = read("src/app/api/media/history/route.ts");
     const sortMap = route.slice(route.indexOf("const SORT_MAP"), route.indexOf("};", route.indexOf("const SORT_MAP")));
-    const routeKeys = new Set([...sortMap.matchAll(/^\s*(\w+):\s*'/gm)].map((m) => m[1]));
+    // A key is a quoted column or a named SQL constant (the Decision column's CASE).
+    const routeKeys = new Set([...sortMap.matchAll(/^\s*(\w+):\s*(?:'|[A-Z][A-Z0-9_]*,)/gm)].map((m) => m[1]));
 
     const values = Object.values(page);
     expect(values.length).toBeGreaterThan(10);

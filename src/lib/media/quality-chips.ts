@@ -158,7 +158,16 @@ export interface QualitySegment {
   label?: string;
 }
 
-/** A card's quality bar: one segment per chip, sized by its count. */
+/**
+ * SDR is the baseline every file has, not a feature of this one: it keeps its
+ * chip (tables, popovers, detail pages), but the bar under a card's artwork
+ * marks only what sets an item apart, so it draws no segment.
+ */
+function isBaselineDynamicRange(chip: QualityChipSpec): boolean {
+  return chip.category === "dynamicRange" && chip.label.toUpperCase() === "SDR";
+}
+
+/** A card's quality bar: one segment per chip, sized by its count — SDR left out. */
 export function qualitySegments(
   chips: QualityChipSpec[],
   getHex: (category: ChipColorCategory, value: string) => string,
@@ -166,6 +175,7 @@ export function qualitySegments(
 ): QualitySegment[] {
   return chips
     .filter((chip) => !chip.toggle || show(chip.toggle))
+    .filter((chip) => !isBaselineDynamicRange(chip))
     .map((chip) => ({
       color: getHex(chip.category, chip.label),
       weight: chip.count ?? 1,

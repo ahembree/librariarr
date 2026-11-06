@@ -1,4 +1,4 @@
-import { createProvider } from "./provider";
+import { createProvider, REQUEST_TIMEOUT_MS } from "./provider";
 import { getAiToolMap, getAiTools } from "./tools";
 import { buildSystemPrompt } from "./system-prompt";
 import type {
@@ -11,7 +11,13 @@ import type {
 } from "./types";
 
 // Hard cap on the tool-calling loop so a misbehaving model can't spin forever.
-const MAX_ITERATIONS = 6;
+export const MAX_ITERATIONS = 6;
+
+// Total wall-clock for one question: room for every model turn the loop can
+// make (MAX_ITERATIONS + the final answer) to run to its own request timeout,
+// plus slack for the tools in between. A shorter cap aborted slow runs partway
+// and threw their work away.
+export const CHAT_MAX_LIFETIME_MS = (MAX_ITERATIONS + 1) * REQUEST_TIMEOUT_MS + 5 * 60_000;
 
 const TOOL_LABELS: Record<string, string> = {
   get_library_overview: "Summarizing your library",

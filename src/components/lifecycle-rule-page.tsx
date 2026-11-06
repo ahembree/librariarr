@@ -52,7 +52,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Loader2, Save, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Save, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -78,6 +78,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { LoadingButton } from "@/components/loading-button";
+import { PageHeader } from "@/components/page-header";
 import { generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
@@ -1482,13 +1483,16 @@ export function LifecycleRulePage({
     <div className={embedded ? undefined : "h-full overflow-y-auto"}>
         <div className={embedded ? "px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8" : "p-4 sm:p-6 lg:p-8"}>
       {!embedded && (
-        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
-          <Button variant="outline" onClick={() => requestSwitch(newRuleSet)}>
-            <FileText className="mr-2 h-4 w-4" />
-            New Rule Set
-          </Button>
-        </div>
+        <PageHeader
+          className="mb-6"
+          title={pageTitle}
+          actions={
+            <Button variant="outline" onClick={() => requestSwitch(newRuleSet)}>
+              <FileText className="mr-2 h-4 w-4" />
+              New Rule Set
+            </Button>
+          }
+        />
       )}
       {embedded && (
         <div className="mb-6 flex justify-end">
@@ -2023,7 +2027,7 @@ export function LifecycleRulePage({
                                     setRemoveArrTags(removeArrTags.filter((t) => t !== tag));
                                   }
                                 }}
-                                className={tagMode === "add" ? "hover:text-green-200" : "hover:text-red-200"}
+                                className={tagMode === "add" ? "hover:text-green" : "hover:text-red"}
                               >
                                 <X className="h-3 w-3" />
                               </button>
@@ -2321,7 +2325,7 @@ export function LifecycleRulePage({
               <FlaskConical className="mr-2 h-4 w-4" />
               Test Media
             </Button>
-            <Button
+            <LoadingButton
               onClick={() => {
                 if (activeRuleSetId && !rulesChanged) {
                   // Config-only change — skip detection, just save
@@ -2333,17 +2337,12 @@ export function LifecycleRulePage({
                 }
               }}
               disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              className={justSaved ? "bg-green hover:bg-green text-white" : ""}
+              className={justSaved ? "bg-green text-background hover:bg-green" : ""}
+              loading={loading}
+              icon={justSaved ? Check : Save}
             >
-              {loading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : justSaved ? (
-                <Check className="mr-2 h-4 w-4" />
-              ) : (
-                <Save className="mr-2 h-4 w-4" />
-              )}
               {justSaved ? "Saved" : "Save"}
-            </Button>
+            </LoadingButton>
             <div className="ml-auto flex gap-2">
               <Button
                 onClick={() => { setSaveError(null); setShowImportDialog(true); }}
@@ -2366,7 +2365,7 @@ export function LifecycleRulePage({
           </div>
 
           {previewing && previewProgress.phases.length > 0 && (
-            <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+            <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3">
               <QueryProgress state={previewProgress} />
             </div>
           )}
@@ -2490,7 +2489,8 @@ export function LifecycleRulePage({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-2 py-2">
-            <Button
+            <LoadingButton
+              loading={loadingDiff}
               variant="default"
               disabled={savingWithOption || loadingDiff}
               onClick={async () => {
@@ -2520,9 +2520,8 @@ export function LifecycleRulePage({
                 }
               }}
             >
-              {loadingDiff ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Save and re-detect
-            </Button>
+              Save and Re-detect
+            </LoadingButton>
             <Button
               variant="outline"
               disabled={savingWithOption || loadingDiff}
@@ -2533,7 +2532,7 @@ export function LifecycleRulePage({
                 setShowSaveOptions(false);
               }}
             >
-              Save only
+              Save Only
             </Button>
           </div>
           <AlertDialogFooter>
@@ -2579,8 +2578,8 @@ export function LifecycleRulePage({
                 label="New matches"
                 count={diffData.counts.added}
                 items={diffData.added}
-                color="text-emerald-400"
-                bgColor="bg-emerald-500/10"
+                color="text-green"
+                bgColor="bg-green-dim"
                 note={actionEnabled && actionDelayDays > 0 ? `Actions will be scheduled with ${actionDelayDays}-day delay` : undefined}
                 expanded={diffExpanded.added ?? false}
                 onToggle={() => setDiffExpanded((prev) => ({ ...prev, added: !prev.added }))}
@@ -2613,7 +2612,8 @@ export function LifecycleRulePage({
             >
               Cancel
             </Button>
-            <Button
+            <LoadingButton
+              loading={savingWithOption}
               disabled={savingWithOption}
               onClick={async () => {
                 setSavingWithOption(true);
@@ -2622,9 +2622,8 @@ export function LifecycleRulePage({
                 setShowDiffDialog(false);
               }}
             >
-              {savingWithOption ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Confirm and Save
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2639,7 +2638,8 @@ export function LifecycleRulePage({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-2 py-2">
-            <Button
+            <LoadingButton
+              loading={savingWithOption}
               variant="default"
               disabled={savingWithOption}
               onClick={async () => {
@@ -2649,9 +2649,8 @@ export function LifecycleRulePage({
                 setShowNewSaveOptions(false);
               }}
             >
-              {savingWithOption ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Save and detect matches
-            </Button>
+              Save and Detect Matches
+            </LoadingButton>
             <Button
               variant="outline"
               disabled={savingWithOption}
@@ -2662,7 +2661,7 @@ export function LifecycleRulePage({
                 setShowNewSaveOptions(false);
               }}
             >
-              Save only
+              Save Only
             </Button>
           </div>
           <AlertDialogFooter>

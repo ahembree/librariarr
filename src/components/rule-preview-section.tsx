@@ -113,16 +113,16 @@ const PreviewCard = memo(function PreviewCard({
   return (
     <div
       className={cn(
-        "relative rounded-lg",
-        diffActive && diffStatus === "added" && "ring-1 ring-emerald-500/70",
-        diffActive && diffStatus === "removed" && "ring-1 ring-amber/70 opacity-60",
+        "relative rounded-xl",
+        diffActive && diffStatus === "added" && "ring-1 ring-green/40",
+        diffActive && diffStatus === "removed" && "ring-1 ring-amber/40 opacity-60",
       )}
     >
       {excepted && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-excluded/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-background" />
             </div>
           </TooltipTrigger>
           <TooltipContent>Excluded from lifecycle actions</TooltipContent>
@@ -274,8 +274,8 @@ export const RulePreviewSection = memo(function RulePreviewSection({
     if (diffMap.size === 0) return undefined;
     return (item: PreviewItem) => {
       const status = diffMap.get(item.id);
-      if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";
-      if (status === "removed") return "border-l-2 border-l-amber/70 bg-amber/5 opacity-60";
+      if (status === "added") return "bg-green-dim ring-1 ring-inset ring-green/40";
+      if (status === "removed") return "bg-amber-dim ring-1 ring-inset ring-amber/40 opacity-60";
       return undefined;
     };
   }, [diffMap]);

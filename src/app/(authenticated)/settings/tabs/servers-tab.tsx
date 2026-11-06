@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -91,10 +90,10 @@ function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
 
   if (isPending) {
     return (
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+      <div className="rounded-lg border border-amber/30 bg-amber-dim p-3 text-sm">
         <div className="flex items-center gap-2">
-          <Clock className="h-3.5 w-3.5 text-amber-400" />
-          <span className="font-medium text-amber-300">Queued</span>
+          <Clock className="h-3.5 w-3.5 text-amber" />
+          <span className="font-medium text-amber">Queued</span>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">Starts when the background work ahead of it finishes...</p>
       </div>
@@ -102,11 +101,11 @@ function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
   }
 
   return (
-    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
+    <div className="rounded-lg border border-sky/30 bg-sky-dim p-3 text-sm">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
-          <span className="font-medium text-blue-300">Syncing</span>
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-sky" />
+          <span className="font-medium text-sky">Syncing</span>
         </div>
         {eta && <span className="text-xs text-muted-foreground">{eta}</span>}
       </div>
@@ -125,7 +124,7 @@ function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
             <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500"
+              className="h-full rounded-full bg-sky transition-all duration-500"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -143,35 +142,35 @@ function getSyncStatusBadge(status: string) {
   switch (status) {
     case "COMPLETED":
       return (
-        <ColorChip className="bg-green-500/20 text-green-400">
+        <ColorChip className="border-green/25 bg-green-dim text-green">
           <CheckCircle className="mr-1 h-3 w-3" />
           Completed
         </ColorChip>
       );
     case "FAILED":
       return (
-        <ColorChip className="bg-red-500/20 text-destructive">
+        <ColorChip className="border-red/25 bg-red-dim text-red">
           <XCircle className="mr-1 h-3 w-3" />
           Failed
         </ColorChip>
       );
     case "RUNNING":
       return (
-        <ColorChip className="bg-blue-500/20 text-blue-400">
+        <ColorChip className="border-sky/25 bg-sky-dim text-sky">
           <Loader2 className="mr-1 h-3 w-3 animate-spin" />
           Running
         </ColorChip>
       );
     case "PENDING":
       return (
-        <ColorChip className="bg-amber-500/20 text-amber-400">
+        <ColorChip className="border-amber/25 bg-amber-dim text-amber">
           <Clock className="mr-1 h-3 w-3" />
           Pending
         </ColorChip>
       );
     case "CANCELLED":
       return (
-        <ColorChip className="bg-amber-500/20 text-amber-400">
+        <ColorChip className="border-amber/25 bg-amber-dim text-amber">
           <XCircle className="mr-1 h-3 w-3" />
           Cancelled
         </ColorChip>
@@ -404,7 +403,7 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
   if (status.backfillComplete) {
     return (
       <p className={rowClass}>
-        <CheckCircle className="mt-0.5 h-3 w-3 shrink-0 text-green-500" />
+        <CheckCircle className="mt-0.5 h-3 w-3 shrink-0 text-green" />
         <span>
           {status.importedCount === 0
             ? "History fully imported — no plays found"
@@ -561,10 +560,10 @@ function WatchHistorySourceSelect({
                   {servers.map((s) => (
                     <SelectItem key={`${instance.id}:${s.id}`} value={s.id}>
                       <span className="truncate">{s.name}</span>
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="eyebrow">
                         {s.type}
                       </span>
-                      {!s.online && <span className="text-xs text-amber-400">offline</span>}
+                      {!s.online && <span className="text-xs text-amber">offline</span>}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -579,7 +578,7 @@ function WatchHistorySourceSelect({
               <SelectSeparator />
               <SelectItem value={linkedId}>
                 <span className="truncate">Linked Tracearr server</span>
-                {!loading && <span className="text-xs text-amber-400">unavailable</span>}
+                {!loading && <span className="text-xs text-amber">unavailable</span>}
               </SelectItem>
             </>
           )}
@@ -834,7 +833,7 @@ export function ServersTab({
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div className="space-y-1">
-            <h2 className="text-xl font-semibold">Media Servers</h2>
+            <h2 className="text-xl font-bold font-display">Media Servers</h2>
             <p className="text-sm text-muted-foreground">
               Connect Plex, Jellyfin, or Emby servers and manage which libraries are synced.
             </p>
@@ -897,7 +896,7 @@ export function ServersTab({
                           <span className="truncate">{server.name}</span>
                           <ServerTypeChip type={server.type} className="shrink-0" />
                           {!server.enabled && (
-                            <ColorChip className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">
+                            <ColorChip className="shrink-0 text-xs font-normal border-amber/25 bg-amber-dim text-amber">
                               Disabled
                             </ColorChip>
                           )}
@@ -1129,7 +1128,7 @@ export function ServersTab({
                                   <span className="ml-2 text-xs text-muted-foreground">{lib._count.mediaItems.toLocaleString()} items</span>
                                 )}
                               </div>
-                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lib.type}</span>
+                              <span className="eyebrow">{lib.type}</span>
                             </div>
                           );
                         })}
@@ -1198,7 +1197,7 @@ export function ServersTab({
       {/* Disable confirmation dialog (library or server) */}
       <AlertDialog
         open={!!purgeDialog?.open}
-        onOpenChange={(open) => { if (!open) setPurgeDialog(null); }}
+        onOpenChange={(open) => { if (!open && !purging) setPurgeDialog(null); }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1224,25 +1223,12 @@ export function ServersTab({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={purging}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => onHandlePurgeConfirm(false)}
-              disabled={purging}
-              className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-            >
+            <Button variant="secondary" onClick={() => onHandlePurgeConfirm(false)} disabled={purging}>
               Keep Data
-            </AlertDialogAction>
-            <AlertDialogAction
-              onClick={() => onHandlePurgeConfirm(true)}
-              disabled={purging}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {purging ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
-              )}
+            </Button>
+            <LoadingButton variant="destructive" onClick={() => onHandlePurgeConfirm(true)} loading={purging} icon={Trash2}>
               Delete Data
-            </AlertDialogAction>
+            </LoadingButton>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1289,7 +1275,7 @@ export function ServersTab({
                     />
                     <TypeIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="text-sm font-medium flex-1">{lib.title}</span>
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lib.type}</span>
+                    <span className="eyebrow">{lib.type}</span>
                   </label>
                 );
               })}
@@ -1347,41 +1333,25 @@ export function ServersTab({
       </AlertDialog>
 
       {/* Sync prompt after enabling library */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!syncPrompt?.open}
         onOpenChange={(open) => { if (!open) setSyncPrompt(null); }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Library Enabled</AlertDialogTitle>
-            <AlertDialogDescription>
-              Would you like to sync this server now to fetch metadata for the newly enabled library?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>No</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (syncPrompt) onSyncServer(syncPrompt.serverId, syncPrompt.libraryKey);
-                setSyncPrompt(null);
-              }}
-              disabled={!!syncingServer}
-            >
-              {syncingServer ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              Sync Now
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Library Enabled"
+        description="Would you like to sync this server now to fetch metadata for the newly enabled library?"
+        cancelLabel="No"
+        confirmLabel="Sync Now"
+        confirmIcon={RefreshCw}
+        confirmDisabled={!!syncingServer}
+        onConfirm={() => {
+          if (syncPrompt) onSyncServer(syncPrompt.serverId, syncPrompt.libraryKey);
+          setSyncPrompt(null);
+        }}
+      />
 
       {/* Remove server confirmation dialog */}
       <AlertDialog
         open={!!removeServerDialog?.open}
-        onOpenChange={(open) => { if (!open) setRemoveServerDialog(null); }}
+        onOpenChange={(open) => { if (!open && !removingServer) setRemoveServerDialog(null); }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1393,25 +1363,12 @@ export function ServersTab({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removingServer}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => onRemoveServer(false)}
-              disabled={removingServer}
-              className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-            >
+            <Button variant="secondary" onClick={() => onRemoveServer(false)} disabled={removingServer}>
               Keep Data
-            </AlertDialogAction>
-            <AlertDialogAction
-              onClick={() => onRemoveServer(true)}
-              disabled={removingServer}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {removingServer ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
-              )}
+            </Button>
+            <LoadingButton variant="destructive" onClick={() => onRemoveServer(true)} loading={removingServer} icon={Trash2}>
               Delete Data
-            </AlertDialogAction>
+            </LoadingButton>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

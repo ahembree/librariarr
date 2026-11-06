@@ -3,15 +3,16 @@
  *
  * Single source of truth for the "Movie" / "Series" / "Music" chips shown
  * across the app — Watch History, Query Builder, Rule Matches, and Pending
- * Actions — so a media-type chip reads the same everywhere. Uses the shared
- * design tokens (sky / green) plus Tailwind purple so the chips track the theme.
+ * Actions — so a media-type chip reads the same everywhere. Uses the
+ * `media-*` tokens in globals.css: Movie the sky blue, Series purple, Music
+ * the green — the chips' original colours.
  */
 
 /** Tailwind classes (background + text + border) for each media type's chip. */
 export const MEDIA_TYPE_BADGE_COLORS: Record<string, string> = {
-  MOVIE: "bg-sky/20 text-sky border-sky/30",
-  SERIES: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  MUSIC: "bg-green/20 text-green border-green/30",
+  MOVIE: "bg-media-movie/20 text-media-movie border-media-movie/30",
+  SERIES: "bg-media-series/20 text-media-series border-media-series/30",
+  MUSIC: "bg-media-music/20 text-media-music border-media-music/30",
 };
 
 /** Singular display label for each media type. */

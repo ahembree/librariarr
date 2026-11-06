@@ -46,17 +46,12 @@ const DIMENSION_CHIP_CATEGORY: Partial<Record<string, ChipColorCategory>> = {
   audioCodec: "audioCodec",
 };
 
-function interpolateHex(low: string, high: string, t: number): string {
-  const lr = parseInt(low.slice(1, 3), 16);
-  const lg = parseInt(low.slice(3, 5), 16);
-  const lb = parseInt(low.slice(5, 7), 16);
-  const hr = parseInt(high.slice(1, 3), 16);
-  const hg = parseInt(high.slice(3, 5), 16);
-  const hb = parseInt(high.slice(5, 7), 16);
-  const r = Math.round(lr + (hr - lr) * t);
-  const g = Math.round(lg + (hg - lg) * t);
-  const b = Math.round(lb + (hb - lb) * t);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+/**
+ * The heatmap colour `t` (0–1) of the way from `low` to `high`, as a CSS
+ * color-mix() so the endpoints can be design tokens (`var(--chart-1)`).
+ */
+function heatColor(low: string, high: string, t: number): string {
+  return `color-mix(in oklab, ${high} ${Math.round(t * 100)}%, ${low})`;
 }
 
 function getGradientColors(gradientId?: string) {
@@ -266,7 +261,7 @@ export function CustomChartCard({
                     <span>Low</span>
                     <div
                       className="h-2.5 flex-1 rounded-full"
-                      style={{ background: `linear-gradient(to right, ${low}1a, ${high})` }}
+                      style={{ background: `linear-gradient(to right, color-mix(in srgb, ${low} 10%, transparent), ${high})` }}
                     />
                     <span>High</span>
                   </div>
@@ -295,7 +290,7 @@ export function CustomChartCard({
                       >
                         <div
                           className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: isHidden ? "#6e7383" : color }}
+                          style={{ backgroundColor: isHidden ? OTHER_HEX : color }}
                         />
                         <span className={`text-xs ${isHidden ? "line-through text-muted-foreground" : ""}`}>
                           {label}
@@ -332,7 +327,7 @@ export function CustomChartCard({
                   >
                     <div
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: isHidden ? "#6e7383" : entry.fill }}
+                      style={{ backgroundColor: isHidden ? OTHER_HEX : entry.fill }}
                     />
                     <span className={`text-xs ${isHidden ? "line-through text-muted-foreground" : ""}`}>
                       {entry.label} ({entry.count.toLocaleString()})
@@ -627,7 +622,7 @@ function HeatmapChart({ data, gradientId }: { data: HeatmapData; gradientId?: st
                   width={cellSize - 2}
                   height={cellSize - 2}
                   rx={3}
-                  fill={count > 0 ? interpolateHex(low, high, t) : "#555"}
+                  style={{ fill: count > 0 ? heatColor(low, high, t) : "var(--muted-foreground)" }}
                   opacity={count > 0 ? 1 : 0.08}
                   onMouseMove={(e) => handleMouseMove(e, d1, d2, count)}
                   onMouseLeave={handleMouseLeave}
@@ -853,14 +848,14 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
                 })
               ) : (
                 <linearGradient id="tl-grad-total" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                  <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.02} />
                 </linearGradient>
               )}
             </defs>
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               interval="preserveStartEnd"
@@ -869,7 +864,7 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
               height={60}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               width={40}
@@ -896,7 +891,7 @@ function TimelineChart({ data, hiddenItems }: { data: TimelineData; hiddenItems:
               <Area
                 type="monotone"
                 dataKey="total"
-                stroke="#3b82f6"
+                stroke="var(--chart-1)"
                 strokeWidth={2}
                 fill="url(#tl-grad-total)"
               />
@@ -962,7 +957,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
           <BarChart data={data} margin={margin}>
             <XAxis
               dataKey="label"
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               interval={0}
@@ -971,13 +966,13 @@ function renderChart(chartType: string, data: ChartDatum[]) {
               height={60}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               width={40}
             />
             <RechartsTooltip content={<CustomTooltip />} />
-            <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="#3b82f6" />
+            <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="var(--chart-1)" />
           </BarChart>
         </ResponsiveContainer>
       );
@@ -991,7 +986,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
           <LineChart data={data} margin={margin}>
             <XAxis
               dataKey="label"
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               interval={0}
@@ -1000,7 +995,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
               height={60}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               width={40}
@@ -1009,9 +1004,9 @@ function renderChart(chartType: string, data: ChartDatum[]) {
             <Line
               type="monotone"
               dataKey="count"
-              stroke="#3b82f6"
+              stroke="var(--chart-1)"
               strokeWidth={2}
-              dot={{ fill: "#3b82f6", r: 4 }}
+              dot={{ fill: "var(--chart-1)", r: 4 }}
               activeDot={{ r: 6 }}
             />
           </LineChart>
@@ -1024,13 +1019,13 @@ function renderChart(chartType: string, data: ChartDatum[]) {
           <AreaChart data={data} margin={margin}>
             <defs>
               <linearGradient id="customAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
-                <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.02} />
               </linearGradient>
             </defs>
             <XAxis
               dataKey="label"
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               interval={0}
@@ -1039,7 +1034,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
               height={60}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: "#b5b5b5" }}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
               tickLine={false}
               axisLine={false}
               width={40}
@@ -1048,7 +1043,7 @@ function renderChart(chartType: string, data: ChartDatum[]) {
             <Area
               type="monotone"
               dataKey="count"
-              stroke="#3b82f6"
+              stroke="var(--chart-1)"
               strokeWidth={2}
               fill="url(#customAreaGrad)"
             />
@@ -1060,16 +1055,16 @@ function renderChart(chartType: string, data: ChartDatum[]) {
       return (
         <ResponsiveContainer width="100%" height="100%" minHeight={200}>
           <RadarChart data={data} cx="50%" cy="50%" outerRadius="75%">
-            <PolarGrid stroke="#333333" />
+            <PolarGrid stroke="var(--border)" />
             <PolarAngleAxis
               dataKey="label"
-              tick={{ fontSize: 10, fill: "#b5b5b5" }}
+              tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
             />
             <RechartsTooltip content={<CustomTooltip />} />
             <Radar
               dataKey="count"
-              stroke="#3b82f6"
-              fill="#3b82f6"
+              stroke="var(--chart-1)"
+              fill="var(--chart-1)"
               fillOpacity={0.2}
               strokeWidth={2}
             />

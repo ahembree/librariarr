@@ -4,6 +4,7 @@ import { ColorChip } from "@/components/color-chip";
 import { Button } from "@/components/ui/button";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { INTEGRATION_APP_STYLES } from "@/lib/theme/integration-colors";
 
 export interface ArrMatch {
   type: "sonarr" | "radarr" | "lidarr";
@@ -29,9 +30,9 @@ interface ArrTypeStyle {
 }
 
 const ARR_TYPE_STYLES: Record<ArrMatch["type"], ArrTypeStyle> = {
-  sonarr: { label: "Sonarr", text: "text-sky-400", dot: "bg-sky-400 shadow-[0_0_6px] shadow-sky-400/60" },
-  radarr: { label: "Radarr", text: "text-amber-400", dot: "bg-amber-400 shadow-[0_0_6px] shadow-amber-400/60" },
-  lidarr: { label: "Lidarr", text: "text-emerald-400", dot: "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60" },
+  sonarr: { label: "Sonarr", text: INTEGRATION_APP_STYLES.sonarr.text, dot: INTEGRATION_APP_STYLES.sonarr.dot },
+  radarr: { label: "Radarr", text: INTEGRATION_APP_STYLES.radarr.text, dot: INTEGRATION_APP_STYLES.radarr.dot },
+  lidarr: { label: "Lidarr", text: INTEGRATION_APP_STYLES.lidarr.text, dot: INTEGRATION_APP_STYLES.lidarr.dot },
 };
 
 function ArrDetailRow({ label, value }: { label: string; value: React.ReactNode }) {

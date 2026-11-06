@@ -25,6 +25,7 @@ import { Logo } from "@/components/logo";
 import { InlineError } from "@/components/inline-error";
 import { LoadingButton } from "@/components/loading-button";
 import { newPasswordProblem } from "@/lib/auth/password-rules";
+import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
   sso_not_configured: "SSO is not configured.",
@@ -302,14 +303,14 @@ export default function LoginPage() {
 
   if (checkingSetup) {
     return (
-      <div className="flex min-h-screen items-center justify-center auth-backdrop">
+      <div className="flex min-h-dvh items-center justify-center auth-backdrop">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center auth-backdrop p-4">
+    <div className="flex min-h-dvh items-center justify-center auth-backdrop p-4">
       <Card className="w-full max-w-105 glass animate-fade-in-up">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 animate-logo-glow">
@@ -331,7 +332,8 @@ export default function LoginPage() {
                 <Button
                   onClick={handlePlexLogin}
                   disabled={plexLoading}
-                  className="w-full cursor-pointer bg-[#cc7b19] text-white hover:bg-[#e5a00d] disabled:opacity-60"
+                  variant="ghost"
+                  className={`w-full cursor-pointer ${SERVER_TYPE_STYLES.PLEX.signInButton}`}
                   size="lg"
                 >
                   <svg

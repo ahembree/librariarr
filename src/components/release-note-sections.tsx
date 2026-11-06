@@ -74,7 +74,7 @@ function ReleaseSectionList({ section }: { section: ReleaseSection }) {
   const Icon = style.icon;
   return (
     <div>
-      <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <h4 className="eyebrow mb-2 flex items-center gap-1.5">
         <Icon className={cn("h-3.5 w-3.5", style.iconClass)} />
         {section.heading}
       </h4>

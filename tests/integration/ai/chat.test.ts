@@ -14,9 +14,9 @@ vi.mock("@/lib/logger", () => ({
   apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("@/lib/ai/analyst", () => ({ runAnalyst: mockRunAnalyst }));
+vi.mock("@/lib/ai/analyst", () => ({ runAnalyst: mockRunAnalyst, CHAT_MAX_LIFETIME_MS: 60_000 }));
 
-import { POST } from "@/app/api/ai/chat/route";
+import { POST, maxDuration } from "@/app/api/ai/chat/route";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 beforeEach(async () => {
@@ -96,5 +96,15 @@ describe("POST /api/ai/chat", () => {
       config: { provider: "openai-compatible", baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini" },
       messages: MSG.messages,
     });
+  });
+
+  // The route's maxDuration is a literal (Next.js reads it statically); it
+  // must cover the stream lifetime, which must cover every model turn running
+  // to its own request timeout.
+  it("gives a run room for every model turn to reach its timeout", async () => {
+    const analyst = await vi.importActual<typeof import("@/lib/ai/analyst")>("@/lib/ai/analyst");
+    const { REQUEST_TIMEOUT_MS } = await vi.importActual<typeof import("@/lib/ai/provider")>("@/lib/ai/provider");
+    expect(analyst.CHAT_MAX_LIFETIME_MS).toBeGreaterThan((analyst.MAX_ITERATIONS + 1) * REQUEST_TIMEOUT_MS);
+    expect(maxDuration * 1000).toBeGreaterThanOrEqual(analyst.CHAT_MAX_LIFETIME_MS);
   });
 });

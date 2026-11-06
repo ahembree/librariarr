@@ -100,6 +100,22 @@ describe("ConfirmDialog", () => {
 });
 
 describe("PageHeader", () => {
+  // The h1 is a flex row for the icon; a title of text and an element (the
+  // dashboard's "Good morning, <name>") became two flex items with a gap
+  // between them, and the name could not wrap with the greeting.
+  it("keeps a mixed title in one flex item", () => {
+    render(
+      createElement(PageHeader, {
+        title: createElement("span", null, "Good morning, ", createElement("strong", null, "Alex")),
+        icon: Film,
+      }),
+    );
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1.textContent).toBe("Good morning, Alex");
+    expect(h1.children).toHaveLength(2);
+    expect(h1.children[1].textContent).toBe("Good morning, Alex");
+  });
+
   it("renders the page's h1 in the shared style, with its parts", () => {
     render(
       createElement(PageHeader, {
@@ -147,6 +163,15 @@ describe("InlineError and ConnectionTestResult", () => {
       }),
     );
     expect(screen.getByRole("status").textContent).toBe("Connected to Radarr v5.2 · 1 server");
+    // A test that is not a connection names itself.
+    rerender(
+      createElement(ConnectionTestResult, {
+        result: { ok: true, appName: "https://auth.example.com/" },
+        variant: "badge",
+        label: "Discovery OK: https://auth.example.com/",
+      }),
+    );
+    expect(screen.getByRole("status").textContent).toBe("Discovery OK: https://auth.example.com/");
   });
 
   it("labels badge outcomes", () => {

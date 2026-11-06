@@ -35,4 +35,16 @@ describe("viewport-height units", () => {
   it("never caps a height in vh", () => {
     expect(occurrences(/max-h-\[[^\]]*(?<![dls])vh/)).toEqual([]);
   });
+
+  // `min-h-screen` is `min-height: 100vh` — the same toolbar overrun as
+  // h-screen on a full-page frame (login, onboarding, the detail hero) — and
+  // an arbitrary `h-[55vh]` / `min-h-[50vh]` sizes against the hidden-toolbar
+  // height the same way.
+  it("never sizes a minimum height with min-h-screen", () => {
+    expect(occurrences(/(^|[\s"'`])min-h-screen(?=[\s"'`]|$)/)).toEqual([]);
+  });
+
+  it("never sizes a height in vh", () => {
+    expect(occurrences(/(^|[\s"'`:])(min-|max-)?h-\[[^\]]*(?<![dls])vh\]/)).toEqual([]);
+  });
 });
