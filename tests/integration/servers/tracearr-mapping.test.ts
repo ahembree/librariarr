@@ -25,7 +25,8 @@ vi.mock("@/lib/logger", () => ({
 const { mockInvalidateMediaCaches } = vi.hoisted(() => ({
   mockInvalidateMediaCaches: vi.fn(),
 }));
-vi.mock("@/lib/cache/invalidate", () => ({
+vi.mock("@/lib/cache/invalidate", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cache/invalidate")>()),
   invalidateMediaCaches: mockInvalidateMediaCaches,
 }));
 

@@ -6,7 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { invalidateImageFailures, invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import {
   invalidateWatchHistoryEvidence,
@@ -225,6 +225,11 @@ export const PUT = withSession(async (
     );
   }
 
+  const connectionChanged =
+    urlChanged ||
+    (accessToken !== undefined && accessToken !== "" && accessToken !== server.accessToken) ||
+    (tlsSkipVerify !== undefined && tlsSkipVerify !== server.tlsSkipVerify);
+
   // Recompute canonical + invalidate caches whenever the enabled state changes:
   // enabling/disabling a server changes the enabled-server set that dedup
   // canonical selection is computed over, so items whose canonical lived on the
@@ -233,17 +238,19 @@ export const PUT = withSession(async (
   if (enabled !== undefined) {
     await recomputeCanonical(session.userId);
     invalidateMediaCaches();
-  } else if (
-    urlChanged ||
-    (accessToken !== undefined && accessToken !== "" && accessToken !== server.accessToken) ||
-    (tlsSkipVerify !== undefined && tlsSkipVerify !== server.tlsSkipVerify)
-  ) {
+  } else if (connectionChanged) {
     // The image proxy caches each item's server URL, token and TLS setting
     // under `image-meta:` for 5 minutes. The edit form never sends `enabled`,
     // so without this an edited connection kept fetching artwork from the old
     // address, with the old token, until that cache expired.
     invalidateMediaCaches();
   }
+
+  // The image proxy also remembers, for a minute, each thumb it failed to
+  // fetch from this server — keyed by the URL stored until now. A new token or
+  // certificate setting at the same URL is usually the fix for exactly those
+  // failures, and kept they answered 502 for up to a minute after it.
+  if (connectionChanged) invalidateImageFailures(server.url);
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS
   // change all affect whether/how we connect to this server.

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
 import { appCache } from "@/lib/cache/memory-cache";
+import { imageFailureCacheKey } from "@/lib/cache/invalidate";
 import { isUnreachable } from "@/lib/media-server/health-cache";
 import {
   cacheImage,
@@ -128,7 +129,8 @@ export const GET = withSession(async (
 
   // Short-lived negative cache: when an upstream fetch fails for a specific thumbPath
   // for a non-server-unreachable reason, avoid re-attempting that exact thumb.
-  const failKey = `image-fail:${server.url}:${thumbPath}`;
+  // A connection edit of the server drops its entries (`invalidateImageFailures`).
+  const failKey = imageFailureCacheKey(server.url, thumbPath);
   if (appCache.get(failKey)) {
     return NextResponse.json({ error: "Failed to fetch image" }, { status: 502 });
   }

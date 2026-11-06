@@ -42,6 +42,7 @@ import { PUT } from "@/app/api/servers/[id]/route";
 import { GET as ImageGET } from "@/app/api/media/[id]/image/route";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { appCache } from "@/lib/cache/memory-cache";
+import { imageFailureCacheKey } from "@/lib/cache/invalidate";
 import { CACHE_WIDTH_GRID } from "@/lib/image-url";
 
 const OLD_URL = "http://plex.old:32400";
@@ -118,8 +119,58 @@ describe("PUT /api/servers/[id] — cached connection details", () => {
     expect(await artworkConnection(CACHE_WIDTH_GRID)).toEqual(expected);
   });
 
+  /** Fetch the item's artwork with the upstream fetch failing, and return the status. */
+  async function failedArtwork() {
+    mockFetchImage.mockRejectedValueOnce(new Error("401 Unauthorized"));
+    const response = await callRouteWithParams(ImageGET, { id: itemId }, { url: `/api/media/${itemId}/image` });
+    return response.status;
+  }
+
+  it.each([
+    ["token", { accessToken: "new-token" }],
+    ["TLS setting", { tlsSkipVerify: true }],
+    ["URL", { url: "http://plex.new:32400" }],
+  ])("retries artwork that just failed once the %s is fixed", async (_field, changes) => {
+    // The old token is refused: the thumb fails, and the failure is remembered
+    // for a minute — the next request answers 502 without asking the server.
+    expect(await failedArtwork()).toBe(502);
+    mockFetchImage.mockClear();
+    const remembered = await callRouteWithParams(ImageGET, { id: itemId }, { url: `/api/media/${itemId}/image` });
+    expect(remembered.status).toBe(502);
+    expect(mockFetchImage).not.toHaveBeenCalled();
+
+    const response = await callRouteWithParams(PUT, { id: serverId }, {
+      url: `/api/servers/${serverId}`,
+      method: "PUT",
+      body: editForm(changes),
+    });
+    await expectJson(response, 200);
+
+    // Asked again at once, with the fixed connection.
+    const after = await callRouteWithParams(ImageGET, { id: itemId }, { url: `/api/media/${itemId}/image` });
+    expect(after.status).toBe(200);
+    expect(mockFetchImage).toHaveBeenCalledOnce();
+  });
+
+  it("keeps another server's artwork failures when one server's connection is edited", async () => {
+    const other = imageFailureCacheKey("http://jellyfin:8096", THUMB);
+    appCache.set(other, true, 60_000);
+
+    const response = await callRouteWithParams(PUT, { id: serverId }, {
+      url: `/api/servers/${serverId}`,
+      method: "PUT",
+      body: editForm({ accessToken: "new-token" }),
+    });
+    await expectJson(response, 200);
+
+    expect(appCache.get(other)).toBe(true);
+  });
+
   it("keeps the caches when a save changes no connection setting", async () => {
     await artworkConnection();
+    // A failure of another thumb on this server, still within its minute.
+    const failure = imageFailureCacheKey(OLD_URL, "/library/metadata/2/thumb/1");
+    appCache.set(failure, true, 60_000);
     const listing = "media-list:probe";
     appCache.set(listing, { items: [] });
 
@@ -134,5 +185,6 @@ describe("PUT /api/servers/[id] — cached connection details", () => {
 
     expect(appCache.get(listing)).toEqual({ items: [] });
     expect(appCache.get(`image-meta:${itemId}`)).toBeTruthy();
+    expect(appCache.get(failure)).toBe(true);
   });
 });
