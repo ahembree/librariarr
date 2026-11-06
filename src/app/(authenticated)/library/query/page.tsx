@@ -1013,6 +1013,10 @@ export default function QueryPage() {
   // must validate against THIS (not the live builder state, which the user may
   // have edited without re-running), so the selection matches what's on screen.
   const lastRunDefinitionRef = useRef<QueryDefinition | null>(null);
+  // The same, for the action bar to check an action against the criteria of
+  // the results on screen (an action on a whole show can't follow a
+  // criterion of one episode).
+  const [lastRunDefinition, setLastRunDefinition] = useState<QueryDefinition | null>(null);
 
   const runQuery = useCallback(
     async () => {
@@ -1022,6 +1026,7 @@ export default function QueryPage() {
       resetQueryProgress();
       const definition = buildDefinition();
       lastRunDefinitionRef.current = definition;
+      setLastRunDefinition(definition);
       try {
         const resp = await fetch("/api/query", {
           method: "POST",
@@ -1950,6 +1955,8 @@ export default function QueryPage() {
                 executing={executingAction}
                 onExecute={executeAction}
                 onClear={clearSelection}
+                criteria={lastRunDefinition?.groups ?? []}
+                episodeMode={!!lastRunDefinition?.includeEpisodes}
               />
               {executingAction && actionProgress.phases.length > 0 && (
                 <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3">

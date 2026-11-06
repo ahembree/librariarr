@@ -302,6 +302,20 @@ describe("actions on the whole show or artist", () => {
     expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "DELETE_FILES_SONARR", searchAfterAction: true })).toBeNull();
   });
 
+  it("counts Sonarr's Unmonitor Only and Search for New Copy where they act on the whole series (episodeScope false)", () => {
+    // The Query page's grouped series view runs them on the whole series.
+    expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "UNMONITOR_SONARR", episodeScope: false })).toBe("Unmonitor Only");
+    expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "SEARCH_SONARR", episodeScope: false })).toBe("Search for New Copy");
+    expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "UNMONITOR_SONARR", episodeScope: true })).toBeNull();
+    // Only those two can act on either.
+    expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "DELETE_FILES_SONARR", episodeScope: false })).toBeNull();
+    expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "DO_NOTHING", episodeScope: false })).toBeNull();
+    // With the scope off a member judgement follows; a rule set never sets it.
+    expect(groupScopeViolation("SERIES", false, [{ id: "g", condition: "AND", groups: [], rules: [rule("resolution")] }], {
+      actionEnabled: true, actionType: "UNMONITOR_SONARR", episodeScope: false,
+    })?.judgement).toBe("member");
+  });
+
   it("reads an action turned off, or none configured, as nothing; a scheduled action's snapshot as armed", () => {
     expect(wholeRecordActionOf("SERIES", { actionEnabled: false, actionType: "DELETE_SONARR", addArrTags: ["x"] })).toBeNull();
     expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: null })).toBeNull();

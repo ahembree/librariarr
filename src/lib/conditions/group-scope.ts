@@ -41,7 +41,10 @@
  *    a backup) is skipped by detection (`checkLifecycleRuleEvaluability`) and
  *    its actions are held (`actionHoldOf`, held-actions.ts) until it is edited;
  *  - the group-scope engines refuse to evaluate a group-judgement violation
- *    (`evaluateSeriesScope`, `evaluateMusicScope`).
+ *    (`evaluateSeriesScope`, `evaluateMusicScope`);
+ *  - the Query page's own actions refuse a whole-record action on results
+ *    whose criteria a rule set with the scope off and that action could not
+ *    follow (`queryActionScopeViolation`, src/lib/query/action-scope.ts).
  *
  * The check covers a rule set's rules whether enabled or disabled, at any
  * depth: a disabled criterion is one click from being evaluated.
@@ -51,7 +54,7 @@
  */
 import { getConditionField } from "./fields";
 import { isStreamQueryField } from "./stream-query";
-import { MUSIC_ACTION_TYPES, SERIES_ACTION_TYPES } from "../lifecycle/action-types";
+import { MUSIC_ACTION_TYPES, SERIES_ACTION_TYPES, actionCanScopeToEpisodes } from "../lifecycle/action-types";
 
 /** The library types with a whole-show / whole-artist scope. */
 export type GroupScopeType = "SERIES" | "MUSIC";
@@ -247,8 +250,10 @@ export function findGroupScopeBlockedCriteria(
  * search after is the one exception, `wholeRecordActionOf`), Sonarr's
  * Unmonitor Only and Search for New Copy with series scope off (they act on
  * the matched episodes, `ruleSetActsOnEpisodes`; with it on the group
- * judgement applies anyway), and Do Nothing. Arr tags, set on any action,
- * are applied to the whole record (`wholeRecordActionOf`).
+ * judgement applies anyway — and where they run on the whole series instead,
+ * the Query page's grouped view, the action says so with `episodeScope`
+ * false), and Do Nothing. Arr tags, set on any action, are applied to the
+ * whole record (`wholeRecordActionOf`).
  */
 export const WHOLE_RECORD_ACTION_TYPES: Readonly<Record<GroupScopeType, ReadonlySet<string>>> = {
   SERIES: new Set([
@@ -278,6 +283,14 @@ export interface GroupScopeAction {
   addArrTags?: readonly string[] | null;
   removeArrTags?: readonly string[] | null;
   searchAfterAction?: boolean | null;
+  /**
+   * Whether Sonarr's Unmonitor Only and Search for New Copy act on the matched
+   * episodes. Absent or null reads as yes: a rule set with series scope off
+   * always runs them per episode (`ruleSetActsOnEpisodes`). False where they
+   * act on the whole series though each episode was judged on its own — the
+   * Query page's grouped series view (`src/lib/query/action-scope.ts`).
+   */
+  episodeScope?: boolean | null;
 }
 
 const ACTION_LABELS: Record<GroupScopeType, Map<string, string>> = {
@@ -300,9 +313,10 @@ export function isWholeRecordActionType(type: GroupScopeType, actionType: string
 
 /**
  * What makes an armed action act on the whole show or artist, named as the
- * rule editor names it — its type, its Arr tags, or a Lidarr file delete's
- * search after — or null when it acts only on the matched members, or is not
- * armed (turned off, or nothing configured).
+ * rule editor names it — its type (Sonarr's Unmonitor Only and Search for New
+ * Copy too where `episodeScope` is false), its Arr tags, or a Lidarr file
+ * delete's search after — or null when it acts only on the matched members,
+ * or is not armed (turned off, or nothing configured).
  */
 export function wholeRecordActionOf(type: string, action: GroupScopeAction | null | undefined): string | null {
   if (type !== "SERIES" && type !== "MUSIC") return null;
@@ -310,6 +324,9 @@ export function wholeRecordActionOf(type: string, action: GroupScopeAction | nul
   const tagged = (action.addArrTags?.length ?? 0) > 0 || (action.removeArrTags?.length ?? 0) > 0;
   if (!action.actionType && !tagged) return null;
   if (isWholeRecordActionType(type, action.actionType)) return actionLabel(type, action.actionType!);
+  if (type === "SERIES" && action.episodeScope === false && !!action.actionType && actionCanScopeToEpisodes(action.actionType)) {
+    return actionLabel(type, action.actionType);
+  }
   if (tagged) return "Arr tags";
   if (type === "MUSIC" && action.actionType === "DELETE_FILES_LIDARR" && action.searchAfterAction) {
     return `${actionLabel(type, action.actionType)} with Search after`;
