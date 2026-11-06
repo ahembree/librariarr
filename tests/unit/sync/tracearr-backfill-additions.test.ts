@@ -91,7 +91,11 @@ function play(
   } as TracearrHistoryRecord;
 }
 
-/** When every candidate row was created — "before it was added" is measured against it. */
+/**
+ * When every candidate was added — "before it was added" is measured against
+ * it. The default candidate's server reported no add time, so this is its
+ * row's `createdAt`.
+ */
 const ADDED_AT = new Date("2026-10-30T12:00:00.000Z");
 /** A play from before the item was (re-)added: one of the plays it lost. */
 const EARLIER = new Date("2026-08-01T20:00:00.000Z");
@@ -102,6 +106,7 @@ function candidate(n: number) {
   return {
     id: `item-${n}`,
     ratingKey: `${1000 + n}`,
+    addedAt: null as Date | null,
     createdAt: ADDED_AT,
     title: `Item ${n}`,
     type: "MOVIE",
@@ -118,6 +123,7 @@ function candidate(n: number) {
 let candidates: Array<{
   id: string;
   ratingKey: string;
+  addedAt?: Date | null;
   createdAt?: Date;
   title: string;
   type?: string;
@@ -175,7 +181,7 @@ describe("recoverHistoryForNewItems", () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
-      // An item holding a Tracearr play from before its row was created had its
+      // An item holding a Tracearr play from before it was added had its
       // history found by the archive walk or an earlier recovery, and asking
       // again would spend a request to learn nothing. A play from AFTER is not
       // that evidence: a re-added film played again before this pass reaches
@@ -184,7 +190,11 @@ describe("recoverHistoryForNewItems", () => {
       expect(sql).toContain("NOT EXISTS");
       expect(sql).toContain('"WatchHistory"');
       expect(sql).toContain("'TRACEARR'");
-      expect(sql).toContain('wh."watchedAt" < mi."createdAt"');
+      // Added by the media server, not when the row was created: a re-added
+      // film played before Librariarr synced it holds a new play older than
+      // its row. The row's time only when the server reported none.
+      expect(sql).toContain('wh."watchedAt" < COALESCE(mi."addedAt", mi."createdAt")');
+      expect(sql).toContain('SELECT mi."id", mi."ratingKey", mi."addedAt"');
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
     });
@@ -714,6 +724,39 @@ describe("recoverHistoryForNewItems", () => {
       // both answers carry.
       const imported = m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[];
       expect(imported.map((r) => r.id).sort()).toEqual(["chain-new", "chain-new", "chain-old"]);
+    });
+
+    it("measures 'before it was added' from the server's add time, not the row's", async () => {
+      // Re-added on the server, watched again, and only then synced: the new
+      // play is older than the row but newer than the add, so it is not one
+      // of the plays the item kept.
+      const createdAt = new Date(LATER.getTime() + 24 * 60 * 60 * 1000);
+      candidates = [
+        { id: "item-1", ratingKey: "9999", addedAt: ADDED_AT, createdAt, title: "Re-added Film", tmdbId: "603", imdbId: null },
+      ];
+      const newPlay = play("chain-new", TRACEARR_SERVER_ID, LATER);
+      m.getHistoryForItem
+        .mockResolvedValueOnce([newPlay])
+        .mockResolvedValueOnce([newPlay, play("chain-old", TRACEARR_SERVER_ID, EARLIER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+      expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({ tmdbId: "603", imdbId: null });
+    });
+
+    it("measures from the row's creation when the server reported no add time", async () => {
+      // `addedAt` NULL: the same play is from before the row, so the key's
+      // answer already holds the item's history.
+      const createdAt = new Date(LATER.getTime() + 24 * 60 * 60 * 1000);
+      candidates = [
+        { id: "item-1", ratingKey: "9999", addedAt: null, createdAt, title: "Film", tmdbId: "603", imdbId: null },
+      ];
+      m.getHistoryForItem.mockResolvedValueOnce([play("chain-new", TRACEARR_SERVER_ID, LATER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
     });
 
     it("does not count another server's earlier play as one the item kept", async () => {

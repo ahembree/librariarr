@@ -147,7 +147,9 @@ interface RecoverNewItemHistoryResult {
 interface CandidateItem {
   id: string;
   ratingKey: string;
-  /** When this row was created — what "played before it was added" is measured against. */
+  /** When the media server added it — see `addedTimeOf`. */
+  addedAt: Date | null;
+  /** When this row was created: what the candidate window measures. */
   createdAt: Date;
   tmdbId: string | null;
   imdbId: string | null;
@@ -281,8 +283,9 @@ export async function recoverHistoryForNewItems(
       // "From before it was added", not "any": a re-added film is often played
       // again before this pass reaches it, and the forward pass has then
       // already imported that new play under the new key — whose plays are
-      // all newer than the row. Asking the key alone would find that play and
-      // stop, and the earlier plays (and earlier watchers) would stay lost.
+      // all newer than the re-add (`addedTimeOf`). Asking the key alone would
+      // find that play and stop, and the earlier plays (and earlier watchers)
+      // would stay lost.
       //
       // Only TMDB and IMDB, and never for an episode — the same rule as the
       // resolver's own fallback (`resolveMediaItemId`), which these records go
@@ -291,7 +294,7 @@ export async function recoverHistoryForNewItems(
       // return plays of whatever else happens to carry that number, and the
       // two catalogues disagree about a film's TVDB id. Deduped per run so two
       // copies of one film cost one request.
-      const addedAt = new Date(candidate.createdAt).getTime();
+      const addedAt = addedTimeOf(candidate);
       if (!holdsPlayBefore(records, tracearrServerId, addedAt)) {
         const providerKey = providerIdentityKey(candidate);
         if (providerKey && !queriedProviders.has(providerKey)) {
@@ -418,13 +421,18 @@ export async function recoverHistoryForNewItems(
  * Recently added items on this server that hold no Tracearr play from before
  * they were added.
  *
- * A play from BEFORE the row was created can only have come from the archive
+ * A play from BEFORE the item was added can only have come from the archive
  * walk or an earlier recovery, so the item's history was found. A play from
  * after is not evidence of that: a re-added item played again before this pass
  * reaches it holds exactly that newer play, imported by the forward pass, while
  * its earlier plays are still missing. Such an item stays a candidate until
  * Tracearr has been asked about it — see `answeredItems`, which excludes the
  * ones it has answered for.
+ *
+ * "Added" is the media server's add time, not the row's (`addedTimeOf`). The
+ * window, though, stays on the row's `createdAt`: it bounds the items that
+ * arrived in Librariarr after the archive walk had passed them, which is when
+ * the row appeared, whenever the server added the file.
  *
  * `NOT EXISTS` rather than a join so an item with many plays is not multiplied,
  * and scoped to `source = 'TRACEARR'` on purpose: a leftover NATIVE row is not
@@ -443,7 +451,7 @@ async function findCandidates(
   const answered = liveAnsweredIds(now);
 
   return prisma.$queryRawUnsafe<CandidateItem[]>(
-    `SELECT mi."id", mi."ratingKey", mi."createdAt", mi."title", mi."type"::text AS "type",
+    `SELECT mi."id", mi."ratingKey", mi."addedAt", mi."createdAt", mi."title", mi."type"::text AS "type",
             mi."parentTitle", mi."seasonNumber", mi."episodeNumber",
             MAX(CASE WHEN UPPER(e."source") = 'TMDB' THEN e."externalId" END) AS "tmdbId",
             MAX(CASE WHEN UPPER(e."source") = 'IMDB' THEN e."externalId" END) AS "imdbId"
@@ -457,7 +465,7 @@ async function findCandidates(
                 FROM "WatchHistory" wh
                WHERE wh."mediaItemId" = mi."id"
                  AND wh."source" = 'TRACEARR'
-                 AND wh."watchedAt" < mi."createdAt"
+                 AND wh."watchedAt" < COALESCE(mi."addedAt", mi."createdAt")
             )
         AND NOT (mi."id" = ANY($4::text[]))
       -- Newest first: when there are more candidates than the cap allows, the
@@ -471,6 +479,22 @@ async function findCandidates(
     cap,
     answered,
   );
+}
+
+/**
+ * When the item was added, in ms — what "a play from before it was added" is
+ * measured against: the media server's add time (`MediaItem.addedAt`), or the
+ * row's `createdAt` when the server reported none.
+ *
+ * Not the row's own time first. A re-added film played before Librariarr
+ * synced it holds a new play OLDER than its row: measured against `createdAt`,
+ * that play read as history from before the add, so the item was no candidate
+ * and its earlier plays were never asked for. Between the server's add and the
+ * row's creation every play is new. `findCandidates` measures the same way
+ * (`COALESCE("addedAt", "createdAt")`).
+ */
+function addedTimeOf(candidate: CandidateItem): number {
+  return new Date(candidate.addedAt ?? candidate.createdAt).getTime();
 }
 
 /** Whether every candidate is in the index, under its own rating key. */

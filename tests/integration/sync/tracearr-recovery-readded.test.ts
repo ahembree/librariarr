@@ -106,11 +106,24 @@ async function setup() {
   return { server, lib };
 }
 
-async function addMovie(libraryId: string, ratingKey: string, tmdbId: string, addedAgo: number) {
+/**
+ * A film the media server added `addedAgo` ms ago, whose row the sync created
+ * `createdAgo` ms ago — by default at the same moment.
+ */
+async function addMovie(
+  libraryId: string,
+  ratingKey: string,
+  tmdbId: string,
+  addedAgo: number,
+  createdAgo = addedAgo,
+) {
   const item = await createTestMediaItem(libraryId, { ratingKey, title: ratingKey });
   await prisma.mediaItem.update({
     where: { id: item.id },
-    data: { createdAt: new Date(Date.now() - addedAgo) },
+    data: {
+      addedAt: new Date(Date.now() - addedAgo),
+      createdAt: new Date(Date.now() - createdAgo),
+    },
   });
   await prisma.mediaItemExternalId.create({
     data: { mediaItemId: item.id, source: "TMDB", externalId: tmdbId },
@@ -174,6 +187,46 @@ describe("recovering a re-added item that was played again first", () => {
       { sourceEventId: "chain-rewatch", serverUsername: "weingart" },
     ]);
     expect(fake.asked).toEqual([{ ratingKey: "rk-new" }, { tmdbId: "603", imdbId: null }]);
+  });
+
+  it("recovers the earlier plays of a film watched again before Librariarr synced it", async () => {
+    const { server, lib } = await setup();
+    // Re-added on the server three days ago and watched the next day; the
+    // sync only created its row yesterday. The forward pass has imported the
+    // rewatch — older than the row, newer than the re-add.
+    const film = await addMovie(lib.id, "rk-new", "603", 3 * DAY, DAY);
+    const rewatch = new Date(Date.now() - 2 * DAY);
+    await storePlay(server.id, film.id, "chain-rewatch", rewatch);
+    fake.plays = [
+      play("chain-rewatch", "rk-new", rewatch, "u1", 603),
+      play("chain-first-watch", "rk-old", new Date(Date.now() - 60 * DAY), "u2", 603),
+    ];
+
+    await recoverHistoryForNewItems(server.id);
+
+    const rows = await prisma.watchHistory.findMany({
+      where: { mediaItemId: film.id },
+      select: { sourceEventId: true, serverUsername: true },
+      orderBy: { watchedAt: "asc" },
+    });
+    expect(rows).toEqual([
+      { sourceEventId: "chain-first-watch", serverUsername: "alice" },
+      { sourceEventId: "chain-rewatch", serverUsername: "weingart" },
+    ]);
+    expect(fake.asked).toEqual([{ ratingKey: "rk-new" }, { tmdbId: "603", imdbId: null }]);
+  });
+
+  it("measures from the row's creation when the server reported no add time", async () => {
+    const { server, lib } = await setup();
+    const film = await addMovie(lib.id, "rk-1", "550", DAY);
+    await prisma.mediaItem.update({ where: { id: film.id }, data: { addedAt: null } });
+    // Stored before the row was created: the item's history was found.
+    await storePlay(server.id, film.id, "chain-old", new Date(Date.now() - 2 * DAY));
+
+    const result = await recoverHistoryForNewItems(server.id);
+
+    expect(result).toEqual({ checked: 0, imported: 0 });
+    expect(fake.asked).toEqual([]);
   });
 
   it("does not ask about an item whose history from before it was added is already stored", async () => {
