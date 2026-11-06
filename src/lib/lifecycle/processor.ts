@@ -35,7 +35,7 @@ import { coverageOf, uncoveredEpisodes } from "@/lib/lifecycle/episode-coverage"
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
-import { actionHoldOf } from "@/lib/lifecycle/held-actions";
+import { HOLD_ACTION_SELECT, actionHoldFor } from "@/lib/lifecycle/held-actions";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
@@ -336,6 +336,7 @@ export async function processLifecycleRules(userId?: string) {
         ruleSet.serverIds,
         ruleSet.arrInstanceId,
         ruleSet.seriesScope,
+        ruleSet,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
@@ -390,6 +391,7 @@ export async function processLifecycleRules(userId?: string) {
           addImportExclusion: ruleSet.addImportExclusion,
           addArrTags: ruleSet.addArrTags,
           removeArrTags: ruleSet.removeArrTags,
+          searchAfterAction: ruleSet.searchAfterAction,
           stickyMatches: ruleSet.stickyMatches,
           actionsHeldSince: ruleSet.actionsHeldSince,
         },
@@ -561,20 +563,24 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           rules: true,
           seriesScope: true,
           actionsHeldSince: true,
+          ...HOLD_ACTION_SELECT,
         },
       },
     },
   });
-  // Nor one whose rule set is held (`actionHoldOf`): its rules or servers
+  // Nor one whose rule set is held (`actionHoldFor`): its rules or servers
   // changed since its matches were detected (`actionsHeldSince`) — they are
-  // the old rules' until a detection run re-checks them — or it judges whole
-  // shows or artists on per-episode/per-track criteria, which detection skips
-  // until it is edited. Left out of the run untouched — still PENDING, dates
-  // unchanged, not cancelled by any check below — and logged, so a due action
-  // that did not run is explained.
+  // the old rules' until a detection run re-checks them — or a per-episode or
+  // per-track criterion could make a whole show or artist the target of its
+  // action (judged at series or artist scope, or followed by an action on the
+  // whole show or artist with the scope off — the rule set's, or this
+  // action's own snapshot of it), which detection skips until it is edited.
+  // Left out of the run untouched — still PENDING, dates unchanged, not
+  // cancelled by any check below — and logged, so a due action that did not
+  // run is explained.
   const heldRuleSets = new Map<string, string>();
   const loadedActions = dueActions.filter((a) => {
-    const hold = a.ruleSet ? actionHoldOf(a.ruleSet) : null;
+    const hold = a.ruleSet ? actionHoldFor(a.ruleSet, a) : null;
     if (!hold) return true;
     heldRuleSets.set(
       a.ruleSet!.name,
@@ -1026,18 +1032,20 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         },
         select: {
           id: true,
-          ruleSet: { select: { type: true, seriesScope: true, rules: true, actionsHeldSince: true } },
+          ruleSet: {
+            select: { type: true, seriesScope: true, rules: true, actionsHeldSince: true, ...HOLD_ACTION_SELECT },
+          },
         },
       });
       if (!current) {
         skip("it was cancelled, rescheduled, changed or executed elsewhere after this run started");
         continue;
       }
-      // A hold set since the run loaded the action (`actionHoldOf`) holds it
+      // A hold set since the run loaded the action (`actionHoldFor`) holds it
       // from here on, even mid-run: an edit that changed what the rule set
-      // matches, or rules judging whole shows on per-episode criteria. (The
-      // relation filter above already requires the rule set.)
-      if (current.ruleSet && actionHoldOf(current.ruleSet)) {
+      // matches, or a per-episode criterion that could make a whole show its
+      // target. (The relation filter above already requires the rule set.)
+      if (current.ruleSet && actionHoldFor(current.ruleSet, action)) {
         skip(`rule set "${action.ruleSet?.name ?? action.ruleSetId}" was held after this run started`);
         continue;
       }

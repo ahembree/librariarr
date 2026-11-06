@@ -17,16 +17,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from "@/components/rule-builder";
+import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules, groupScopeGateOf } from "@/components/rule-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules, groupScopeViolation } from "@/lib/conditions";
 import {
+  ActionTypeSelect,
   BlockedReason,
   EvaluationScopeCard,
   SaveRuleSetButton,
+  actionTypeOptionStates,
   groupScopeBlockedReason,
+  wholeRecordSwitchReason,
   type ScopeConfig,
 } from "@/components/rule-scope-gate";
 import { responseErrorMessage } from "@/lib/api/error-message";
@@ -397,22 +400,50 @@ export function LifecycleRulePage({
   // is the SAME shared predicate the server-side guard triggers on, so the
   // banner can't come to a different conclusion about which rules count.
   const ruleUsesPlayActivity = useMemo(() => hasPlayActivityRules(groups), [groups]);
-  // With series or artist scope on, a rule judges a whole show or artist, so
-  // criteria describing one episode or track are not allowed — the same
-  // predicate the server refuses the save with and skips detection on
-  // (`groupScopeViolation`). While the rules break it, the scope card warns
-  // and offers to turn the scope off, and Save, Preview and Test Media stay
-  // off with the reason.
+  // A criterion describing one episode or track may never make a whole show
+  // or artist the action's target: with series or artist scope on a rule
+  // judges a whole show or artist, and with it off an action acting on the
+  // whole show or artist (Delete from Sonarr, Arr tags, …) may not follow
+  // such a criterion either — the same predicate the server refuses the save
+  // with and skips detection on (`groupScopeViolation`). While the rule set
+  // breaks it, the scope card warns with the valid ways out, and Save, Preview
+  // and Test Media stay off with the reason.
   const hasScope = !!scopeConfig;
+  // The action as a save would send it (a whole-record delete sends no tags).
+  const savedAction = useMemo(
+    () => ({
+      actionEnabled,
+      actionType: actionType || null,
+      addArrTags: deletesArrRecord(actionType) ? [] : addArrTags,
+      removeArrTags: deletesArrRecord(actionType) ? [] : removeArrTags,
+      searchAfterAction,
+    }),
+    [actionEnabled, actionType, addArrTags, removeArrTags, searchAfterAction],
+  );
   const scopeViolation = useMemo(
-    () => (hasScope ? groupScopeViolation(mediaType, seriesScope, groups) : null),
-    [hasScope, mediaType, seriesScope, groups],
+    () => (hasScope ? groupScopeViolation(mediaType, seriesScope, groups, savedAction) : null),
+    [hasScope, mediaType, seriesScope, groups, savedAction],
   );
   const scopeBlockedReason = scopeViolation ? groupScopeBlockedReason(scopeViolation) : null;
-  // The scope the builder offers criteria for: per-episode/per-track ones are
-  // disabled while it judges whole shows or artists.
-  const builderGroupScope =
-    hasScope && seriesScope && (mediaType === "SERIES" || mediaType === "MUSIC") ? mediaType : null;
+  // The builder's gate: per-episode/per-track criteria are disabled while the
+  // rule set judges whole shows or artists, or while its action acts on them.
+  const builderGroupScope = useMemo(
+    () => (hasScope ? groupScopeGateOf(mediaType, seriesScope, savedAction) : null),
+    [hasScope, mediaType, seriesScope, savedAction],
+  );
+  // With the scope off, an action on the whole show or artist may not follow
+  // per-episode/per-track criteria: the action picker offers such actions,
+  // and the Arr tags switch and Lidarr's search after (which make any action
+  // act on the whole record), disabled with the reason while they would.
+  const actionTypeOptions = useMemo(
+    () => actionTypeOptionStates(hasScope ? mediaType : "MOVIE", seriesScope, groups, actionTypes, !!arrInstanceId),
+    [hasScope, mediaType, seriesScope, groups, actionTypes, arrInstanceId],
+  );
+  const tagsBlockedReason = hasScope ? wholeRecordSwitchReason(mediaType, seriesScope, groups, "Arr tags") : null;
+  const searchAfterBlockedReason =
+    hasScope && actionType === "DELETE_FILES_LIDARR"
+      ? wholeRecordSwitchReason(mediaType, seriesScope, groups, "Search after")
+      : null;
 
   // Recycle bin safety check
   const [recycleBinStatus, setRecycleBinStatus] = useState<{
@@ -1728,43 +1759,13 @@ export function LifecycleRulePage({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
                     <Label>Action type</Label>
-                    <Select
-                      value={actionType}
-                      onValueChange={setActionType}
-                    >
-                      <SelectTrigger className="mt-1.5">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {actionTypes.map((opt) => {
-                          const needsArr = opt.value !== "DO_NOTHING";
-                          const disabled = needsArr && !arrInstanceId;
-                          if (disabled) {
-                            return (
-                              <TooltipProvider key={opt.value}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <div>
-                                      <SelectItem value={opt.value} disabled>
-                                        {opt.label}
-                                      </SelectItem>
-                                    </div>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left">
-                                    Select an Arr server above to enable this action
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            );
-                          }
-                          return (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <ActionTypeSelect value={actionType} onValueChange={setActionType} options={actionTypeOptions} />
+                    {scopeViolation?.judgement === "member" && (
+                      <p role="alert" className="mt-2 text-xs text-amber flex items-start gap-1.5">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        {scopeBlockedReason}
+                      </p>
+                    )}
                     {recycleBinStatus?.enabled === false && isDestructiveAction(actionType) && (
                       <p className="mt-2 text-xs text-amber flex items-center gap-1.5">
                         <AlertTriangle className="h-3.5 w-3.5" />
@@ -1866,11 +1867,16 @@ export function LifecycleRulePage({
 
                 {actionType.includes("DELETE_FILES") && (
                   <div className="flex items-center gap-3">
-                    <Switch
-                      id="search-after-file-delete"
-                      checked={searchAfterAction}
-                      onCheckedChange={setSearchAfterAction}
-                    />
+                    {/* Lidarr searches the whole artist after a file delete:
+                        offered off while it would follow per-track criteria. */}
+                    <BlockedReason reason={!searchAfterAction ? searchAfterBlockedReason : null}>
+                      <Switch
+                        id="search-after-file-delete"
+                        checked={searchAfterAction}
+                        onCheckedChange={setSearchAfterAction}
+                        disabled={!searchAfterAction && !!searchAfterBlockedReason}
+                      />
+                    </BlockedReason>
                     <Label htmlFor="search-after-file-delete">
                       Search for new copy after file deletion
                     </Label>
@@ -1911,20 +1917,25 @@ export function LifecycleRulePage({
 
                 {/* Manage Tags */}
                 <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      id="manage-tags"
-                      checked={manageTagsEnabled}
-                      onCheckedChange={(checked) => {
-                        setManageTagsEnabled(checked);
-                        if (!checked) {
-                          setAddArrTags([]);
-                          setRemoveArrTags([]);
-                        }
-                      }}
-                      disabled={deletesArrRecord(actionType) || !arrInstanceId}
-                    />
-                    <Label htmlFor="manage-tags" className={(deletesArrRecord(actionType) || !arrInstanceId) ? "text-muted-foreground" : ""}>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Tags are set on the whole series or artist: offered
+                        off while they would follow per-episode/per-track
+                        criteria (an existing tag list can still be cleared). */}
+                    <BlockedReason reason={!manageTagsEnabled && !deletesArrRecord(actionType) && arrInstanceId ? tagsBlockedReason : null}>
+                      <Switch
+                        id="manage-tags"
+                        checked={manageTagsEnabled}
+                        onCheckedChange={(checked) => {
+                          setManageTagsEnabled(checked);
+                          if (!checked) {
+                            setAddArrTags([]);
+                            setRemoveArrTags([]);
+                          }
+                        }}
+                        disabled={deletesArrRecord(actionType) || !arrInstanceId || (!manageTagsEnabled && !!tagsBlockedReason)}
+                      />
+                    </BlockedReason>
+                    <Label htmlFor="manage-tags" className={(deletesArrRecord(actionType) || !arrInstanceId || (!manageTagsEnabled && !!tagsBlockedReason)) ? "text-muted-foreground" : ""}>
                       Manage Tags
                     </Label>
                     {deletesArrRecord(actionType) && (
@@ -1932,6 +1943,9 @@ export function LifecycleRulePage({
                     )}
                     {!deletesArrRecord(actionType) && !arrInstanceId && (
                       <span className="text-xs text-muted-foreground">(select a {arrServiceName} server above)</span>
+                    )}
+                    {!deletesArrRecord(actionType) && arrInstanceId && !manageTagsEnabled && tagsBlockedReason && (
+                      <span className="text-xs text-muted-foreground">(tags apply to the whole {mediaType === "MUSIC" ? "artist" : "show"})</span>
                     )}
                   </div>
 

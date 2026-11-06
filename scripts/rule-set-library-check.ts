@@ -115,10 +115,15 @@ export function ruleSetProblems(ruleSet: RuleSetExport): string[] {
   // `seriesScope`; the Movies tab has none and its importer ignores it.
   if (SCOPED_TYPES.has(ruleSet.type) && typeof ruleSet.seriesScope !== "boolean") fail(`a ${ruleSet.type} rule set needs seriesScope`);
   if (!SCOPED_TYPES.has(ruleSet.type) && "seriesScope" in ruleSet) fail("seriesScope only applies to SERIES and MUSIC rule sets");
-  // A rule set judging whole shows or artists may not use a criterion that
-  // describes one episode or track: saving it is refused, so the library must
-  // not offer one.
-  const scopeViolation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope !== false, ruleSet.rules);
+  // A criterion that describes one episode or track may not make a whole show
+  // or artist an action's target — judged at series or artist scope, or
+  // followed by an action on the whole show or artist with the scope off:
+  // saving it is refused, so the library must not offer one. Judged with the
+  // action armed, as the reader will arm it once the preview looks right.
+  const scopeViolation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope !== false, ruleSet.rules, {
+    ...ruleSet,
+    actionEnabled: true,
+  });
   if (scopeViolation) fail(groupScopeSaveError(scopeViolation));
 
   // The library never arms an action: the reader previews first.

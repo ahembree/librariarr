@@ -10,10 +10,12 @@ import {
   getConditionField,
   isValuelessOperator,
   isBlockedAtGroupScope,
+  wholeRecordActionOf,
   GROUP_SCOPE_TERMS,
   type Condition,
   type ConditionGroup,
   type ConditionLogic,
+  type GroupScopeAction,
   type GroupScopeType,
   type LibraryType,
   type StreamQueryStreamType,
@@ -49,18 +51,51 @@ export function validateAllRules(groups: LifecycleRuleGroup[]): boolean {
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
+/** The builder's gate (`FieldContext.groupScope`), or null when nothing is gated. */
+type BuilderGate = NonNullable<FieldContext["groupScope"]>;
+
 /**
- * The scope the rule set judges whole shows or artists in, while it is on
- * (`FieldContext.groupScope`): criteria describing one episode or track are
- * not allowed there (`isBlockedAtGroupScope`, src/lib/conditions/group-scope.ts).
+ * The gate while a criterion of one episode or track could make a whole show
+ * or artist the action's target (`FieldContext.groupScope`): such criteria
+ * are not allowed then (`isBlockedAtGroupScope`, src/lib/conditions/group-scope.ts).
  */
-function groupScopeOf(ctx: FieldContext): GroupScopeType | null {
-  return ctx.groupScope === "SERIES" || ctx.groupScope === "MUSIC" ? ctx.groupScope : null;
+function groupScopeOf(ctx: FieldContext): BuilderGate | null {
+  const gate = ctx.groupScope;
+  return gate && (gate.type === "SERIES" || gate.type === "MUSIC") ? gate : null;
 }
 
-function groupScopeFieldTooltip(scope: GroupScopeType): string {
-  const t = GROUP_SCOPE_TERMS[scope];
-  return `Describes one ${t.member}, not the whole ${t.group} — turn off "${t.toggle}" to use it`;
+function isGatedField(field: string, gate: BuilderGate | null): boolean {
+  return !!gate && isBlockedAtGroupScope(field, gate.type, gate.judgement);
+}
+
+/**
+ * Why a criterion is not offered and what would let it be used: `what` says
+ * what it reads ("Describes one episode"), `object` is "it" or "them", and
+ * `scopeOnAllows` whether the whole show or artist answers it itself (turning
+ * the scope on would then do).
+ */
+function gateReason(gate: BuilderGate, what: string, object: string, scopeOnAllows: boolean, notWhole: boolean): string {
+  const t = GROUP_SCOPE_TERMS[gate.type];
+  const memberAction = `pick an action that acts only on the matched ${t.member}s`;
+  if (gate.judgement === "member") {
+    return scopeOnAllows
+      ? `${what}, and "${gate.wholeRecordAction}" acts on the whole ${t.group} — turn on "${t.toggle}" to judge the whole ${t.group} by ${object}, or ${memberAction}`
+      : `${what}, and "${gate.wholeRecordAction}" acts on the whole ${t.group} — ${memberAction} to use ${object}`;
+  }
+  const head = notWhole ? `${what}, not the whole ${t.group}` : what;
+  return gate.wholeRecordAction
+    ? `${head} — turn off "${t.toggle}" and ${memberAction} to use ${object}`
+    : `${head} — turn off "${t.toggle}" to use ${object}`;
+}
+
+function groupScopeFieldTooltip(field: string, gate: BuilderGate): string {
+  return gateReason(
+    gate,
+    `Describes one ${GROUP_SCOPE_TERMS[gate.type].member}`,
+    "it",
+    !isBlockedAtGroupScope(field, gate.type, "group"),
+    true,
+  );
 }
 
 function createRule(): LifecycleRule {
@@ -87,7 +122,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   }),
 
   isFieldDisabled: (field, ctx) => {
-    if (groupScopeOf(ctx) && isBlockedAtGroupScope(field)) return true;
+    if (isGatedField(field, groupScopeOf(ctx))) return true;
     const def = getConditionField(field);
     if (!def) return false;
     if (def.requiresArr && ctx.arrConnected === false) return true;
@@ -101,8 +136,8 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   },
 
   getDisabledTooltip: (field, ctx) => {
-    const scope = groupScopeOf(ctx);
-    if (scope && isBlockedAtGroupScope(field)) return groupScopeFieldTooltip(scope);
+    const gate = groupScopeOf(ctx);
+    if (gate && isGatedField(field, gate)) return groupScopeFieldTooltip(field, gate);
     const def = getConditionField(field);
     if (!def) return null;
     if (def.requiresArr && ctx.arrConnected === false)
@@ -123,11 +158,12 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   isValuelessOperator,
 
   getFieldUnreachableTooltip: (field, ctx) => {
-    // A rule already using a criterion the scope does not allow (a rule set
-    // saved before the rule, an import, or the scope just turned on): marked
-    // on its row, beside the editor's warning listing them all.
-    const scope = groupScopeOf(ctx);
-    if (scope && isBlockedAtGroupScope(field)) return groupScopeFieldTooltip(scope);
+    // A rule already using a criterion the gate does not allow (a rule set
+    // saved before the rule, an import, the scope just turned on or a
+    // whole-show action just picked): marked on its row, beside the editor's
+    // warning listing them all.
+    const gate = groupScopeOf(ctx);
+    if (gate && isGatedField(field, gate)) return groupScopeFieldTooltip(field, gate);
     const def = getConditionField(field);
     if (!def) return null;
     // arrUnreachable / seerrUnreachable mean "configured but currently
@@ -150,12 +186,13 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
 
   // Stream query support
   getStreamQueryDisabledTooltip: (ctx) => {
-    const scope = groupScopeOf(ctx);
-    if (!scope) return null;
-    const t = GROUP_SCOPE_TERMS[scope];
-    return scope === "SERIES"
-      ? `Stream queries read one ${t.member}'s tracks — turn off "${t.toggle}" to use them`
-      : `Stream queries read one ${t.member}'s streams — turn off "${t.toggle}" to use them`;
+    const gate = groupScopeOf(ctx);
+    if (!gate) return null;
+    const t = GROUP_SCOPE_TERMS[gate.type];
+    const what = gate.type === "SERIES"
+      ? `Stream queries read one ${t.member}'s tracks`
+      : `Stream queries read one ${t.member}'s streams`;
+    return gateReason(gate, what, "them", false, false);
   },
   streamQueryFields: STREAM_QUERY_FIELDS,
   streamQuerySections: STREAM_QUERY_SECTIONS,
@@ -196,11 +233,28 @@ interface RuleBuilderProps {
   seerrUnreachable?: boolean;
   libraryType?: LibraryType;
   /**
-   * The scope the rule set judges whole shows or artists in ("Match against
-   * entire series" / "artist" on), or null: criteria describing one episode or
-   * track and stream queries are then offered disabled, with the reason.
+   * The gate while a criterion of one episode or track could make a whole
+   * show or artist the action's target (`groupScopeGateOf`), or null: the
+   * criteria that judgement may not use and stream queries are then offered
+   * disabled, with the reason.
    */
-  groupScope?: GroupScopeType | null;
+  groupScope?: BuilderGate | null;
+}
+
+/**
+ * The builder's gate for a rule set's scope and action: with the scope on,
+ * the group judgement; with it off, the member judgement while its armed
+ * action acts on the whole show or artist; otherwise none.
+ */
+export function groupScopeGateOf(
+  type: string,
+  seriesScope: boolean,
+  action: GroupScopeAction | null,
+): BuilderGate | null {
+  if (type !== "SERIES" && type !== "MUSIC") return null;
+  const wholeRecordAction = wholeRecordActionOf(type, action);
+  if (seriesScope) return { type: type as GroupScopeType, judgement: "group", wholeRecordAction };
+  return wholeRecordAction ? { type: type as GroupScopeType, judgement: "member", wholeRecordAction } : null;
 }
 
 export function RuleBuilder({

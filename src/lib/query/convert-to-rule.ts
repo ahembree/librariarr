@@ -1,6 +1,10 @@
 import type { z } from "zod/v4";
 import type { ConditionGroup, LibraryType } from "@/lib/conditions";
-import { groupScopeBlockedLabels, groupScopeViolation } from "@/lib/conditions/group-scope";
+import {
+  findGroupScopeBlockedCriteria,
+  groupScopeBlockedLabels,
+  groupScopeViolation,
+} from "@/lib/conditions/group-scope";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
 import {
@@ -100,10 +104,15 @@ export interface ConvertedScope {
  * - Music: artist scope on, the rule set default.
  *
  * Either is turned off when the query uses a criterion a whole-show or
- * whole-artist rule may not use (`groupScopeViolation`: Resolution, Year, a
- * stream query, …). The query evaluates those per episode or track, so with
- * the scope off the rule set selects what the query listed; with it on,
- * saving would be refused.
+ * whole-artist rule may not use (`groupScopeViolation`: Resolution, Year,
+ * Genre, a stream query, …). The query evaluates those per episode or track,
+ * so with the scope off the rule set selects what the query listed; with it
+ * on, saving would be refused.
+ *
+ * The rule set is created with its action off and none chosen
+ * (`convertQueryToRuleSetBody`), so no conversion arms an action that acts
+ * on the whole show or artist; the rule editor's gate then keeps one from
+ * following the per-episode criteria (`convertedWholeRecordLimit`).
  */
 export function convertedScope(
   query: QueryDefinition,
@@ -115,6 +124,23 @@ export function convertedScope(
   const violation = groupScopeViolation(targetLibraryType, wanted, cleanedGroups);
   if (!violation) return { seriesScope: wanted, blockedLabels: [] };
   return { seriesScope: false, blockedLabels: groupScopeBlockedLabels(violation) };
+}
+
+/**
+ * With the converted scope off, the query's criteria that keep an action on
+ * the whole show or artist (Delete from Sonarr, Change Quality Profile, Arr
+ * tags, …) off the rule set — every criterion of one episode or track
+ * (`groupScopeViolation`'s member judgement) — or null when there are none or
+ * the scope is on. The dialog says so before the rule set is created.
+ */
+export function convertedWholeRecordLimit(
+  targetLibraryType: LibraryType,
+  scope: ConvertedScope | null,
+  cleanedGroups: ConditionGroup[],
+): string[] | null {
+  if (!scope || scope.seriesScope || targetLibraryType === "MOVIE") return null;
+  const blocked = findGroupScopeBlockedCriteria(cleanedGroups, targetLibraryType, "member");
+  return blocked ? groupScopeBlockedLabels(blocked) : null;
 }
 
 /**

@@ -32,6 +32,8 @@ interface RuleSetConfig {
   addImportExclusion: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  /** Read by the group-scope gate: Lidarr's search after a file delete searches the whole artist. */
+  searchAfterAction?: boolean;
   stickyMatches: boolean;
   /**
    * `RuleSet.actionsHeldSince`, read in the same row as `rules`. Evaluating
@@ -320,6 +322,7 @@ export async function detectAndSaveMatches(
     ruleSet.serverIds,
     ruleSet.arrInstanceId,
     ruleSet.seriesScope,
+    ruleSet,
   );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
@@ -954,7 +957,7 @@ export async function runDetection(
       // manual "Re-evaluate All" path refuse rule sets the scheduled path
       // happily evaluates — the same rule set, a different answer depending on
       // how it was triggered.
-      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId, rs.seriesScope);
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId, rs.seriesScope, rs);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {
@@ -997,6 +1000,7 @@ export async function runDetection(
           addImportExclusion: rs.addImportExclusion,
           addArrTags: rs.addArrTags,
           removeArrTags: rs.removeArrTags,
+          searchAfterAction: rs.searchAfterAction,
           stickyMatches: rs.stickyMatches,
           actionsHeldSince: rs.actionsHeldSince,
         },

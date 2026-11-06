@@ -15,7 +15,7 @@ import {
 } from "@/lib/auth/password-rules";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 import { isForwardAuthCredentialHeader } from "@/lib/sso/forward-secret";
-import { groupScopeSaveError, groupScopeViolation } from "@/lib/conditions/group-scope";
+import { groupScopeSaveError, groupScopeViolation, type GroupScopeAction } from "@/lib/conditions/group-scope";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -472,27 +472,52 @@ export const ruleSetCreateSchema = z.object({
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
 }).superRefine((data, ctx) => {
-  // A Series or Music rule set judging whole shows or artists may not use a
-  // criterion that describes one episode or track (`groupScopeViolation`).
-  // The scope is on unless the request turns it off, as the route creates it.
-  const violation = groupScopeViolation(data.type, data.seriesScope ?? true, data.rules);
-  if (violation) ctx.addIssue({ code: "custom", path: ["rules"], message: groupScopeSaveError(violation) });
+  // A criterion that describes one episode or track may never make a whole
+  // show or artist an action's target (`groupScopeViolation`): not with the
+  // scope on, and not with it off under an action that acts on the whole show
+  // or artist. The scope is on unless the request turns it off, and the
+  // action off unless it turns it on, as the route creates them.
+  const violation = groupScopeViolation(data.type, data.seriesScope ?? true, data.rules, {
+    ...data,
+    actionEnabled: data.actionEnabled ?? false,
+  });
+  if (violation) {
+    ctx.addIssue({
+      code: "custom",
+      path: [violation.judgement === "group" ? "rules" : "actionType"],
+      message: groupScopeSaveError(violation),
+    });
+  }
 });
+
+/** A rule set's state as far as `groupScopeViolation` reads it. */
+export interface RuleSetScopeState extends GroupScopeAction {
+  type: string;
+  seriesScope: boolean;
+  rules: unknown;
+}
 
 /**
  * The refusal of a rule set update whose merged state — the request over the
- * stored rule set, since a PUT sends only what changed — judges whole shows
- * or artists on criteria that describe one episode or track
- * (`groupScopeViolation`): the same 400 `ruleSetCreateSchema` answers a
- * create with, which only the route can decide for an update. `path` names
- * what the request changed: its rules, or only its scope. Null when allowed.
+ * stored rule set, since a PUT sends only what changed — lets a criterion
+ * that describes one episode or track make a whole show or artist its
+ * action's target (`groupScopeViolation`): the same 400 `ruleSetCreateSchema`
+ * answers a create with, which only the route can decide for an update.
+ * `path` names what the request changed. With `actionCausedOnly` (a request
+ * changing the action but not the rules or scope) only a violation the action
+ * makes is refused — the scope off and the action acting on the whole show or
+ * artist — so an action change on a rule set already invalid for its scope
+ * (saved before the rule) stays allowed, as turning its action off must.
+ * Null when allowed.
  */
 export function ruleSetScopeError(
-  merged: { type: string; seriesScope: boolean; rules: unknown },
-  path: "rules" | "seriesScope",
+  merged: RuleSetScopeState,
+  path: string,
+  opts: { actionCausedOnly?: boolean } = {},
 ): NextResponse | null {
-  const violation = groupScopeViolation(merged.type, merged.seriesScope, merged.rules);
+  const violation = groupScopeViolation(merged.type, merged.seriesScope, merged.rules, merged);
   if (!violation) return null;
+  if (opts.actionCausedOnly && violation.judgement !== "member") return null;
   return NextResponse.json(
     { error: "Validation failed", details: [`${path}: ${groupScopeSaveError(violation)}`] },
     { status: 400 },

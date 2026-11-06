@@ -230,7 +230,9 @@ describe("Lifecycle Rules CRUD", () => {
         body: {
           name: "Full Rule",
           type: "SERIES",
-          rules: [dummyRule],
+          // With series scope off a Delete from Sonarr may follow only what
+          // every episode of a show answers alike, such as the show's name.
+          rules: [{ ...dummyRule, field: "parentTitle", operator: "contains", value: "Show" }],
           serverIds: [server.id],
           enabled: false,
           seriesScope: false,

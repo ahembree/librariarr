@@ -229,16 +229,17 @@ const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggrega
 // member's own values for those fields. NOT forms follow: "NOT Genre =
 // Anime" matches a show with at least one episode whose genres leave it out.
 //
-// Criteria that describe one file or one episode/track (Resolution, the
-// codecs, Year, the stream fields and queries, …) are not allowed at series or
-// artist scope at all (`groupScopeViolation`, group-scope.ts): saving refuses
-// them, detection skips a rule set holding them, and the group-scope engines
-// match nothing for one. The per-member fields left there — Genre, Studio,
-// Country, Content Rating, Label, Is Watchlisted — are show- or artist-level
-// metadata the sync gives every member, so judging through the members reads
-// the group's own value. `MEMBER_VALUE_COLUMNS` still lists every per-item
-// column: a match stores and reports the values of the member it matched
-// through.
+// Every per-member field is a criterion of one episode or track, which is not
+// allowed at series or artist scope at all (`groupScopeViolation`,
+// group-scope.ts — `GROUP_SCOPE_BLOCKED_FIELDS` holds every field this file
+// does not answer as a group value, the sync keeping none of them alike across
+// a show's episodes or an artist's tracks): saving refuses them, detection
+// skips a rule set holding them, and the group-scope engines match nothing for
+// one. So a rule set the gate admits reads no per-member field, and a group is
+// evaluated once (`readsMemberValues` false); judging through the members
+// stays for the rule sets the gate holds and for Test Media's explanations.
+// `MEMBER_VALUE_COLUMNS` still lists every per-item column: a match stores and
+// reports the values of the member it matched through.
 
 /**
  * Fields a group record answers with ONE value for the whole show or artist

@@ -101,7 +101,33 @@ describe("checkLifecycleRuleEvaluability", () => {
     });
 
     it("evaluates show-level criteria with the scope on", async () => {
-      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("genre"), ["s1"], null, true)).toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("title"), ["s1"], null, true)).toEqual({ evaluable: true });
+    });
+
+    it("skips one whose genre, content rating or studio is read at series scope: episodes carry their own", async () => {
+      for (const field of ["genre", "contentRating", "studio", "labels", "isWatchlisted"]) {
+        const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), ["s1"], null, true);
+        expect(result.evaluable, field).toBe(false);
+      }
+    });
+
+    it("skips one whose action acts on the whole show while its scope is off, with the reason", async () => {
+      const deleteSeries = { actionEnabled: true, actionType: "DELETE_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false };
+      const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false, deleteSeries);
+      expect(result).toEqual({
+        evaluable: false,
+        permanent: false,
+        reason: expect.stringMatching(/^This rule set's action \("Delete from Sonarr"\) acts on the whole show but follows per-episode criteria \(Resolution\) with series scope off/),
+      });
+      // An action on the matched episodes only, or the action turned off, is evaluated.
+      for (const action of [
+        { ...deleteSeries, actionType: "DELETE_FILES_SONARR" },
+        { ...deleteSeries, actionEnabled: false },
+      ]) {
+        expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false, action)).toEqual({ evaluable: true });
+      }
+      // Left out, only the scope is judged.
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false)).toEqual({ evaluable: true });
     });
   });
 

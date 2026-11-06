@@ -154,10 +154,11 @@ describe("OpenAPI document", () => {
     // Such a rule set (saved before it was refused, or restored) is skipped by
     // detection and its actions are held until it is edited.
     const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
-    expect(execute.description).toMatch(/uses per-episode or per-track criteria with series or artist scope on \(409: edit the rule set\)/);
-    expect(execute.responses?.["409"]).toMatch(/uses per-episode or per-track criteria with series or artist scope on/);
+    expect(execute.description).toMatch(/uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off \(409: edit the rule set\)/);
+    expect(execute.responses?.["409"]).toMatch(/uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off/);
     const listing = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/lifecycle/actions")!;
     expect(listing.description).toMatch(/`ruleSet\.scopeHoldReason` is set, a sentence, while its actions are held/);
+    expect(listing.description).toMatch(/or follows them with an action on the whole show or artist .* with the scope off/);
   });
 
   it("tells a client the actions listing says which rule sets are held", () => {

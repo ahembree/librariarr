@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  actionHoldFor,
   actionHoldOf,
   heldActionCount,
   heldActionsReason,
@@ -77,39 +78,82 @@ const PER_EPISODE = [{
 }];
 const SHOW_LEVEL = [{ ...PER_EPISODE[0], rules: [PER_EPISODE[0].rules[0]] }];
 const SCOPE_REASON = groupScopeHoldReason(groupScopeViolation("SERIES", true, PER_EPISODE)!);
+/** A rule set's action: Delete Files Only, which acts on the matched episodes. */
+const FILES = { actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false };
+/** Delete from Sonarr, which acts on the whole show. */
+const SERIES_DELETE = { ...FILES, actionType: "DELETE_SONARR" };
+const subject = (extra: Record<string, unknown>) =>
+  ({ type: "SERIES", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: null, ...FILES, ...extra }) as Parameters<typeof actionHoldOf>[0];
 
 describe("actionHoldOf", () => {
   it("holds a series- or artist-scoped rule set using per-episode/per-track criteria, with the reason", () => {
-    expect(actionHoldOf({ type: "SERIES", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: null })).toEqual({
+    expect(actionHoldOf(subject({}))).toEqual({ kind: "groupScope", reason: SCOPE_REASON });
+    expect(actionHoldOf(subject({ type: "MUSIC", actionType: "DELETE_FILES_LIDARR" }))?.kind).toBe("groupScope");
+  });
+
+  it("holds one whose action acts on the whole show while its scope is off, with the reason", () => {
+    const hold = actionHoldOf(subject({ seriesScope: false, ...SERIES_DELETE }));
+    expect(hold).toEqual({
       kind: "groupScope",
-      reason: SCOPE_REASON,
+      reason: groupScopeHoldReason(groupScopeViolation("SERIES", false, PER_EPISODE, SERIES_DELETE)!),
     });
-    expect(actionHoldOf({ type: "MUSIC", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: null })?.kind).toBe("groupScope");
+    expect(hold?.kind === "groupScope" && hold.reason).toMatch(/^This rule set's action \("Delete from Sonarr"\) acts on the whole show/);
+    for (const action of [
+      { actionType: "UNMONITOR_DELETE_FILES_SONARR" },
+      { actionType: "MONITOR_DELETE_FILES_SONARR" },
+      { actionType: "CHANGE_QUALITY_PROFILE_SONARR" },
+      { actionType: "DO_NOTHING", addArrTags: ["seen"] },
+    ]) {
+      expect(actionHoldOf(subject({ seriesScope: false, ...action }))?.kind, action.actionType).toBe("groupScope");
+    }
+    // Its action turned off runs nothing: nothing to hold.
+    expect(actionHoldOf(subject({ seriesScope: false, ...SERIES_DELETE, actionEnabled: false }))).toBeNull();
   });
 
   it("names the group-scope hold over an edit's, which detection alone cannot release", () => {
     const since = new Date(SINCE);
-    expect(actionHoldOf({ type: "SERIES", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: since })?.kind).toBe("groupScope");
+    expect(actionHoldOf(subject({ actionsHeldSince: since }))?.kind).toBe("groupScope");
   });
 
   it("holds an edited rule set until detection re-checks it", () => {
     const since = new Date(SINCE);
-    expect(actionHoldOf({ type: "SERIES", seriesScope: true, rules: SHOW_LEVEL, actionsHeldSince: since })).toEqual({ kind: "edited", since });
-    expect(actionHoldOf({ type: "MOVIE", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: SINCE })).toEqual({ kind: "edited", since: SINCE });
+    expect(actionHoldOf(subject({ rules: SHOW_LEVEL, actionsHeldSince: since }))).toEqual({ kind: "edited", since });
+    expect(actionHoldOf(subject({ type: "MOVIE", actionsHeldSince: SINCE }))).toEqual({ kind: "edited", since: SINCE });
   });
 
-  it("holds nothing with the scope off, on a movie rule set, or with show-level criteria", () => {
-    expect(actionHoldOf({ type: "SERIES", seriesScope: false, rules: PER_EPISODE, actionsHeldSince: null })).toBeNull();
-    expect(actionHoldOf({ type: "MUSIC", seriesScope: false, rules: PER_EPISODE, actionsHeldSince: null })).toBeNull();
-    expect(actionHoldOf({ type: "MOVIE", seriesScope: true, rules: PER_EPISODE, actionsHeldSince: null })).toBeNull();
-    expect(actionHoldOf({ type: "SERIES", seriesScope: true, rules: SHOW_LEVEL, actionsHeldSince: null })).toBeNull();
+  it("holds nothing with the scope off under an action on the matched members, on a movie rule set, or with show-level criteria", () => {
+    expect(actionHoldOf(subject({ seriesScope: false }))).toBeNull();
+    expect(actionHoldOf(subject({ type: "MUSIC", seriesScope: false, actionType: "DELETE_FILES_LIDARR" }))).toBeNull();
+    expect(actionHoldOf(subject({ type: "MOVIE", actionType: "DELETE_RADARR" }))).toBeNull();
+    expect(actionHoldOf(subject({ rules: SHOW_LEVEL, ...SERIES_DELETE }))).toBeNull();
+  });
+});
+
+describe("actionHoldFor", () => {
+  it("holds a scheduled action whose own snapshot acts on the whole show, though the rule set's does not", () => {
+    // A restore, or a row written before the rule: the rule set now deletes
+    // files, but this action still deletes the series.
+    const ruleSet = subject({ seriesScope: false });
+    expect(actionHoldOf(ruleSet)).toBeNull();
+    expect(actionHoldFor(ruleSet, { actionType: "DELETE_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false })?.kind).toBe("groupScope");
+    expect(actionHoldFor(ruleSet, { actionType: "DELETE_FILES_SONARR", addArrTags: ["x"], removeArrTags: [] })?.kind).toBe("groupScope");
+    expect(actionHoldFor(ruleSet, { actionType: "DELETE_FILES_SONARR", addArrTags: [], removeArrTags: [] })).toBeNull();
+  });
+
+  it("reads the snapshot as armed even when the rule set's action is off", () => {
+    expect(actionHoldFor(subject({ seriesScope: false, actionEnabled: false }), { actionType: "DELETE_SONARR" })?.kind).toBe("groupScope");
+  });
+
+  it("keeps the rule set's own hold first", () => {
+    expect(actionHoldFor(subject({ rules: SHOW_LEVEL, actionsHeldSince: SINCE }), { actionType: "DELETE_SONARR" })).toEqual({ kind: "edited", since: SINCE });
   });
 });
 
 describe("scopeHoldReason", () => {
   it("is the group-scope hold's reason alone — never an edit's", () => {
-    expect(scopeHoldReason({ type: "SERIES", seriesScope: true, rules: PER_EPISODE })).toBe(SCOPE_REASON);
-    expect(scopeHoldReason({ type: "SERIES", seriesScope: false, rules: PER_EPISODE })).toBeNull();
+    expect(scopeHoldReason({ type: "SERIES", seriesScope: true, rules: PER_EPISODE, ...FILES })).toBe(SCOPE_REASON);
+    expect(scopeHoldReason({ type: "SERIES", seriesScope: false, rules: PER_EPISODE, ...FILES })).toBeNull();
+    expect(scopeHoldReason({ type: "SERIES", seriesScope: false, rules: PER_EPISODE, ...SERIES_DELETE })).toMatch(/acts on the whole show/);
   });
 });
 

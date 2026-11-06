@@ -8,13 +8,18 @@
  *    matches holds its actions until the next detection run re-checks its
  *    matches, which releases them.
  *  - **Group scope** (`groupScopeViolation`, `src/lib/conditions/group-scope.ts`):
- *    it judges whole shows or artists ("Match against entire series" /
- *    "artist") on a criterion that describes one episode or track. Saving
- *    that is refused, but a rule set saved before the rule existed, or
- *    restored from a backup, can still be in that state. Detection skips it,
- *    so its stored matches were never checked under the rule; its actions —
- *    already pending at upgrade time included — wait until it is edited into
- *    a valid state, whose save sets the edited hold that detection releases.
+ *    a criterion that describes one episode or track could make a whole show
+ *    or artist the target of its action — it judges whole shows or artists
+ *    ("Match against entire series" / "artist") on such a criterion, or its
+ *    scope is off and its action acts on the whole show or artist (Delete from
+ *    Sonarr, Arr tags, …). Saving that is refused, but a rule set saved before
+ *    the rule existed, or restored from a backup, can still be in that state.
+ *    Detection skips it, so its stored matches were never checked under the
+ *    rule; its actions — already pending at upgrade time included — wait
+ *    until it is edited into a valid state, whose save sets the edited hold
+ *    that detection releases. A scheduled or failed action is judged by its
+ *    own snapshot of the action as well as by the rule set's configuration
+ *    (`actionHoldFor`).
  *
  * `actionHoldOf` is the one predicate every path that runs a rule set's
  * actions checks: the scheduled executor (before pass 1, and again in pass 2's
@@ -32,36 +37,63 @@
  * Client-safe.
  */
 import { formatDateTime } from "@/lib/format";
-import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
+import { groupScopeHoldReason, groupScopeViolation, type GroupScopeAction } from "@/lib/conditions/group-scope";
 
 // ─── The rule (server) ───────────────────────────────────────────────────
 
-/** A rule set's row, as far as whether its actions may run. */
-export interface ActionHoldSubject {
+/** A rule set's row, as far as whether its actions may run: its rules, scope and action. */
+export interface ActionHoldSubject extends GroupScopeAction {
   type: string;
   seriesScope: boolean;
   rules: unknown;
   actionsHeldSince: Date | string | null;
+  /** The rule set's own action switch, as stored. */
+  actionEnabled: boolean;
 }
+
+/** The rule set columns, beyond its type, scope, rules and stamp, `actionHoldOf` reads: its action. */
+export const HOLD_ACTION_SELECT = {
+  actionEnabled: true,
+  actionType: true,
+  addArrTags: true,
+  removeArrTags: true,
+  searchAfterAction: true,
+} as const;
 
 /** Why a rule set's actions may not run now. */
 export type ActionHold =
-  /** Its rules judge whole shows or artists on per-episode/per-track criteria; it must be edited. */
+  /** A per-episode/per-track criterion could make a whole show or artist its target; it must be edited. */
   | { kind: "groupScope"; reason: string }
   /** A save changed what it matches; the next detection run releases it. */
   | { kind: "edited"; since: Date | string };
 
 /**
  * Whether a rule set's actions are held, and why; null when they may run.
- * The group-scope hold is read from the rule set itself, not from a stamp a
- * detection run would have to set first, so an action pending before the
- * rule existed is held from the moment the app runs it.
+ * The group-scope hold is read from the rule set itself — its rules, scope
+ * and action — not from a stamp a detection run would have to set first, so
+ * an action pending before the rule existed is held from the moment the app
+ * runs it.
  */
 export function actionHoldOf(ruleSet: ActionHoldSubject): ActionHold | null {
-  const violation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope, ruleSet.rules);
+  const violation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope, ruleSet.rules, ruleSet);
   if (violation) return { kind: "groupScope", reason: groupScopeHoldReason(violation) };
   if (ruleSet.actionsHeldSince) return { kind: "edited", since: ruleSet.actionsHeldSince };
   return null;
+}
+
+/**
+ * `actionHoldOf` for one scheduled (or failed) action about to run: the rule
+ * set's hold, or else the group-scope hold the action's own snapshot of its
+ * configuration makes — what would actually run. The snapshot follows the
+ * rule set through every save that keeps the matches, but a restore, or a row
+ * written before the rule, can disagree with it, and the scheduled executor
+ * and force-retry run the snapshot.
+ */
+export function actionHoldFor(ruleSet: ActionHoldSubject, action: GroupScopeAction): ActionHold | null {
+  const hold = actionHoldOf(ruleSet);
+  if (hold) return hold;
+  const own = groupScopeViolation(ruleSet.type, ruleSet.seriesScope, ruleSet.rules, { ...action, actionEnabled: true });
+  return own ? { kind: "groupScope", reason: groupScopeHoldReason(own) } : null;
 }
 
 /**
@@ -79,7 +111,7 @@ export function scopeHoldReason(ruleSet: Omit<ActionHoldSubject, "actionsHeldSin
 export interface HoldingRuleSet {
   /** ISO time an edit held its actions; null (or absent, for a deleted rule set) when not. */
   actionsHeldSince?: string | null;
-  /** Set while it is held for using per-episode/per-track criteria at series/artist scope: why. */
+  /** Set while it is held because a per-episode/per-track criterion could make a whole show or artist its action's target: why. */
   scopeHoldReason?: string | null;
 }
 

@@ -76,7 +76,10 @@ included. It works the same on Plex, Jellyfin, and Emby.
 3. **Keep what you are keeping.** Add conditions to the top group that
    exclude titles you know you want, for example **Is Watchlisted** (`isWatchlisted`) **equals**
    `false` (the connected account's Plex watchlist; its Favorites on Jellyfin
-   and Emby). If you use [Seerr](/docs/integrations/seerr/) and want recent
+   and Emby) — on movies only: Librariarr stores it per episode, so a
+   rule judging a whole show can't use it (see
+   [Criteria not allowed with series scope on](/docs/features/lifecycle-rules/#criteria-not-allowed-with-series-scope-on));
+   protect a show with an exception instead. If you use [Seerr](/docs/integrations/seerr/) and want recent
    requests left alone, put **Request Date** (`seerrRequestDate`) **In Last X Days** `90` in a
    group of its own with the group's **NOT** switch on — a plain *More Than
    X Days Ago* would also drop every title that was never requested, since

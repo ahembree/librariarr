@@ -3,11 +3,14 @@
  * its members satisfies the whole rule, each member seen as the group carrying
  * its own per-member values.
  *
- * Since criteria that describe one episode or track (Resolution, codecs, Year,
- * …) are not allowed in series or artist scope (`groupScopeViolation`), the
- * per-member fields left there are the show's or artist's own metadata every
- * member carries (Content Rating, Studio, Genre, …); the group-scope engines
- * and Test Media refuse the others. Series scope off, forced through the
+ * Every per-member field is a criterion of one episode or track, which series
+ * and artist scope do not allow (`groupScopeViolation`): not only Resolution,
+ * the codecs and Year, but Content Rating, Studio, Genre, Label and Is
+ * Watchlisted too, which the sync stores per episode or track and does not
+ * keep alike across a show or artist — matched through any member, "NOT
+ * Content Rating = TV-MA" matched a show with one TV-14 episode. The
+ * group-scope engines and Test Media refuse them, so a show or artist is only
+ * ever judged on its own values, once. Series scope off, forced through the
  * series path by an aggregate field, still checks every criterion per episode.
  *
  * Regression: the group record copied every per-item field (resolution,
@@ -170,34 +173,6 @@ describe("a group matches through any of its members", () => {
   }
 
   describe("series scope on", () => {
-    it("matches a show whose first episode is TV-14 and another TV-MA, and no show without a TV-MA episode", async () => {
-      const { server, ids, mixedRep } = await seedShows();
-
-      const matched = (await evaluateSeriesScope(MATURE, [server.id])) as unknown as Record_[];
-
-      expect(titlesOf(matched)).toEqual(["Mixed Show", "UHD Show"]);
-      const mixed = matched.find((m) => m.title === "Mixed Show")!;
-      // Still the show: stored against its representative, every episode a member.
-      expect(mixed.id).toBe(mixedRep);
-      expect(mixed.parentTitle).toBeNull();
-      expect([...(mixed.memberIds as string[])].sort(compareIds)).toEqual(ids["Mixed Show"]);
-      // With the values it was selected on: the first TV-MA episode's.
-      expect(mixed).toMatchObject({ contentRating: "TV-MA", resolution: "4k", year: 2002 });
-    });
-
-    it("matches NOT Content Rating = TV-MA for a show with any episode that is not TV-MA, and not an all-TV-MA show", async () => {
-      const { server, library } = await seedShows();
-      // Its first episode is TV-MA: read off that one alone, the show was left out.
-      const { fadingRep } = await addFadingShow(library.id);
-
-      for (const rules of [NOT_MATURE_RULE, NOT_MATURE_GROUP]) {
-        const matched = (await evaluateSeriesScope(rules, [server.id])) as unknown as Record_[];
-        expect(titlesOf(matched)).toEqual(["Fading Show", "HD Show", "Mixed Show"]);
-        const fading = matched.find((m) => m.title === "Fading Show")!;
-        expect(fading).toMatchObject({ id: fadingRep, contentRating: "TV-14" });
-      }
-    });
-
     it("matches nothing for a criterion that describes one episode, which series scope does not allow", async () => {
       const { server } = await seedShows();
 
@@ -208,45 +183,59 @@ describe("a group matches through any of its members", () => {
       expect(evaluations.group).toEqual([]);
     });
 
-    it("reports the matching episode's value, not the representative's", async () => {
-      const { server } = await seedShows();
+    it("matches nothing for Content Rating either: each episode carries its own", async () => {
+      const { server, library } = await seedShows();
+      // "Fading Show": its first episode TV-MA, the other two TV-14. Matched
+      // through any episode, NOT Content Rating = TV-MA took it (and Mixed
+      // Show) whole on one TV-14 episode, beside the TV-MA ones.
+      await addFadingShow(library.id);
 
-      const matched = (await evaluateSeriesScope(MATURE, [server.id])) as unknown as Record_[];
-      const mixed = matched.find((m) => m.title === "Mixed Show")!;
-
-      const criteria = getMatchedCriteriaForItems(matched, MATURE, "SERIES").get(mixed.id as string);
-      expect(criteria?.map((c) => [c.field, c.actualValue])).toEqual([["Content Rating", "TV-MA"]]);
-      expect(getActualValuesForAllRules(matched, MATURE, "SERIES").get(mixed.id as string)?.get("r0")).toBe("TV-MA");
+      for (const rules of [MATURE, NOT_MATURE_RULE, NOT_MATURE_GROUP]) {
+        expect(await evaluateSeriesScope(rules, [server.id])).toEqual([]);
+      }
+      expect(evaluations.group).toEqual([]);
     });
 
-    it("stores the match with the values it was selected on, against its representative", async () => {
+    it("evaluates each show once: every criterion series scope allows is the show's own", async () => {
+      const { server, ids, mixedRep } = await seedShows();
+
+      for (const rule of [
+        { field: "playCount", operator: "equals", value: "0" },
+        { field: "title", operator: "contains", value: "Show" },
+        { field: "availableEpisodeCount", operator: "greaterThanOrEqual", value: "3" },
+      ]) {
+        evaluations.group.length = 0;
+        const matched = (await evaluateSeriesScope(groups([rule]), [server.id])) as unknown as Record_[];
+        expect(evaluations.group, rule.field).toEqual([1, 1, 1]);
+        if (rule.field === "title") {
+          // Still the show: stored against its representative, every episode a member.
+          const mixed = matched.find((m) => m.title === "Mixed Show")!;
+          expect(mixed.id).toBe(mixedRep);
+          expect(mixed.parentTitle).toBeNull();
+          expect([...(mixed.memberIds as string[])].sort(compareIds)).toEqual(ids["Mixed Show"]);
+          const criteria = getMatchedCriteriaForItems(matched, groups([rule]), "SERIES").get(mixedRep);
+          expect(criteria?.map((c) => [c.field, c.actualValue])).toEqual([["Title", "Mixed Show"]]);
+          expect(getActualValuesForAllRules(matched, groups([rule]), "SERIES").get(mixedRep)?.get("r0")).toBe("Mixed Show");
+        }
+      }
+    });
+
+    it("stores a show-level match against its representative", async () => {
       const { user, server, ids, mixedRep } = await seedShows();
-      const rs = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true, rules: MATURE, serverIds: [server.id] });
+      const rules = groups([{ field: "title", operator: "equals", value: "Mixed Show" }]);
+      const rs = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true, rules, serverIds: [server.id] });
 
       await detectAndSaveMatches(
-        { ...rs, type: "SERIES", rules: MATURE, seriesScope: true, serverIds: [server.id] } as never,
+        { ...rs, type: "SERIES", rules, seriesScope: true, serverIds: [server.id] } as never,
         [server.id],
       );
 
       const stored = await prisma.ruleMatch.findMany({ where: { ruleSetId: rs.id } });
-      const mixed = stored.find((m) => m.mediaItemId === mixedRep)!;
-      const itemData = mixed.itemData as Record_;
-      expect(itemData).toMatchObject({ title: "Mixed Show", parentTitle: null, contentRating: "TV-MA" });
+      expect(stored.map((m) => m.mediaItemId)).toEqual([mixedRep]);
+      const itemData = stored[0].itemData as Record_;
+      expect(itemData).toMatchObject({ title: "Mixed Show", parentTitle: null });
       expect([...(itemData.memberIds as string[])].sort(compareIds)).toEqual(ids["Mixed Show"]);
-      expect(itemData.actualValues).toEqual({ r0: "TV-MA" });
-      expect((itemData.matchedCriteria as Array<{ actualValue: string }>).map((c) => c.actualValue)).toEqual(["TV-MA"]);
-    });
-
-    it("evaluates each show once when no rule reads a per-episode value", async () => {
-      const { server } = await seedShows();
-
-      await evaluateSeriesScope(groups([{ field: "playCount", operator: "equals", value: "0" }]), [server.id]);
-      expect(evaluations.group).toEqual([1, 1, 1]);
-
-      // A per-episode field: the all-TV-14 show is tried through every episode.
-      evaluations.group.length = 0;
-      await evaluateSeriesScope(MATURE, [server.id]);
-      expect([...evaluations.group].sort()).toEqual([1, 2, 3]);
+      expect(itemData.actualValues).toEqual({ r0: "Mixed Show" });
     });
   });
 
@@ -356,41 +345,6 @@ describe("a group matches through any of its members", () => {
       return { user, server, library, ids };
     }
 
-    const BIG = groups([{ field: "studio", operator: "equals", value: "Big Records" }]);
-
-    it("matches an artist through any track", async () => {
-      const { server, ids } = await seedArtists();
-
-      const big = (await evaluateMusicScope(BIG, [server.id])) as unknown as Record_[];
-      expect(titlesOf(big)).toEqual(["Big Band", "Mixed Band"]);
-      const mixed = big.find((m) => m.title === "Mixed Band")!;
-      expect(mixed.id).toBe(ids["Mixed Band"][0]);
-      // Stored with the values of the track it matched through.
-      expect(mixed).toMatchObject({ studio: "Big Records", audioCodec: "flac", year: 2010 });
-      expect([...(mixed.memberIds as string[])].sort(compareIds)).toEqual(ids["Mixed Band"]);
-    });
-
-    it("matches NOT Studio = Big Records for an artist with any track that is not, and not an all-Big artist", async () => {
-      const { server, library } = await seedArtists();
-      // "Fading Band": its lowest-id track Big Records, the other Indie. Read
-      // off that one alone, the artist was left out.
-      const fading = [];
-      for (let t = 1; t <= 2; t++) {
-        fading.push(await createTestMediaItem(library.id, {
-          type: "MUSIC", title: `Fading Band T${t}`, parentTitle: "Fading Band", albumTitle: "Album", studio: "Indie Records",
-        }));
-      }
-      const [first] = fading.map((t) => t.id).sort(compareIds);
-      await prisma.mediaItem.update({ where: { id: first }, data: { studio: "Big Records" } });
-
-      for (const rules of [
-        groups([{ field: "studio", operator: "equals", value: "Big Records", negate: true }]),
-        groups([{ field: "studio", operator: "equals", value: "Big Records" }], true),
-      ]) {
-        expect(titlesOf(await evaluateMusicScope(rules, [server.id]))).toEqual(["Fading Band", "Indie Band", "Mixed Band"]);
-      }
-    });
-
     it("matches nothing for a criterion that describes one track, which artist scope does not allow", async () => {
       const { server } = await seedArtists();
 
@@ -398,26 +352,32 @@ describe("a group matches through any of its members", () => {
         { field: "audioCodec", operator: "equals", value: "flac" },
         { field: "year", operator: "greaterThanOrEqual", value: "2005" },
         { field: "albumTitle", operator: "equals", value: "Album" },
+        // A track's own label, genres and ids: Mixed Band's tracks disagree.
+        { field: "studio", operator: "equals", value: "Big Records" },
+        { field: "studio", operator: "equals", value: "Big Records", negate: true },
+        { field: "genre", operator: "contains", value: "Rock", negate: true },
+        { field: "hasExternalId", operator: "equals", value: "MUSICBRAINZ" },
       ]) {
-        expect(await evaluateMusicScope(groups([rule]), [server.id])).toEqual([]);
+        expect(await evaluateMusicScope(groups([rule]), [server.id]), rule.field).toEqual([]);
       }
       expect(evaluations.group).toEqual([]);
     });
 
-    it("reports the matching track's value", async () => {
+    it("evaluates each artist once: every criterion artist scope allows is the artist's own", async () => {
       const { server, ids } = await seedArtists();
-
-      const matched = (await evaluateMusicScope(BIG, [server.id])) as unknown as Record_[];
-
-      const criteria = getMatchedCriteriaForItems(matched, BIG, "MUSIC").get(ids["Mixed Band"][0]);
-      expect(criteria?.map((c) => [c.field, c.actualValue])).toEqual([["Studio", "Big Records"]]);
-    });
-
-    it("evaluates each artist once when no rule reads a per-track value", async () => {
-      const { server } = await seedArtists();
 
       await evaluateMusicScope(groups([{ field: "playCount", operator: "equals", value: "0" }]), [server.id]);
       expect(evaluations.group).toEqual([1, 1, 1]);
+
+      evaluations.group.length = 0;
+      const rules = groups([{ field: "parentTitle", operator: "equals", value: "Mixed Band" }]);
+      const matched = (await evaluateMusicScope(rules, [server.id])) as unknown as Record_[];
+      expect(evaluations.group).toEqual([1, 1, 1]);
+      expect(titlesOf(matched)).toEqual(["Mixed Band"]);
+      expect(matched[0].id).toBe(ids["Mixed Band"][0]);
+      expect([...(matched[0].memberIds as string[])].sort(compareIds)).toEqual(ids["Mixed Band"]);
+      const criteria = getMatchedCriteriaForItems(matched, rules, "MUSIC").get(ids["Mixed Band"][0]);
+      expect(criteria?.map((c) => [c.field, c.actualValue])).toEqual([["Artist / Series", "Mixed Band"]]);
     });
   });
 
@@ -427,17 +387,23 @@ describe("a group matches through any of its members", () => {
       return expectJson<{ matches: boolean; actualValues: Record<string, string> }>(response, 200);
     }
 
-    it("matches a show in series scope through another episode and reports that episode's value", async () => {
+    it("judges a show in series scope on its own values, and answers Content Rating with the reason", async () => {
       const { user, server, mixedRep, ids } = await seedShows();
       setMockSession({ isLoggedIn: true, userId: user.id });
       const base = { type: "SERIES", seriesScope: true, serverIds: [server.id] };
 
-      const mixed = await testItem({ ...base, mediaItemId: mixedRep, rules: MATURE });
-      expect(mixed).toMatchObject({ matches: true, actualValues: { r0: "TV-MA" } });
-      expect((await testItem({ ...base, mediaItemId: mixedRep, rules: NOT_MATURE_RULE })).matches).toBe(true);
+      const byName = groups([{ field: "title", operator: "equals", value: "Mixed Show" }]);
+      expect(await testItem({ ...base, mediaItemId: ids["Mixed Show"][2], rules: byName })).toMatchObject({
+        matches: true, actualValues: { r0: "Mixed Show" },
+      });
+      expect((await testItem({ ...base, mediaItemId: ids["HD Show"][0], rules: byName })).matches).toBe(false);
 
-      expect((await testItem({ ...base, mediaItemId: ids["HD Show"][0], rules: MATURE })).matches).toBe(false);
-      expect((await testItem({ ...base, mediaItemId: ids["UHD Show"][1], rules: NOT_MATURE_GROUP })).matches).toBe(false);
+      for (const rules of [MATURE, NOT_MATURE_RULE, NOT_MATURE_GROUP]) {
+        const refused = await callRoute(testItemPost, {
+          url: "/api/lifecycle/rules/test-item", method: "POST", body: { ...base, mediaItemId: mixedRep, rules },
+        });
+        expect((await expectJson<{ error: string }>(refused, 400)).error).toMatch(/^This rule set uses per-episode criteria \(Content Rating\)/);
+      }
     });
 
     it("answers a per-episode criterion in series scope with the reason instead of evaluating it", async () => {
@@ -475,7 +441,7 @@ describe("a group matches through any of its members", () => {
       expect((await testItem({ ...base, rules: unwatched, mediaItemId: mixedRep })).matches).toBe(false);
     });
 
-    it("matches an artist in artist scope through another track", async () => {
+    it("answers a per-track criterion in artist scope with the reason, and checks it per track with the scope off", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const library = await createTestLibrary(server.id, { type: "MUSIC" });
@@ -490,18 +456,16 @@ describe("a group matches through any of its members", () => {
       setMockSession({ isLoggedIn: true, userId: user.id });
       const base = { type: "MUSIC", seriesScope: true, serverIds: [server.id], mediaItemId: first };
 
-      expect(await testItem({
-        ...base,
-        rules: groups([{ field: "studio", operator: "equals", value: "Big Records" }]),
-      })).toMatchObject({ matches: true, actualValues: { r0: "Big Records" } });
-
-      // A per-track criterion: refused with the reason, in artist scope only.
-      const refused = await callRoute(testItemPost, {
-        url: "/api/lifecycle/rules/test-item",
-        method: "POST",
-        body: { ...base, rules: groups([{ field: "audioCodec", operator: "equals", value: "flac" }]) },
-      });
-      expect((await expectJson<{ error: string }>(refused, 400)).error).toMatch(/^This rule set uses per-track criteria \(Audio Codec\)/);
+      // A per-track criterion — Studio, one track's label, as much as Audio
+      // Codec: refused with the reason, in artist scope only.
+      for (const [field, value, label] of [["audioCodec", "flac", "Audio Codec"], ["studio", "Big Records", "Studio"]] as const) {
+        const refused = await callRoute(testItemPost, {
+          url: "/api/lifecycle/rules/test-item",
+          method: "POST",
+          body: { ...base, rules: groups([{ field, operator: "equals", value }]) },
+        });
+        expect((await expectJson<{ error: string }>(refused, 400)).error).toMatch(new RegExp(`^This rule set uses per-track criteria \\(${label}\\)`));
+      }
       expect(await testItem({
         ...base,
         seriesScope: false,

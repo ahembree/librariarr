@@ -3,7 +3,7 @@ import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/li
 import { prisma } from "@/lib/db";
 import { hasEnabledArrInstances, arrFamilyLabel, resolveArrInstanceScope } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
+import { groupScopeHoldReason, groupScopeViolation, type GroupScopeAction } from "@/lib/conditions/group-scope";
 
 /**
  * Whether a rule set's external dependencies (Arr/Seerr instances) are
@@ -24,13 +24,15 @@ import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/grou
  *    a vacuous whole-library flood armed before this guard existed would
  *    otherwise stay frozen forever and still execute.
  *
- * A rule set judging whole shows or artists on per-episode/per-track
- * criteria (`groupScopeViolation`) is the one configuration skipped for its
- * own rules rather than an outside dependency: it can be evaluated, but not
- * faithfully — one episode would decide for the whole show. It is transient
- * (an edit resolves it), so its matches and actions are left in place; its
- * actions are held meanwhile by `actionHoldOf` (held-actions.ts), which reads
- * the same predicate.
+ * A rule set on which a per-episode/per-track criterion could make a whole
+ * show or artist its action's target (`groupScopeViolation`: it judges whole
+ * shows or artists on one, or its scope is off and its action acts on the
+ * whole show or artist) is the one configuration skipped for its own rules
+ * rather than an outside dependency: it can be evaluated, but not faithfully —
+ * one episode would decide for the whole show. It is transient (an edit
+ * resolves it), so its matches and actions are left in place; its actions are
+ * held meanwhile by `actionHoldOf` (held-actions.ts), which reads the same
+ * predicate.
  *
  * This is the single policy point for the guard — the detection paths log
  * the reason and skip, the preview/test/diff routes return it as a 400.
@@ -182,10 +184,18 @@ export async function checkLifecycleRuleEvaluability(
    * series scope. Only SERIES and MUSIC have a scope.
    */
   seriesScope: boolean = true,
+  /**
+   * The rule set's action (`actionEnabled`, `actionType`, its Arr tags and
+   * search after), as stored or as the editor holds it: with the scope off,
+   * an armed action that acts on the whole show or artist makes per-episode
+   * or per-track criteria a violation too. Omitted, only the scope is judged —
+   * the detection paths pass it.
+   */
+  action?: GroupScopeAction | null,
 ): Promise<RuleEvaluability> {
   // Checked first: it reads only the rules, and no instance or history makes
   // such a rule set evaluable.
-  const scopeViolation = groupScopeViolation(type, seriesScope, rules);
+  const scopeViolation = groupScopeViolation(type, seriesScope, rules, action);
   if (scopeViolation) {
     return { evaluable: false, permanent: false, reason: groupScopeHoldReason(scopeViolation) };
   }

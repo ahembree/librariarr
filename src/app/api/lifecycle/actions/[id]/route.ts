@@ -23,7 +23,7 @@ import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import { actsOnMembers, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
-import { actionHoldOf } from "@/lib/lifecycle/held-actions";
+import { HOLD_ACTION_SELECT, actionHoldFor } from "@/lib/lifecycle/held-actions";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -137,7 +137,7 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true, seriesScope: true, actionsHeldSince: true },
+    select: { enabled: true, type: true, rules: true, seriesScope: true, actionsHeldSince: true, ...HOLD_ACTION_SELECT },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
@@ -145,13 +145,14 @@ async function retryAction(
       { status: 400 }
     );
   }
-  // Held (`actionHoldOf`, as the scheduled executor and Execute check it): a
+  // Held (`actionHoldFor`, as the scheduled executor and Execute check it): a
   // save changed what the rule set matches (`actionsHeldSince`), so the
   // stale-match guard below reads matches the old rules made until a
-  // detection run re-checks them; or it judges whole shows or artists on
-  // per-episode/per-track criteria, whose matches detection never re-checks
-  // until it is edited. Either way a retry waits too.
-  const hold = actionHoldOf(ruleSet);
+  // detection run re-checks them; or a per-episode/per-track criterion could
+  // make a whole show or artist the target of its action — the rule set's, or
+  // this failed action's own, which is what a retry runs — and detection
+  // never re-checks its matches until it is edited. Either way a retry waits too.
+  const hold = actionHoldFor(ruleSet, action);
   if (hold) {
     return NextResponse.json(
       {

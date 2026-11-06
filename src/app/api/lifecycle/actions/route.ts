@@ -111,7 +111,7 @@ const RULE_SET_SELECT = {
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
   removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true, actionsHeldSince: true,
   // Read for the group-scope hold only (`scopeHoldReason`), never returned.
-  rules: true,
+  rules: true, actionEnabled: true,
 } as const;
 
 type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: string }>;
@@ -134,10 +134,12 @@ async function loadActionLookups(userId: string) {
   ]);
   return {
     ruleSetById: new Map(
-      ruleSets.map(({ rules, ...rs }) => [rs.id, {
+      ruleSets.map(({ rules, actionEnabled, ...rs }) => [rs.id, {
         ...rs,
         actionsHeldSince: rs.actionsHeldSince?.toISOString() ?? null,
-        scopeHoldReason: scopeHoldReason({ type: rs.type, seriesScope: rs.seriesScope, rules }),
+        // Its rules, scope and action: with the scope off, an action on the
+        // whole show or artist following per-episode criteria is held too.
+        scopeHoldReason: scopeHoldReason({ ...rs, rules, actionEnabled }),
       }]),
     ),
     servers: new Map(libraries.map((l) => [l.id, l.mediaServer])) as LibraryServers,

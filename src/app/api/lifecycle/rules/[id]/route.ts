@@ -72,17 +72,26 @@ export const PUT = withSession(async (
     }
   }
 
-  // A Series or Music rule set judging whole shows or artists may not use a
-  // criterion that describes one episode or track (`ruleSetScopeError`): new
-  // rules under the stored scope, or the scope turned on over the stored
-  // rules, are refused as a create would be. A save changing neither (a
-  // rename, enabling or disabling it, its action settings) cannot make a rule
-  // set invalid, and stays allowed on one saved before the rule existed —
-  // whose detection is skipped and whose actions are held until it is edited.
-  if (rules !== undefined || seriesScope !== undefined) {
+  // A criterion that describes one episode or track may never make a whole
+  // show or artist an action's target (`ruleSetScopeError`): new rules under
+  // the stored scope and action, the scope turned on over the stored rules,
+  // and an action that acts on the whole show or artist armed over per-episode
+  // rules with the scope off — a new action type, its Arr tags or search after,
+  // or the action switched on — are all refused as a create would be. A save
+  // changing none of these (a rename, enabling or disabling it), or changing
+  // only an action already invalid for its scope's sake, cannot make it so and
+  // stays allowed on one saved before the rule existed — whose detection is
+  // skipped and whose actions are held until it is edited — so it can still be
+  // turned off.
+  const scopeFields = { rules, seriesScope, actionType, actionEnabled, addArrTags, removeArrTags, searchAfterAction };
+  const changedScopeField = Object.entries(scopeFields).find(([, value]) => value !== undefined)?.[0];
+  if (changedScopeField) {
     const current = await prisma.ruleSet.findFirst({
       where: { id, userId: session.userId },
-      select: { type: true, seriesScope: true, rules: true },
+      select: {
+        type: true, seriesScope: true, rules: true,
+        actionEnabled: true, actionType: true, addArrTags: true, removeArrTags: true, searchAfterAction: true,
+      },
     });
     if (!current) {
       return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
@@ -92,8 +101,14 @@ export const PUT = withSession(async (
         type: current.type,
         seriesScope: seriesScope ?? current.seriesScope,
         rules: rules ?? current.rules,
+        actionEnabled: actionEnabled ?? current.actionEnabled,
+        actionType: actionType !== undefined ? actionType : current.actionType,
+        addArrTags: addArrTags ?? current.addArrTags,
+        removeArrTags: removeArrTags ?? current.removeArrTags,
+        searchAfterAction: searchAfterAction ?? current.searchAfterAction,
       },
-      rules !== undefined ? "rules" : "seriesScope",
+      changedScopeField,
+      { actionCausedOnly: rules === undefined && seriesScope === undefined },
     );
     if (scopeError) return scopeError;
   }

@@ -12,6 +12,8 @@ import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import { HOLD_ACTION_SELECT } from "@/lib/lifecycle/held-actions";
+import type { GroupScopeAction } from "@/lib/conditions/group-scope";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 /**
@@ -46,7 +48,10 @@ async function explainSkippedRuleSets(
   // deliberately turned off.
   const candidates = await prisma.ruleSet.findMany({
     where: namedRuleSetId ? { id: namedRuleSetId, userId } : { userId, enabled: true },
-    select: { id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true, seriesScope: true },
+    select: {
+      id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true, seriesScope: true,
+      ...HOLD_ACTION_SELECT,
+    },
   });
 
   const enabledServers = await prisma.mediaServer.findMany({
@@ -75,7 +80,7 @@ async function explainSkip(
     serverIds: string[];
     arrInstanceId: string | null;
     seriesScope: boolean;
-  },
+  } & GroupScopeAction,
   enabledServerIds: Set<string>,
 ): Promise<string | null> {
   if (!ruleSet.enabled) return "The rule set is disabled.";
@@ -91,7 +96,7 @@ async function explainSkip(
   if (!hasAnyActiveRules(rules)) return "The rule set has no active rules.";
 
   const evaluability = await checkLifecycleRuleEvaluability(
-    userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId, ruleSet.seriesScope,
+    userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId, ruleSet.seriesScope, ruleSet,
   );
   return evaluability.evaluable ? null : evaluability.reason;
 }

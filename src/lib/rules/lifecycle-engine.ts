@@ -1902,12 +1902,10 @@ function refusesGroupScope(rules: LifecycleRule[] | LifecycleRuleGroup[], type: 
  * (`evaluateGroupThroughMembers`); the show's own values (name, play total,
  * size, streams, watchers, aggregates, cross-system, Arr, Seerr) are the same
  * for every episode. The match is stored and reported with the first such
- * episode's values. Criteria that describe one episode (Resolution, Year, a
- * stream query, …) are not allowed in series scope (`groupScopeViolation`):
- * rules holding one match nothing here. What remains per episode — Genre,
- * Studio, Country, Content Rating, Label, Is Watchlisted — is the show's own
- * metadata, which the sync gives every episode, so judging the show through
- * its episodes reads the show.
+ * episode's values. Criteria that describe one episode (Resolution, Year,
+ * Genre, Content Rating, a stream query, … — every per-episode field) are not
+ * allowed in series scope (`groupScopeViolation`): rules holding one match
+ * nothing here, so the rules this evaluates read only the show's own values.
  */
 export async function evaluateSeriesScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],

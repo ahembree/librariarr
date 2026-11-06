@@ -73,10 +73,12 @@ function RuleSetChips({
   scopeLabels?: RuleSetNavigatorProps["scopeLabels"];
 }) {
   const ruleCount = countRules(ruleSet.rules);
-  // Judging whole shows or artists on per-episode/per-track criteria (saved
-  // before that was refused, or restored): detection skips it and its actions
-  // are held until it is edited. The reason on hover.
-  const scopeViolation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope !== false, ruleSet.rules);
+  // A per-episode/per-track criterion that could make a whole show or artist
+  // the action's target — judged at series or artist scope, or followed by an
+  // action on the whole show or artist with the scope off (saved before that
+  // was refused, or restored): detection skips it and its actions are held
+  // until it is edited. The reason on hover.
+  const scopeViolation = groupScopeViolation(ruleSet.type, ruleSet.seriesScope !== false, ruleSet.rules, ruleSet);
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1">
       <span className="mr-1 font-mono text-[10.5px] text-faint">

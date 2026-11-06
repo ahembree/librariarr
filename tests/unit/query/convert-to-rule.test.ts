@@ -4,6 +4,7 @@ import {
   ConvertQueryError,
   convertQueryToRuleSetBody,
   convertedScope,
+  convertedWholeRecordLimit,
 } from "@/lib/query/convert-to-rule";
 import { ruleSetCreateSchema } from "@/lib/validation";
 
@@ -135,10 +136,47 @@ describe("convertQueryToRuleSetBody", () => {
     it("says which criteria turned the scope off, for the dialog", () => {
       const query = { ...perItem("resolution", "4K"), mediaTypes: ["SERIES" as const] };
       expect(convertedScope(query, "SERIES", query.groups)).toEqual({ seriesScope: false, blockedLabels: ["Resolution"] });
-      const showLevel = { ...perItem("genre", "Drama"), mediaTypes: ["SERIES" as const] };
+      // Genre is stored per episode, which can disagree with its show's.
+      const genre = { ...perItem("genre", "Drama"), mediaTypes: ["SERIES" as const] };
+      expect(convertedScope(genre, "SERIES", genre.groups)).toEqual({ seriesScope: false, blockedLabels: ["Genre"] });
+      const showLevel = { ...perItem("arrEnded", "true"), mediaTypes: ["SERIES" as const] };
       expect(convertedScope(showLevel, "SERIES", showLevel.groups)).toEqual({ seriesScope: true, blockedLabels: [] });
       expect(convertedScope({ ...showLevel, includeEpisodes: true }, "SERIES", showLevel.groups)).toEqual({ seriesScope: false, blockedLabels: [] });
       expect(convertedScope(query, "MOVIE", query.groups)).toBeNull();
+    });
+
+    it("never arms an action, so no conversion makes a whole-show action follow per-episode criteria", () => {
+      const series = { ...perItem("resolution", "4K"), mediaTypes: ["SERIES" as const] };
+      const music = { ...perItem("genre", "Rock"), mediaTypes: ["MUSIC" as const] };
+      for (const [query, type] of [[series, "SERIES"], [music, "MUSIC"]] as const) {
+        const body = convertQueryToRuleSetBody(query, { name: "C", targetLibraryType: type, serverIds: ["srv1"] });
+        expect(body.actionEnabled).toBe(false);
+        expect("actionType" in body).toBe(false);
+        expect(ruleSetCreateSchema.safeParse(body).success).toBe(true);
+        // Arming a whole-show or whole-artist action on it is what the save refuses.
+        const armed = { ...body, actionEnabled: true, actionType: type === "SERIES" ? "DELETE_SONARR" : "DELETE_LIDARR" };
+        const refused = ruleSetCreateSchema.safeParse(armed);
+        expect(refused.success).toBe(false);
+        expect(refused.error?.issues[0].path).toEqual(["actionType"]);
+        // A per-member action saves.
+        const perMember = { ...body, actionEnabled: true, actionType: type === "SERIES" ? "DELETE_FILES_SONARR" : "DELETE_FILES_LIDARR" };
+        expect(ruleSetCreateSchema.safeParse(perMember).success).toBe(true);
+      }
+    });
+
+    it("says which criteria keep a whole-show or whole-artist action off, for the dialog", () => {
+      // Episode view, show-level criteria only: Play Count is the episode's own there.
+      const episodes = { ...perItem("arrEnded", "true"), mediaTypes: ["SERIES" as const], includeEpisodes: true };
+      expect(convertedWholeRecordLimit("SERIES", convertedScope(episodes, "SERIES", episodes.groups), episodes.groups)).toEqual(["Play Count"]);
+      const resolution = { ...perItem("resolution", "4K"), mediaTypes: ["SERIES" as const] };
+      expect(convertedWholeRecordLimit("SERIES", convertedScope(resolution, "SERIES", resolution.groups), resolution.groups)).toEqual([
+        "Play Count",
+        "Resolution",
+      ]);
+      // Grouped by show with show-level criteria: the scope is on, nothing is kept off.
+      const grouped = { ...perItem("arrEnded", "true"), mediaTypes: ["SERIES" as const] };
+      expect(convertedWholeRecordLimit("SERIES", convertedScope(grouped, "SERIES", grouped.groups), grouped.groups)).toBeNull();
+      expect(convertedWholeRecordLimit("MOVIE", null, resolution.groups)).toBeNull();
     });
 
     it("keeps any criterion on a movie rule set, which has no scope", () => {

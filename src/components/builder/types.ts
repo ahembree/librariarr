@@ -72,11 +72,20 @@ export interface FieldContext {
   /** Whether the query is in episode mode (skips series grouping). */
   includeEpisodes?: boolean;
   /**
-   * The rule builder's scope while a Series or Music rule set judges whole
-   * shows or artists ("Match against entire series" / "artist" on), else
-   * null: per-episode/per-track criteria and stream queries are disabled.
+   * The rule builder's gate while a criterion of one episode or track could
+   * make a whole show or artist the action's target, else null: a Series or
+   * Music rule set judging whole shows or artists ("Match against entire
+   * series" / "artist" on, `judgement: "group"`), or one with the scope off
+   * whose action acts on the whole show or artist (`judgement: "member"`).
+   * The criteria that judgement may not use (`isBlockedAtGroupScope`) and
+   * stream queries are disabled, with the reason.
    */
-  groupScope?: "SERIES" | "MUSIC" | null;
+  groupScope?: {
+    type: "SERIES" | "MUSIC";
+    judgement: "group" | "member";
+    /** The armed action's part that acts on the whole show or artist, named; null when none. */
+    wholeRecordAction: string | null;
+  } | null;
   [key: string]: unknown;
 }
 

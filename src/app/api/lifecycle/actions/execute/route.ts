@@ -164,8 +164,9 @@ async function executeRuleSet(
   // Held (`actionHoldOf`, the check the scheduled executor makes too): a save
   // changed what the rule set matches (`actionsHeldSince`), so the stored
   // matches this route acts on are the old rules' until a detection run
-  // re-checks them; or it judges whole shows or artists on per-episode or
-  // per-track criteria, which detection skips until it is edited.
+  // re-checks them; or a per-episode or per-track criterion could make a
+  // whole show or artist the target of its action (this route runs the rule
+  // set's action as configured), which detection skips until it is edited.
   const hold = actionHoldOf(ruleSet);
   if (hold) {
     return NextResponse.json(
