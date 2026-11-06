@@ -79,6 +79,39 @@ describe("executeActionsForItems", () => {
     for (const f of result.failures) expect(f.error).toMatch(/Radarr unreachable/);
   });
 
+  it("stops where beforeEach answers a reason, leaving that item and the rest untouched", async () => {
+    // The rule-set Execute route re-checks before each item that the rule set
+    // is still the version it judged the items under.
+    m.executeAction.mockResolvedValue({});
+    const asked: string[] = [];
+    const beforeEach = vi.fn(async (it: { id: string }) => {
+      asked.push(it.id);
+      return it.id === "m2" ? "The rule set was edited" : null;
+    });
+
+    const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY, undefined, { beforeEach });
+
+    expect(asked).toEqual(["m1", "m2"]);
+    expect(m.executeAction).toHaveBeenCalledTimes(1);
+    expect(m.executeAction.mock.calls[0][0]).toMatchObject({ mediaItem: { id: "m1" } });
+    expect(result).toMatchObject({ executed: 1, failed: 0, stopped: { reason: "The rule set was edited", remaining: 2 } });
+    // Only the item that ran is recorded.
+    expect(m.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(1);
+    expect(m.prisma.lifecycleAction.create.mock.calls[0][0]).toMatchObject({ data: { mediaItemId: "m1", status: "COMPLETED" } });
+  });
+
+  it("runs every item and reports no stop without beforeEach, or while it answers null", async () => {
+    m.executeAction.mockResolvedValue({});
+    const plain = await executeActionsForItems("u1", [item(1), item(2)], CONFIG, new Map(), HISTORY);
+    expect(plain.stopped).toBeUndefined();
+    const checked = await executeActionsForItems("u1", [item(1), item(2)], CONFIG, new Map(), HISTORY, undefined, {
+      beforeEach: async () => null,
+    });
+    expect(checked).toMatchObject({ executed: 2 });
+    expect(checked.stopped).toBeUndefined();
+  });
+
   it("keeps going after a write times out — a slow write is not a dead host", async () => {
     // A bulk episode-file delete into a recycle bin on another mount outlives
     // the client timeout while the app is healthy; writes are never retried.

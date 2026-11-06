@@ -150,6 +150,14 @@ describe("OpenAPI document", () => {
     expect(execute.responses?.["409"]).toMatch(/rules or servers changed since its matches were detected/);
   });
 
+  it("tells a client an execute stops when the rule set is edited while it runs", () => {
+    // Each item is acted on only while the rule set is still the version the
+    // route judged it under: the rest are left, and `stopped` says why.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    expect(execute.responses?.["200"]).toMatch(/`\{ executed, failed, errors, stopped\? \}` — `stopped`, a sentence, when the rule set was edited or held while the items ran/);
+    expect(execute.responses?.["409"]).toMatch(/or the rule set was edited before the first item ran; nothing was executed/);
+  });
+
   it("tells a client an execute is refused while the rule set uses per-episode criteria at series scope", () => {
     // Such a rule set (saved before it was refused, or restored) is skipped by
     // detection and its actions are held until it is edited.

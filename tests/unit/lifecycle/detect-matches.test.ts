@@ -9,6 +9,13 @@ const mockPrisma = vi.hoisted(() => ({
   },
   ruleSet: {
     findMany: vi.fn(),
+    // The match write locks the rule set and reads it back to check it is
+    // still the version the run evaluated: answered with the row the run read.
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+      const rows = (await mockPrisma.ruleSet.findMany.mock.results.at(-1)?.value) as Array<{ id: string }> | undefined;
+      return rows?.find((r) => r.id === where.id) ?? null;
+    }),
+    updateMany: vi.fn().mockResolvedValue({ count: 0 }),
   },
   mediaItem: {
     findMany: vi.fn(),

@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
+import { describe, it, expect, vi } from "vitest";
+import {
+  RULE_SET_VERSION_SELECT,
+  lockRuleSetAtVersion,
+  rulesChanged,
+  ruleSetVersion,
+  serverIdsChanged,
+  type RuleSetVersionFields,
+} from "@/lib/lifecycle/rule-set-matching";
 
 const rules = [
   {
@@ -54,5 +61,84 @@ describe("serverIdsChanged", () => {
     expect(serverIdsChanged(["a"], ["a", "b"])).toBe(true);
     expect(serverIdsChanged(["a", "b"], ["a"])).toBe(true);
     expect(serverIdsChanged(["a"], ["b"])).toBe(true);
+  });
+});
+
+describe("ruleSetVersion", () => {
+  const row: RuleSetVersionFields = {
+    rules,
+    seriesScope: true,
+    serverIds: ["s1", "s2"],
+    arrInstanceId: "sonarr-1",
+    enabled: true,
+    stickyMatches: false,
+    actionEnabled: true,
+    actionType: "DELETE_FILES_SONARR",
+    actionDelayDays: 7,
+    targetQualityProfileId: null,
+    addImportExclusion: false,
+    searchAfterAction: false,
+    addArrTags: ["a", "b"],
+    removeArrTags: [],
+  };
+
+  it("is the same for the same rule set read twice, whatever jsonb's key order or the lists' order", () => {
+    const reread = {
+      ...row,
+      rules: [{ groups: [], condition: "AND", id: "g1", rules: [{ ...rules[0].rules[0] }] }],
+      serverIds: ["s2", "s1"],
+      addArrTags: ["b", "a"],
+    };
+    expect(ruleSetVersion(reread)).toBe(ruleSetVersion(row));
+  });
+
+  it("changes with anything its matches or actions depend on", () => {
+    const changes: Array<Partial<RuleSetVersionFields>> = [
+      { rules: [{ ...rules[0], negate: true }] },
+      { seriesScope: false },
+      { serverIds: ["s1"] },
+      { arrInstanceId: "sonarr-2" },
+      { enabled: false },
+      { stickyMatches: true },
+      { actionEnabled: false },
+      { actionType: "DELETE_SONARR" },
+      { actionDelayDays: 0 },
+      { targetQualityProfileId: 4 },
+      { addImportExclusion: true },
+      { searchAfterAction: true },
+      { addArrTags: ["a"] },
+      { removeArrTags: ["c"] },
+    ];
+    for (const change of changes) expect(ruleSetVersion({ ...row, ...change }), JSON.stringify(change)).not.toBe(ruleSetVersion(row));
+  });
+
+  it("reads exactly the columns it compares", () => {
+    expect(Object.keys(RULE_SET_VERSION_SELECT).sort()).toEqual(Object.keys(row).sort());
+  });
+});
+
+describe("lockRuleSetAtVersion", () => {
+  const stored: RuleSetVersionFields = {
+    rules, seriesScope: true, serverIds: ["s1"], arrInstanceId: null, enabled: true, stickyMatches: false,
+    actionEnabled: true, actionType: "DELETE_RADARR", actionDelayDays: 0, targetQualityProfileId: null,
+    addImportExclusion: false, searchAfterAction: false, addArrTags: [], removeArrTags: [],
+  };
+  const tx = (row: RuleSetVersionFields | null) => ({
+    $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+    ruleSet: { findUnique: vi.fn().mockResolvedValue(row) },
+  });
+
+  it("locks the row first, then answers whether it is still at the version read", async () => {
+    const client = tx(stored);
+    expect(await lockRuleSetAtVersion(client, "rs1", ruleSetVersion(stored))).toBe(true);
+    expect(client.$queryRawUnsafe).toHaveBeenCalledWith(`SELECT "id" FROM "RuleSet" WHERE "id" = $1 FOR UPDATE`, "rs1");
+    expect(client.$queryRawUnsafe.mock.invocationCallOrder[0]).toBeLessThan(client.ruleSet.findUnique.mock.invocationCallOrder[0]);
+    expect(client.ruleSet.findUnique).toHaveBeenCalledWith({ where: { id: "rs1" }, select: RULE_SET_VERSION_SELECT });
+  });
+
+  it("answers false for a rule set edited, or deleted, since", async () => {
+    const edited = tx({ ...stored, rules: [] });
+    expect(await lockRuleSetAtVersion(edited, "rs1", ruleSetVersion(stored))).toBe(false);
+    expect(await lockRuleSetAtVersion(tx(null), "rs1", ruleSetVersion(stored))).toBe(false);
   });
 });

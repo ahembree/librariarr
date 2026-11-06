@@ -5,7 +5,12 @@ const mockPrisma = vi.hoisted(() => ({
   ruleSet: {
     findMany: vi.fn(),
     update: vi.fn(),
+    // Scheduling locks the rule set and reads it back to check it is still
+    // the version detection evaluated (set in `resetMocks`).
+    findUnique: vi.fn(),
   },
+  // The row lock scheduling takes on the rule set.
+  $queryRawUnsafe: vi.fn(),
   lifecycleAction: {
     findMany: vi.fn(),
     deleteMany: vi.fn(),
@@ -194,6 +199,12 @@ function resetMocks() {
       return (arg as (tx: unknown) => unknown)(mockPrisma);
     }
     return Promise.all(arg as Promise<unknown>[]);
+  });
+  // The rule set as the run read it, unchanged since.
+  mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+  mockPrisma.ruleSet.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+    const rows = (await mockPrisma.ruleSet.findMany.mock.results.at(-1)?.value) as Array<{ id: string }> | undefined;
+    return rows?.find((r) => r.id === where.id) ?? null;
   });
   mockHasArrRules.mockReturnValue(false);
   mockHasSeerrRules.mockReturnValue(false);

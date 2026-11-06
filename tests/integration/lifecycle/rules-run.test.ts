@@ -143,6 +143,7 @@ describe("POST /api/lifecycle/rules/run", () => {
         ruleSet: { id: ruleSet.id, name: ruleSet.name },
         items: [{ id: "item1", title: "Movie 1" }],
         count: 1,
+        version: "v-detected",
       },
     ]);
     mockScheduleActionsForRuleSet.mockResolvedValue(undefined);
@@ -159,6 +160,7 @@ describe("POST /api/lifecycle/rules/run", () => {
       expect.objectContaining({ id: ruleSet.id }),
       expect.arrayContaining([expect.objectContaining({ id: "item1" })]),
       expect.any(Map),
+      { expectedVersion: "v-detected" },
     );
   });
 
@@ -182,11 +184,13 @@ describe("POST /api/lifecycle/rules/run", () => {
         ruleSet: { id: ruleSet1.id, name: "Rule 1" },
         items: [{ id: "item1", title: "Movie 1" }],
         count: 1,
+        version: "v-detected",
       },
       {
         ruleSet: { id: ruleSet2.id, name: "Rule 2" },
         items: [{ id: "item2", title: "Movie 2" }],
         count: 1,
+        version: "v-detected",
       },
     ]);
     mockScheduleActionsForRuleSet.mockResolvedValue(undefined);
@@ -203,11 +207,13 @@ describe("POST /api/lifecycle/rules/run", () => {
       expect.objectContaining({ id: ruleSet1.id }),
       expect.arrayContaining([expect.objectContaining({ id: "item1" })]),
       expect.any(Map),
+      { expectedVersion: "v-detected" },
     );
     expect(mockScheduleActionsForRuleSet).toHaveBeenCalledWith(
       expect.objectContaining({ id: ruleSet2.id }),
       expect.arrayContaining([expect.objectContaining({ id: "item2" })]),
       expect.any(Map),
+      { expectedVersion: "v-detected" },
     );
   });
 

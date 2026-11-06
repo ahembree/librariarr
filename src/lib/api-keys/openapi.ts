@@ -401,9 +401,9 @@ export const API_OPERATIONS: readonly Operation[] = [
       },
     },
     responses: {
-      "200": "`{ executed, failed, errors }`",
+      "200": "`{ executed, failed, errors, stopped? }` — `stopped`, a sentence, when the rule set was edited or held while the items ran: the items not yet reached were left untouched",
       "404": "No such rule set",
-      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set's rules or servers changed since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off; nothing was executed",
+      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set's rules or servers changed since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off, or the rule set was edited before the first item ran; nothing was executed",
       "429": BUDGET_429,
     },
   },

@@ -69,6 +69,23 @@ interface RunActionsResult {
    * sent for them. The public API gives these back to its destructive budget.
    */
   notAttempted: number;
+  /**
+   * Set when `beforeEach` stopped the run: why, and how many items were left
+   * without being attempted (the one it stopped at included). They are in
+   * neither `executed` nor `failed`.
+   */
+  stopped?: { reason: string; remaining: number };
+}
+
+interface RunActionsOptions {
+  /**
+   * Asked right before each item is acted on. A reason stops the run there:
+   * that item and every later one are left untouched. The rule-set Execute
+   * route re-checks here that the rule set is still the one it judged the
+   * items under — a save landing mid-run must not be followed by actions on
+   * the matches and members its old rules made.
+   */
+  beforeEach?: (item: ActionItem) => Promise<string | null>;
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
@@ -127,8 +144,10 @@ export async function executeActionsForItems(
   episodeIdMap: Map<string, string[]>,
   history: HistoryContext,
   onProgress?: (progress: ActionRunProgress) => void,
+  opts: RunActionsOptions = {},
 ): Promise<RunActionsResult> {
   const actionType = config.actionType;
+  let stopped: RunActionsResult["stopped"];
 
   // SAFETY: log the bounded execution count before any destructive operation.
   logger.info(
@@ -156,6 +175,12 @@ export async function executeActionsForItems(
   );
 
   for (const item of items) {
+    const stopReason = opts.beforeEach ? await opts.beforeEach(item) : null;
+    if (stopReason) {
+      stopped = { reason: stopReason, remaining: total - processed };
+      logger.warn("Lifecycle", `Stopped ${actionType} with ${stopped.remaining} of ${total} item(s) left — ${stopReason}`);
+      break;
+    }
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
     const target = { actionType, matchedMediaItemIds, episodeScope: config.episodeScope, mediaItem: item, memberEpisodes };
     const title = actionTargetTitle(target);
@@ -270,5 +295,5 @@ export async function executeActionsForItems(
   // records themselves); a preview must not explain matches from before it.
   if (executed > 0 || failed > notAttempted) invalidateArrMetadataCache();
 
-  return { executed, failed, errors, failures, notAttempted };
+  return { executed, failed, errors, failures, notAttempted, ...(stopped ? { stopped } : {}) };
 }

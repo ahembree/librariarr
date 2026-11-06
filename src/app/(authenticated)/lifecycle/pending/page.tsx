@@ -797,6 +797,8 @@ export default function PendingActionsPage() {
         } else if (data.executed > 0) {
           toast.success(`${data.executed} action${data.executed !== 1 ? "s" : ""} executed`);
         }
+        // The rule set changed while the actions ran: the rest were left.
+        if (data.stopped) toast.warning("Stopped before the rest", { description: data.stopped });
       } else {
         setExecuteResults((prev) => ({
           ...prev,

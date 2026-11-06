@@ -140,7 +140,10 @@ export const POST = withSession(async (session, request: NextRequest) => {
           }
         }
 
-        await scheduleActionsForRuleSet(ruleSet, result.items, episodeIdMap);
+        // Only while the rule set is still at the version detection
+        // evaluated: `ruleSet` was read after the run, and a save since must
+        // not get the old rules' matches scheduled with its config.
+        await scheduleActionsForRuleSet(ruleSet, result.items, episodeIdMap, { expectedVersion: result.version });
       }
     }
   }
