@@ -629,7 +629,6 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
       const perTrack = groups([{ field: "audioCodec", operator: "equals", value: "mp3" }]);
       const whole: Array<["SERIES" | "MUSIC", Record<string, unknown>]> = [
         ["SERIES", { actionType: "DELETE_SONARR" }],
-        ["SERIES", { actionType: "UNMONITOR_DELETE_FILES_SONARR" }],
         ["SERIES", { actionType: "MONITOR_DELETE_FILES_SONARR" }],
         ["SERIES", { actionType: "CHANGE_QUALITY_PROFILE_SONARR" }],
         ["SERIES", { actionType: "DO_NOTHING", addArrTags: ["seen"] }],
@@ -655,6 +654,7 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
       const perMember: Array<["SERIES" | "MUSIC", Record<string, unknown>]> = [
         ["SERIES", { actionType: "DELETE_FILES_SONARR", searchAfterAction: true }],
         ["SERIES", { actionType: "UNMONITOR_SONARR" }],
+        ["SERIES", { actionType: "UNMONITOR_DELETE_FILES_SONARR" }],
         ["SERIES", { actionType: "SEARCH_SONARR" }],
         ["SERIES", { actionType: "DO_NOTHING" }],
         ["MUSIC", { actionType: "DELETE_FILES_LIDARR" }],

@@ -100,7 +100,7 @@ describe("actionHoldOf", () => {
     });
     expect(hold?.kind === "groupScope" && hold.reason).toMatch(/^This rule set's action \("Delete from Sonarr"\) acts on the whole show/);
     for (const action of [
-      { actionType: "UNMONITOR_DELETE_FILES_SONARR" },
+      { actionType: "MONITOR_DELETE_FILES_SONARR" },
       { actionType: "MONITOR_DELETE_FILES_SONARR" },
       { actionType: "CHANGE_QUALITY_PROFILE_SONARR" },
       { actionType: "DO_NOTHING", addArrTags: ["seen"] },

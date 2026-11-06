@@ -135,9 +135,8 @@ const PER_MEMBER_METADATA_FIELDS = ["genre", "studio", "labels", "contentRating"
  * Episode Number and Seasons Behind Latest. Each is where one episode sits in
  * its show — a whole show has none of them, and one episode's must never
  * decide for the show: "Seasons Behind Latest ≥ 2" matches every show with
- * three seasons or more, and under Delete from Sonarr or Unmonitor & Delete
- * Files (which unmonitors the series) the two newest seasons it exists to keep
- * would go with them. Blocked on Music too: a track keeps its disc and track
+ * three seasons or more, and under Delete from Sonarr the two newest seasons
+ * it exists to keep would go with them. Blocked on Music too: a track keeps its disc and track
  * numbers in the same columns, which these read as empty.
  */
 const PER_EPISODE_FIELDS: readonly string[] = CONDITION_FIELDS.filter((f) => f.episodeLevel).map((f) => f.value);
@@ -250,8 +249,9 @@ export function findGroupScopeBlockedCriteria(
  * whatever members matched (`src/lib/lifecycle/actions.ts`):
  *
  *  - Delete from Sonarr / Lidarr: `deleteSeries` / `deleteArtist`.
- *  - Unmonitor & Delete Files: unmonitors the series or artist, then deletes
- *    the matched files (and, for Lidarr, searches the whole artist).
+ *  - Lidarr's Unmonitor & Delete Files: unmonitors the artist, then deletes
+ *    the matched files and searches the whole artist. (Sonarr's is
+ *    episode-scopable, below.)
  *  - Monitor & Delete Files: monitors the series or artist when it was not,
  *    then deletes the matched files (Lidarr: searches the whole artist).
  *  - Change Quality Profile: the series' or artist's profile.
@@ -261,7 +261,8 @@ export function findGroupScopeBlockedCriteria(
  * Not listed, because they act only on the matched members: Delete Files
  * Only (Sonarr deletes and searches the matched episodes by id; Lidarr's
  * search after is the one exception, `wholeRecordActionOf`), Sonarr's
- * Unmonitor Only and Search for New Copy with series scope off (they act on
+ * Unmonitor Only, Search for New Copy and Unmonitor & Delete Files with
+ * series scope off (they act on
  * the matched episodes, `ruleSetActsOnEpisodes`; with it on the group
  * judgement applies anyway — and where they run on the whole series instead,
  * the Query page's grouped view, the action says so with `episodeScope`
@@ -271,7 +272,6 @@ export function findGroupScopeBlockedCriteria(
 export const WHOLE_RECORD_ACTION_TYPES: Readonly<Record<GroupScopeType, ReadonlySet<string>>> = {
   SERIES: new Set([
     "DELETE_SONARR",
-    "UNMONITOR_DELETE_FILES_SONARR",
     "MONITOR_DELETE_FILES_SONARR",
     "CHANGE_QUALITY_PROFILE_SONARR",
   ]),
@@ -297,7 +297,8 @@ export interface GroupScopeAction {
   removeArrTags?: readonly string[] | null;
   searchAfterAction?: boolean | null;
   /**
-   * Whether Sonarr's Unmonitor Only and Search for New Copy act on the matched
+   * Whether Sonarr's Unmonitor Only, Search for New Copy and Unmonitor & Delete
+   * Files act on the matched
    * episodes. Absent or null reads as yes: a rule set with series scope off
    * always runs them per episode (`ruleSetActsOnEpisodes`). False where they
    * act on the whole series though each episode was judged on its own — the
@@ -446,7 +447,7 @@ export const GROUP_SCOPE_TERMS: Record<GroupScopeType, {
     scope: "series scope",
     group: "show",
     member: "episode",
-    memberActions: "Delete Files Only, Unmonitor Only or Search for New Copy, without Arr tags",
+    memberActions: "Delete Files Only, Unmonitor & Delete Files, Unmonitor Only or Search for New Copy, without Arr tags",
   },
   MUSIC: {
     toggle: "Match against entire artist",

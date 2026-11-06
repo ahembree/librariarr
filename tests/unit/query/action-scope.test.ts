@@ -39,11 +39,11 @@ describe("queryActionScopeViolation", () => {
     }
   });
 
-  it("refuses every Series action that acts on the whole show, and Unmonitor and Search grouped by show", () => {
+  it("refuses every Series action that acts on the whole show, and Unmonitor, Unmonitor & Delete Files and Search grouped by show", () => {
     const refused = (includeEpisodes: boolean) =>
       SERIES_ACTION_TYPES.map((a) => a.value).filter((actionType) => queryActionScopeViolation("SERIES", FOURK, includeEpisodes, { actionType }));
     expect(refused(true)).toEqual([
-      "DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR",
+      "DELETE_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR",
     ]);
     expect(refused(false)).toEqual([
       "DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR", "UNMONITOR_SONARR",
@@ -81,6 +81,8 @@ describe("queryActionEpisodeScope", () => {
     for (const field of ["seasonNumber", "episodeNumber", "seasonsBehindLatest"]) {
       expect(queryActionEpisodeScope("SERIES", false, "UNMONITOR_SONARR", groups([field]))).toBe(true);
       expect(queryActionEpisodeScope("SERIES", false, "SEARCH_SONARR", groups([field]))).toBe(true);
+      // "Seasons Behind Latest > 2" with Unmonitor & Delete Files acts on those seasons, not the show.
+      expect(queryActionEpisodeScope("SERIES", false, "UNMONITOR_DELETE_FILES_SONARR", groups([field]))).toBe(true);
       expect(queryActionEpisodeScope("SERIES", false, "DELETE_SONARR", groups([field]))).toBe(false);
     }
     // A disabled one is not evaluated, so the show row stands for the whole series.
@@ -98,7 +100,7 @@ describe("per-episode criteria (Season Number, Episode Number, Seasons Behind La
         const refused = SERIES_ACTION_TYPES.map((a) => a.value)
           .filter((actionType) => queryActionScopeViolation("SERIES", criteria, includeEpisodes, { actionType }));
         expect(refused, String(includeEpisodes)).toEqual([
-          "DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR",
+          "DELETE_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR",
         ]);
         // Tags act on the whole series, added and removed together or alone.
         expect(queryActionScopeViolation("SERIES", criteria, includeEpisodes, {
@@ -117,7 +119,8 @@ describe("queryActionScopeError", () => {
     expect(queryActionScopeError(queryActionScopeViolation("SERIES", groups(["resolution", "playCount"]), false, { actionType: "DELETE_SONARR" })!)).toBe(
       `"Delete from Sonarr" acts on the whole show, so it can't follow query criteria that describe one episode or file: ` +
         `Resolution, Play Count — one matching episode would decide for the whole show. Remove them from the query, or pick ` +
-        `an action that acts only on the matched episodes (Delete Files Only, or Unmonitor Only or Search for New Copy with ` +
+        `an action that acts only on the matched episodes (Delete Files Only, or Unmonitor Only, Unmonitor & Delete Files or ` +
+        `Search for New Copy with ` +
         `"Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — without tags).`,
     );
     expect(queryActionScopeError(queryActionScopeViolation("MUSIC", groups(["genre"]), false, { actionType: "DELETE_LIDARR" })!)).toBe(

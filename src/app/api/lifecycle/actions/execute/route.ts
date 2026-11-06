@@ -292,7 +292,11 @@ async function executeRuleSet(
 
   // An episode-scoped Unmonitor/Search acts on the episodes its Pending row
   // lists (`episodesToExecute`), not every episode the match holds now.
-  if (ruleSet.actionType && ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) {
+  if (
+    ruleSet.actionType &&
+    !isDestructiveActionType(ruleSet.actionType) &&
+    ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)
+  ) {
     const signature = actionConfigSignature(ruleSet);
     const [pending, settled] = await Promise.all([
       prisma.lifecycleAction.findMany({

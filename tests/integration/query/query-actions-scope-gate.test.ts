@@ -3,10 +3,11 @@
  * belongs to one episode or one track must never be able to make a whole
  * show or artist the target of an action. A query judges each episode and
  * track on its own, so a whole-record action — Delete from Sonarr or Lidarr,
- * Change Quality Profile, Unmonitor & Delete Files, Monitor & Delete Files,
- * Lidarr's Unmonitor Only and Search for New Copy, tags, a Lidarr file
- * delete's search after, and in the grouped series view Sonarr's Unmonitor
- * Only and Search for New Copy — is refused when the query's criteria include
+ * Change Quality Profile, Monitor & Delete Files, Lidarr's Unmonitor & Delete
+ * Files, Unmonitor Only and Search for New Copy, tags, a Lidarr file delete's
+ * search after, and in the grouped series view of a query without a
+ * per-episode criterion Sonarr's Unmonitor Only, Unmonitor & Delete Files and
+ * Search for New Copy — is refused when the query's criteria include
  * one the gate does not allow for it: the same predicate and field list as a
  * rule set with the scope off and that action (`groupScopeViolation`).
  *
@@ -153,12 +154,13 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
     const { serverId, sonarrId, lidarrId, fourK, mp3 } = await seed();
     const whole: Array<["SERIES" | "MUSIC", Record<string, unknown>, boolean?]> = [
       ["SERIES", { actionType: "DELETE_SONARR" }],
-      ["SERIES", { actionType: "UNMONITOR_DELETE_FILES_SONARR" }],
       ["SERIES", { actionType: "MONITOR_DELETE_FILES_SONARR" }],
       ["SERIES", { actionType: "CHANGE_QUALITY_PROFILE_SONARR" }],
       ["SERIES", { actionType: "DO_NOTHING", addArrTags: ["seen"] }],
       ["SERIES", { actionType: "DELETE_FILES_SONARR", removeArrTags: ["keep"] }],
-      // Grouped by show, Unmonitor Only and Search for New Copy act on the whole series.
+      // Grouped by show, Unmonitor Only, Unmonitor & Delete Files and Search
+      // for New Copy act on the whole series.
+      ["SERIES", { actionType: "UNMONITOR_DELETE_FILES_SONARR" }, false],
       ["SERIES", { actionType: "UNMONITOR_SONARR" }, false],
       ["SERIES", { actionType: "SEARCH_SONARR" }, false],
       ["MUSIC", { actionType: "DELETE_LIDARR" }],
@@ -195,6 +197,7 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
       ["SERIES", { actionType: "DELETE_FILES_SONARR" }, false],
       ["SERIES", { actionType: "DELETE_FILES_SONARR", searchAfterAction: true }, true],
       ["SERIES", { actionType: "UNMONITOR_SONARR" }, true],
+      ["SERIES", { actionType: "UNMONITOR_DELETE_FILES_SONARR" }, true],
       ["SERIES", { actionType: "SEARCH_SONARR" }, true],
       ["MUSIC", { actionType: "DELETE_FILES_LIDARR" }, false],
     ];
@@ -229,8 +232,8 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
   describe("per-episode criteria (Season Number, Episode Number, Seasons Behind Latest)", () => {
     // Where one episode sits in its show: "Seasons Behind Latest ≥ 2" with
     // Delete from Sonarr deleted every show with three seasons or more, and
-    // with Unmonitor & Delete Files (which unmonitors the series) the newest
-    // seasons it exists to keep stopped downloading.
+    // with Monitor & Delete Files (which monitors the series) the whole show
+    // was turned back on.
     const SEASON_1 = { field: "seasonNumber", operator: "equals", value: "1" };
     const BEHIND = { field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: "0" };
     const EPISODE_1 = { field: "episodeNumber", operator: "equals", value: "1" };
@@ -239,7 +242,6 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
       const { serverId, sonarrId, episodes } = await seed();
       const whole: Array<Record<string, unknown>> = [
         { actionType: "DELETE_SONARR" },
-        { actionType: "UNMONITOR_DELETE_FILES_SONARR" },
         { actionType: "MONITOR_DELETE_FILES_SONARR" },
         { actionType: "CHANGE_QUALITY_PROFILE_SONARR" },
         // Tags act on the whole series, added and removed together or alone.
@@ -263,9 +265,16 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
 
-    it("runs Unmonitor Only grouped by show on the matched episodes, and the file delete on them", async () => {
+    it("runs Unmonitor Only grouped by show on the matched episodes, and the file deletes on them", async () => {
       const { serverId, sonarrId, episodes } = await seed();
-      for (const action of [{ actionType: "UNMONITOR_SONARR" }, { actionType: "SEARCH_SONARR" }, { actionType: "DELETE_FILES_SONARR" }]) {
+      for (const action of [
+        { actionType: "UNMONITOR_SONARR" },
+        { actionType: "SEARCH_SONARR" },
+        { actionType: "DELETE_FILES_SONARR" },
+        // "Seasons Behind Latest > 2" + Unmonitor & Delete Files: those
+        // seasons' episodes are unmonitored and deleted, never the series.
+        { actionType: "UNMONITOR_DELETE_FILES_SONARR" },
+      ]) {
         mockedExecuteAction.mockClear();
         const response = await run({
           query: query(serverId, "SERIES", [MIXED_SHOW, EPISODE_1]),

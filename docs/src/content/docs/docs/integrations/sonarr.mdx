@@ -47,10 +47,10 @@ Once connected, Librariarr can perform these operations via [lifecycle rules](/d
 | Operation | Description |
 |-----------|-------------|
 | **Delete from Sonarr** | Remove the series from Sonarr **and delete its files from disk** |
-| **Unmonitor & Delete Files** | Unmonitor the series and delete the matched episodes' files |
+| **Unmonitor & Delete Files** | Unmonitor the series and delete the matched episodes' files. With series scope off (or on the Query page's episode view, or a query with an episode criterion), unmonitor only the matched episodes — and each season whose episodes all matched, missing ones included — instead of the series |
 | **Monitor & Delete Files** | Make sure the series is monitored, delete the matched episodes' files, then re-monitor those episodes so Sonarr grabs new copies |
 | **Delete Files Only** | Delete the matched episodes' files without changing monitoring |
-| **Unmonitor Only** | Stop Sonarr from monitoring the series |
+| **Unmonitor Only** | Stop Sonarr from monitoring the series (with series scope off: the matched episodes, and each season whose episodes all matched) |
 | **Change Quality Profile** | Move the series to another quality profile (skipped if it is already on it) |
 | **Search for New Copy** | Trigger a Sonarr search, changing nothing else |
 | **Do Nothing** | Only track the match (and apply tag changes, if configured) |

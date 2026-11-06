@@ -259,7 +259,7 @@ describe("actions on the whole show or artist", () => {
     SERIES: {
       DO_NOTHING: { whole: false, why: "changes nothing" },
       DELETE_SONARR: { whole: true, why: "deleteSeries" },
-      UNMONITOR_DELETE_FILES_SONARR: { whole: true, why: "unmonitors the series" },
+      UNMONITOR_DELETE_FILES_SONARR: { whole: false, why: "episode-scoped with series scope off" },
       MONITOR_DELETE_FILES_SONARR: { whole: true, why: "monitors the series" },
       DELETE_FILES_SONARR: { whole: false, why: "deletes and searches the matched episodes by id" },
       UNMONITOR_SONARR: { whole: false, why: "episode-scoped with series scope off" },
@@ -515,7 +515,7 @@ describe("the messages", () => {
     expect(groupScopeSaveError(violation)).toBe(
       `With "Match against entire series" on, a rule judges a whole show, so it can't use criteria that describe one ` +
         `episode or file: Genre. Remove them, or turn "Match against entire series" off and switch to an action that ` +
-        `acts only on the matched episodes (Delete Files Only, Unmonitor Only or Search for New Copy, without Arr tags) — ` +
+        `acts only on the matched episodes (Delete Files Only, Unmonitor & Delete Files, Unmonitor Only or Search for New Copy, without Arr tags) — ` +
         `"Delete from Sonarr" acts on the whole show.`,
     );
     expect(groupScopeHoldReason(violation)).toMatch(
@@ -529,8 +529,8 @@ describe("the messages", () => {
     expect(groupScopeSaveError(resolution)).toBe(
       `"Delete from Sonarr" acts on the whole show, so with "Match against entire series" off it can't follow criteria ` +
         `that describe one episode or file: Resolution — one episode would decide for the whole show. Remove them, or ` +
-        `switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor Only or Search for ` +
-        `New Copy, without Arr tags).`,
+        `switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor & Delete Files, ` +
+        `Unmonitor Only or Search for New Copy, without Arr tags).`,
     );
     expect(groupScopeHoldReason(resolution)).toBe(
       `This rule set's action ("Delete from Sonarr") acts on the whole show but follows per-episode criteria ` +

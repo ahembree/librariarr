@@ -1182,7 +1182,7 @@ describe("season and episode criteria", () => {
     expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
   });
 
-  it.each(["DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR"])(
+  it.each(["DELETE_SONARR", "MONITOR_DELETE_FILES_SONARR"])(
     "refuses them with series scope off under %s, which acts on the whole series",
     async (actionType) => {
       const user = await createTestUser();
