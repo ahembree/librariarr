@@ -35,6 +35,7 @@ import { POST } from "@/app/api/servers/[id]/sync/route";
 import { TASK_SYNC_SERVER, MAIN_QUEUE, REQUESTED_SYNC_PRIORITY } from "@/lib/jobs/constants";
 import { getTestPrisma } from "../../setup/test-db";
 import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 
 describe("POST /api/servers/[id]/sync", () => {
   beforeEach(async () => {
@@ -147,21 +148,27 @@ describe("POST /api/servers/[id]/sync", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
 
-    // Create an existing RUNNING sync job
-    await testPrisma.syncJob.create({
+    // An existing RUNNING sync job whose run is in progress
+    const running = await testPrisma.syncJob.create({
       data: { mediaServerId: server.id, status: "RUNNING" },
     });
+    beginSyncRun(running.id);
 
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const response = await callRouteWithParams(
-      POST,
-      { id: server.id },
-      {
-        url: `/api/servers/${server.id}/sync`,
-        method: "POST",
-      }
-    );
+    let response: Response;
+    try {
+      response = await callRouteWithParams(
+        POST,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}/sync`,
+          method: "POST",
+        }
+      );
+    } finally {
+      endSyncRun(running.id);
+    }
     const body = await expectJson<{ error: string }>(response, 409);
     expect(body.error).toBe("A sync is already running for this server");
     expect(mockEnqueueJob).not.toHaveBeenCalled();

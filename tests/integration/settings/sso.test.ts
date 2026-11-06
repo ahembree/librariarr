@@ -385,14 +385,80 @@ describe("PUT /api/settings/sso", () => {
     expect(stored.forwardAuthUserHeader).toBe("Remote-User");
     expect(stored.ssoMode).toBe("FORWARD_AUTH");
 
-    // The other headers carry no identity; a recent sign-in may change the user header.
-    await expectJson(await callRoute(PUT, { method: "PUT", body: { forwardAuthEmailHeader: "X-Email" } }), 200);
+    // A recent sign-in may change the user header.
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     const body = await expectJson<{ forwardAuthUserHeader: string }>(
       await callRoute(PUT, { method: "PUT", body: { forwardAuthUserHeader: "X-Forwarded-User" } }),
       200,
     );
     expect(body.forwardAuthUserHeader).toBe("X-Forwarded-User");
+  });
+
+  // The login copies these headers into the account's email and username,
+  // which a signed-in session reads back: pointed at a header the proxy adds
+  // for itself, a stale cookie would read that credential out.
+  it("asks a stale session to confirm it's them before changing the forward-auth email or name header", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "FORWARD_AUTH", forwardAuthUserHeader: "Remote-User" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    for (const body of [{ forwardAuthEmailHeader: "X-Email" }, { forwardAuthNameHeader: "X-Proxy-Token" }]) {
+      const refused = await expectJson<{ code: string; error: string }>(
+        await callRoute(PUT, { method: "PUT", body }),
+        403,
+      );
+      expect(refused.code).toBe("reauth_required");
+      expect(refused.error).toMatch(/^Changing the forward-auth email or name header needs a sign-in/);
+    }
+    const stored = await prisma.appSettings.findFirstOrThrow();
+    expect(stored.forwardAuthEmailHeader).toBe("Remote-Email");
+    expect(stored.forwardAuthNameHeader).toBe("Remote-Name");
+
+    // Sending the stored names again changes nothing, so it asks nothing.
+    await expectJson(
+      await callRoute(PUT, {
+        method: "PUT",
+        body: { forwardAuthEmailHeader: "Remote-Email", forwardAuthNameHeader: "Remote-Name" },
+      }),
+      200,
+    );
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    const saved = await expectJson<{ forwardAuthEmailHeader: string; forwardAuthNameHeader: string }>(
+      await callRoute(PUT, { method: "PUT", body: { forwardAuthEmailHeader: "X-Email", forwardAuthNameHeader: "X-Name" } }),
+      200,
+    );
+    expect(saved).toMatchObject({ forwardAuthEmailHeader: "X-Email", forwardAuthNameHeader: "X-Name" });
+  });
+
+  // Even a recent sign-in may not name a header that carries a credential.
+  it("refuses a credential header name for any forward-auth header, in any case", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "FORWARD_AUTH", forwardAuthUserHeader: "Remote-User" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    for (const field of ["forwardAuthUserHeader", "forwardAuthEmailHeader", "forwardAuthNameHeader"]) {
+      for (const name of ["X-Librariarr-Proxy-Secret", "authorization", "Proxy-Authorization", "COOKIE"]) {
+        const refused = await expectJson<{ error: string; details: string[] }>(
+          await callRoute(PUT, { method: "PUT", body: { [field]: name } }),
+          400,
+        );
+        expect(refused.error).toBe("Validation failed");
+        expect(refused.details).toEqual([
+          `${field}: Cannot be a header that carries a credential (X-Librariarr-Proxy-Secret, Authorization, Proxy-Authorization or Cookie)`,
+        ]);
+      }
+    }
+    const stored = await prisma.appSettings.findFirstOrThrow();
+    expect(stored).toMatchObject({
+      forwardAuthUserHeader: "Remote-User",
+      forwardAuthEmailHeader: "Remote-Email",
+      forwardAuthNameHeader: "Remote-Name",
+    });
   });
 
   // ── Disable lockout guard ─────────────────────────────────────────────
@@ -428,6 +494,58 @@ describe("PUT /api/settings/sso", () => {
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toMatch(/Cannot disable SSO/);
     expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+  });
+
+  // The same refusal in forward-auth mode, while SSO is on.
+  it("refuses to disable forward-auth SSO when admin has no Plex and no local credentials", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { plexId: null, plexToken: null, ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "FORWARD_AUTH",
+        ssoEnabled: true,
+        forwardAuthUserHeader: "Remote-User",
+        localAuthEnabled: false,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    const body = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      400,
+    );
+    expect(body.error).toMatch(/Cannot disable SSO/);
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+  });
+
+  // With SSO already off there is nothing to disable, so a save of the
+  // forward-auth settings must not meet the lockout refusal — as it did not
+  // in OIDC mode. The state follows an SSO revert (which turns SSO off and
+  // unlinks) on an install whose Plex login is off and has no local login.
+  it("saves forward-auth settings while SSO is off even when no other sign-in method is usable", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.id }, data: { plexId: null, plexToken: null } });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "FORWARD_AUTH",
+        ssoEnabled: false,
+        forwardAuthUserHeader: "Remote-User",
+        plexLoginEnabled: false,
+        localAuthEnabled: false,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+    for (const body of [{ forwardAuthUserHeader: "X-Forwarded-User" }, { ssoEnabled: false }]) {
+      const saved = await expectJson<{ ssoEnabled: boolean }>(await callRoute(PUT, { method: "PUT", body }), 200);
+      expect(saved.ssoEnabled).toBe(false);
+    }
+    expect((await prisma.appSettings.findFirstOrThrow()).forwardAuthUserHeader).toBe("X-Forwarded-User");
   });
 
   it("allows disabling SSO when Plex login is usable", async () => {

@@ -3,10 +3,12 @@ import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
+  callRouteWithParams,
   expectJson,
   createTestUser,
   createTestServer,
   createTestRadarrInstance,
+  createTestSonarrInstance,
 } from "../../setup/test-helpers";
 import type { QueryDefinition } from "@/lib/query/types";
 import { convertQueryToRuleSetBody } from "@/lib/query/convert-to-rule";
@@ -32,6 +34,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 import { POST } from "@/app/api/lifecycle/rules/route";
+import { PUT } from "@/app/api/lifecycle/rules/[id]/route";
 
 function makeQuery(overrides: Partial<QueryDefinition> = {}): QueryDefinition {
   return {
@@ -219,6 +222,103 @@ describe("Convert query → lifecycle rule set", () => {
     });
     const epPayload = await expectJson<{ ruleSet: { seriesScope: boolean } }>(epResponse, 201);
     expect(epPayload.ruleSet.seriesScope).toBe(false);
+  });
+
+  it("creates a query using Resolution, grouped by show, as a rule set with series scope off", async () => {
+    // Resolution describes one episode, which a whole-show rule may not use:
+    // with series scope on the save would be refused.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const query = makeQuery({
+      mediaTypes: ["SERIES"],
+      includeEpisodes: false,
+      groups: [{
+        id: "g1",
+        condition: "AND",
+        rules: [
+          { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+          { id: "r2", field: "resolution", operator: "equals", value: "720P", condition: "AND" },
+        ],
+        groups: [],
+      }],
+    });
+
+    const body = convertQueryToRuleSetBody(query, { name: "Low-res shows", targetLibraryType: "SERIES", serverIds: [server.id] });
+    const payload = await expectJson<{ ruleSet: { id: string; seriesScope: boolean } }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body }),
+      201,
+    );
+
+    expect(payload.ruleSet.seriesScope).toBe(false);
+    expect((await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: payload.ruleSet.id } })).seriesScope).toBe(false);
+  });
+
+  it("creates a music query using Audio Codec as a rule set with artist scope off", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const query = makeQuery({
+      mediaTypes: ["MUSIC"],
+      groups: [{
+        id: "g1",
+        condition: "AND",
+        rules: [{ id: "r1", field: "audioCodec", operator: "equals", value: "mp3", condition: "AND" }],
+        groups: [],
+      }],
+    });
+
+    const body = convertQueryToRuleSetBody(query, { name: "MP3s", targetLibraryType: "MUSIC", serverIds: [server.id] });
+    const payload = await expectJson<{ ruleSet: { seriesScope: boolean } }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body }),
+      201,
+    );
+
+    expect(payload.ruleSet.seriesScope).toBe(false);
+  });
+
+  it("never creates a whole-show action over the per-episode criteria it turned the scope off for", async () => {
+    // A query grouped by show reading Genre (stored per episode): created with
+    // series scope off and its action off, it cannot then be armed with an
+    // action on the whole show — only one on the matched episodes.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const sonarr = await createTestSonarrInstance(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const query = makeQuery({
+      mediaTypes: ["SERIES"],
+      includeEpisodes: false,
+      groups: [{
+        id: "g1",
+        condition: "AND",
+        rules: [{ id: "r1", field: "genre", operator: "contains", value: "Rock", condition: "AND", negate: true }],
+        groups: [],
+      }],
+    });
+
+    const body = convertQueryToRuleSetBody(query, { name: "Not rock", targetLibraryType: "SERIES", serverIds: [server.id] });
+    expect(body).toMatchObject({ seriesScope: false, actionEnabled: false });
+    expect("actionType" in body).toBe(false);
+    const { ruleSet } = await expectJson<{ ruleSet: { id: string; actionEnabled: boolean; actionType: string | null } }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body }),
+      201,
+    );
+    expect(ruleSet).toMatchObject({ actionEnabled: false, actionType: null });
+
+    const put = (data: Record<string, unknown>) =>
+      callRouteWithParams(PUT, { id: ruleSet.id }, { url: `/api/lifecycle/rules/${ruleSet.id}`, method: "PUT", body: data });
+    const refused = await expectJson<{ details: string[] }>(
+      await put({ actionEnabled: true, actionType: "DELETE_SONARR", arrInstanceId: sonarr.id }),
+      400,
+    );
+    expect(refused.details[0]).toMatch(/"Delete from Sonarr" acts on the whole show, .*Genre/);
+    // Asked for directly too: the create schema refuses the same combination.
+    const direct = await expectJson<{ details: string[] }>(
+      await callRoute(POST, { url: "/api/lifecycle/rules", method: "POST", body: { ...body, name: "Direct", actionEnabled: true, actionType: "DELETE_SONARR", arrInstanceId: sonarr.id } }),
+      400,
+    );
+    expect(direct.details[0]).toMatch(/^actionType: "Delete from Sonarr" acts on the whole show/);
+    await expectJson(await put({ actionEnabled: true, actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id }), 200);
   });
 
   it("rejects a duplicate name + type combination", async () => {

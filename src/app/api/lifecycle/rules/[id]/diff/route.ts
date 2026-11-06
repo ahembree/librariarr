@@ -10,6 +10,8 @@ import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
 import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { editorScopeAction } from "@/lib/lifecycle/editor-action";
+import { HOLD_ACTION_SELECT } from "@/lib/lifecycle/held-actions";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { seriesTitleOf } from "@/lib/media/display-title";
@@ -87,7 +89,7 @@ export const POST = withSession(async (
   // Verify ownership
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id, userId: session.userId },
-    select: { id: true, actionEnabled: true, actionType: true, arrInstanceId: true },
+    select: { id: true, arrInstanceId: true, ...HOLD_ACTION_SELECT },
   });
   if (!ruleSet) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -142,7 +144,15 @@ export const POST = withSession(async (
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
   const arrInstanceId = data.arrInstanceId !== undefined ? data.arrInstanceId : ruleSet.arrInstanceId;
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false);
+  // The config being saved, each field of it the request leaves out the
+  // stored one's.
+  const action = editorScopeAction(data, ruleSet);
+  // Series/artist scope read as the evaluation below routes it, with the
+  // action being saved: per-episode criteria under an action on the whole
+  // show or artist are refused as the save itself would be.
+  const evaluability = await checkLifecycleRuleEvaluability(
+    session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false, action,
+  );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -188,16 +198,15 @@ export const POST = withSession(async (
   const candidates = (items as unknown as Record<string, unknown>[]).filter(
     (rec) => !excludedIds.has(rec.id as string),
   );
-  const actionType = data.actionType !== undefined ? data.actionType : ruleSet.actionType;
   const copyKeys = await crossServerCopyKeys(candidates, {
     type,
     serverCount: serverIds.length,
     arrData,
     // The config being saved, not the stored one: arming an action in the
     // same edit is what makes detection collapse copies without Arr data.
-    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) && !!actionType,
+    actionArmed: !!action.actionEnabled && !!action.actionType,
     trackScope: seriesScope === false,
-    actionType,
+    actionType: action.actionType ?? null,
   });
   // Ranked exactly as detection's collapse ranks them (`copyRank`).
   const keptForKey = new Map<string, string>();

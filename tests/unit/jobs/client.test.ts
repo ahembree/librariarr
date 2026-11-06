@@ -58,6 +58,36 @@ describe("jobs client", () => {
     expect(addJob).toHaveBeenCalledWith("task-b", { y: 2 }, undefined);
   });
 
+  it("tries again on the next enqueue after the worker utils could not be made", async () => {
+    // The database was briefly unreachable at the first enqueue. Caching that
+    // failure made every later enqueue of the bundle fail until a restart.
+    makeWorkerUtils.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await expect(enqueueJob("task-a", {})).resolves.toBe(false);
+    expect(error).toHaveBeenCalledWith("Jobs", 'Failed to enqueue job "task-a"', { error: "Error: ECONNREFUSED" });
+
+    await expect(enqueueJob("task-b", { y: 2 })).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+    expect(addJob).toHaveBeenCalledWith("task-b", { y: 2 }, undefined);
+
+    // ...and once made, the utils are cached again.
+    await expect(enqueueJob("task-c", {})).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives every enqueue waiting on a failed attempt its error, then retries once", async () => {
+    let rejectAttempt!: (error: Error) => void;
+    makeWorkerUtils.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAttempt = reject; }));
+    const first = enqueueJob("task-a", {});
+    const second = enqueueJob("task-b", {});
+    await vi.waitFor(() => expect(makeWorkerUtils).toHaveBeenCalledTimes(1));
+    rejectAttempt(new Error("ECONNREFUSED"));
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(false);
+
+    await expect(enqueueJob("task-c", {})).resolves.toBe(true);
+    expect(makeWorkerUtils).toHaveBeenCalledTimes(2);
+  });
+
   it("logs enqueue errors and resolves false (never throws)", async () => {
     addJob.mockRejectedValueOnce(new Error("db down"));
     await expect(enqueueJob("task-c", {})).resolves.toBe(false);
@@ -100,6 +130,59 @@ describe("jobs client", () => {
       await expect(enqueueJob("sync-server", {}, { jobKey: "sync:s1" })).resolves.toBe(true);
       expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
       expect(warn).toHaveBeenCalledWith("Jobs", 'Could not read the queued priority for "sync:s1"', {
+        error: "Error: no such relation",
+      });
+    });
+  });
+
+  describe("a realtime watch-history enqueue replacing a queued job", () => {
+    const spec = { jobKey: "watch-history:s1", queueName: "main", maxAttempts: 3 };
+
+    it("keeps a queued full replace instead of making it incremental", async () => {
+      // by-type's deferred refresh is waiting under the key as a full replace.
+      poolQuery.mockResolvedValueOnce({ rows: [{ incremental: null }] });
+      await enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+      const [sql, params] = poolQuery.mock.calls[0];
+      // The payload is only on the private table; a running job is not replaced.
+      expect(sql).toContain("graphile_worker._private_jobs");
+      expect(sql).toContain('"locked_at" IS NULL');
+      expect(params).toEqual(["watch-history:s1"]);
+      expect(addJob).toHaveBeenCalledWith("sync-watch-history", { serverId: "s1" }, spec);
+    });
+
+    it("keeps a queued full replace that says incremental: false", async () => {
+      poolQuery.mockResolvedValueOnce({ rows: [{ incremental: "false" }] });
+      await enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+      expect(addJob).toHaveBeenCalledWith("sync-watch-history", { serverId: "s1" }, spec);
+    });
+
+    it("stays incremental when the queued job is incremental too", async () => {
+      poolQuery.mockResolvedValueOnce({ rows: [{ incremental: "true" }] });
+      await enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+      expect(addJob).toHaveBeenCalledWith("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+    });
+
+    it("stays incremental when nothing is queued under the key", async () => {
+      await enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+      expect(addJob).toHaveBeenCalledWith("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+    });
+
+    it("looks nothing up for a full replace or another task", async () => {
+      await enqueueJob("sync-watch-history", { serverId: "s1" }, spec);
+      await enqueueJob("sync-server", { serverId: "s1", incremental: true }, { jobKey: "sync:s1" });
+      expect(poolQuery.mock.calls.some(([sql]) => String(sql).includes("_private_jobs"))).toBe(false);
+    });
+
+    it("looks nothing up for an unkeyed enqueue", async () => {
+      await enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, { queueName: "main" });
+      expect(poolQuery).not.toHaveBeenCalled();
+    });
+
+    it("still enqueues as asked when the lookup fails", async () => {
+      poolQuery.mockRejectedValueOnce(new Error("no such relation"));
+      await expect(enqueueJob("sync-watch-history", { serverId: "s1", incremental: true }, spec)).resolves.toBe(true);
+      expect(addJob).toHaveBeenCalledWith("sync-watch-history", { serverId: "s1", incremental: true }, spec);
+      expect(warn).toHaveBeenCalledWith("Jobs", 'Could not read the queued watch-history refresh for "watch-history:s1"', {
         error: "Error: no such relation",
       });
     });

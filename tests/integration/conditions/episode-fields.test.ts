@@ -8,9 +8,10 @@
  *  - `seasonNumber` / `episodeNumber` read NULL on anything but an episode (a
  *    music track keeps its disc/track numbers in the same columns), in Phase 1
  *    and Phase 2 alike.
- *  - A series aggregate has no season or episode: the aggregate gate passes
- *    those rules and the per-episode pass decides, so the members are the
- *    matching episodes.
+ *  - A series aggregate has no season or episode: with series scope off each
+ *    episode is judged on its own with the aggregates injected
+ *    (`episodesMatchingIndividually`), so the members are the matching
+ *    episodes; series scope refuses them (the group-scope gate).
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
@@ -252,19 +253,30 @@ describe("per-episode criteria", () => {
         { field: "watchedEpisodePercentage", operator: "greaterThan", value: "40" },
         { field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: "2" },
       );
-      for (const restrict of [true, false]) {
-        const matched = await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, restrict);
-        expect(matched).toHaveLength(1);
-        const m = matched[0] as unknown as { memberIds: string[]; episodeFieldValues: Record<string, unknown> };
-        expect([...m.memberIds].sort()).toEqual(
-          [s.ep["Long-S1E1"], s.ep["Long-S1E2"], s.ep["Long-S2E1"], s.ep["Long-S2E2"]].sort(),
-        );
-        expect(m.episodeFieldValues).toMatchObject({ seasonNumber: [1, 2] });
-        // Reported as the episodes it acts on, not the whole show.
-        const shown = matched[0] as unknown as { matchedEpisodes: number; fileSize: string | null };
-        expect(shown.matchedEpisodes).toBe(4);
-        expect(shown.fileSize).toBe((BigInt(1073741824) * BigInt(4)).toString());
-      }
+      const matched = await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, true);
+      expect(matched).toHaveLength(1);
+      const m = matched[0] as unknown as { memberIds: string[]; episodeFieldValues: Record<string, unknown> };
+      expect([...m.memberIds].sort()).toEqual(
+        [s.ep["Long-S1E1"], s.ep["Long-S1E2"], s.ep["Long-S2E1"], s.ep["Long-S2E2"]].sort(),
+      );
+      expect(m.episodeFieldValues).toMatchObject({ seasonNumber: [1, 2] });
+      // Reported as the episodes it acts on, not the whole show, and stored
+      // with the group snapshot's shape (no season of its own).
+      const shown = matched[0] as unknown as { matchedEpisodes: number; fileSize: string | null; seasonNumber: number | null; parentTitle: string | null };
+      expect(shown.matchedEpisodes).toBe(4);
+      expect(shown.fileSize).toBe((BigInt(1073741824) * BigInt(4)).toString());
+      expect(shown.seasonNumber).toBeNull();
+      expect(shown.parentTitle).toBeNull();
+      // Its per-episode criterion is reported from every episode it selected.
+      const records = matched as unknown as Array<Record<string, unknown>>;
+      const id = matched[0].id;
+      expect(getActualValuesForAllRules(records, rules, "SERIES").get(id)?.get("r1")).toBe("2–3");
+      expect(getMatchedCriteriaForItems(records, rules, "SERIES").get(id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ field: "Seasons Behind Latest", actualValue: "2–3" }),
+      ]));
+
+      // Series scope judges whole shows, which have no season: refused.
+      expect(await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, false)).toEqual([]);
     });
 
     it("never lets a negated per-episode rule sweep whole shows through the aggregate", async () => {
@@ -276,11 +288,13 @@ describe("per-episode criteria", () => {
         { field: "availableEpisodeCount", operator: "greaterThan", value: "0" },
         { field: "seasonNumber", operator: "equals", value: "1", negate: true },
       );
-      const matched = await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, false);
+      const matched = await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, true);
       expect(matched).toHaveLength(1);
       const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;
       expect(members).toHaveLength(7);
       expect(members).not.toContain(s.ep["Long-S1E1"]);
+      // In series scope the rule is never evaluated on a show at all.
+      expect(await evaluateSeriesScope(rules, [s.serverId], undefined, undefined, false)).toEqual([]);
     });
   });
 

@@ -71,8 +71,21 @@ export interface FieldContext {
   mediaTypes?: ("MOVIE" | "SERIES" | "MUSIC")[];
   /** Whether the query is in episode mode (skips series grouping). */
   includeEpisodes?: boolean;
-  /** A SERIES rule set's series scope — used by the rule builder (per-episode fields need it off). */
-  seriesScope?: boolean;
+  /**
+   * The rule builder's gate while a criterion of one episode or track could
+   * make a whole show or artist the action's target, else null: a Series or
+   * Music rule set judging whole shows or artists ("Match against entire
+   * series" / "artist" on, `judgement: "group"`), or one with the scope off
+   * whose action acts on the whole show or artist (`judgement: "member"`).
+   * The criteria that judgement may not use (`isBlockedAtGroupScope`) and
+   * stream queries are disabled, with the reason.
+   */
+  groupScope?: {
+    type: "SERIES" | "MUSIC";
+    judgement: "group" | "member";
+    /** The armed action's part that acts on the whole show or artist, named; null when none. */
+    wholeRecordAction: string | null;
+  } | null;
   [key: string]: unknown;
 }
 
@@ -86,14 +99,20 @@ export interface BuilderConfig<R extends BaseRule, G extends BaseGroup<R>> {
   isFieldDisabled: (field: string, ctx: FieldContext) => boolean;
   getDisabledTooltip: (field: string, ctx: FieldContext) => string | null;
   /**
-   * Returns a tooltip string when the rule's required integration is
-   * configured but currently unreachable. The base builder renders a small
+   * Returns a tooltip string when a rule's field cannot be answered as things
+   * stand — its integration is configured but currently unreachable, or the
+   * rule set's scope does not allow it. The base builder renders a small
    * warning badge next to the field name when this returns non-null. Should
-   * return null when the field doesn't depend on an unreachable integration.
+   * return null otherwise.
    */
   getFieldUnreachableTooltip?: (field: string, ctx: FieldContext) => string | null;
   isSectionHidden?: (sectionKey: string, ctx: FieldContext) => boolean;
   isValuelessOperator?: (op: string) => boolean;
+  /**
+   * Why "Add Stream Query" is not offered right now, or null: the button is
+   * then shown disabled with this reason.
+   */
+  getStreamQueryDisabledTooltip?: (ctx: FieldContext) => string | null;
   /** Stream query support — when provided, "Add Stream Query" button appears */
   streamQueryFields?: FieldDef[];
   streamQuerySections?: SectionDef[];

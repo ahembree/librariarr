@@ -194,9 +194,10 @@ describe("runTrashSync — skips and no-ops", () => {
 describe("runTrashSync — quality profiles and overlays", () => {
   it("updates an existing profile, folding in overlays that target it by name or by id only", async () => {
     managedRows([
-      row({ resourceType: "QUALITY_PROFILE", trashId: "qp1", arrId: 70 }),
-      // Targets by the app id it last wrote to; its format is unknown to the guide (stored name used).
-      row({ resourceType: "PROFILE_CF", trashId: "Renamed Elsewhere", arrId: 70, selection: { formats: [{ trashId: "zzz", name: "Other", score: 7 }] } }),
+      // Last synced as "My WEB"; the guide has renamed the profile since.
+      row({ resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "My WEB", arrId: 70 }),
+      // Targets by the app id (and name) it last wrote to; its format is unknown to the guide (stored name used).
+      row({ resourceType: "PROFILE_CF", trashId: "Renamed Elsewhere", name: "My WEB", arrId: 70, selection: { formats: [{ trashId: "zzz", name: "Other", score: 7 }] } }),
       // Targets a different profile: ignored for this one.
       row({ resourceType: "PROFILE_CF", trashId: "Unrelated", arrId: 999, selection: { formats: [{ trashId: "cf1", name: "AMZN", score: -5 }] } }),
       // No selection at all.
@@ -222,6 +223,23 @@ describe("runTrashSync — quality profiles and overlays", () => {
       AMZN: 100,
       Other: 7,
     });
+  });
+
+  it("does not fold in an overlay whose recorded id now names this profile but which never wrote to it", async () => {
+    managedRows([
+      row({ resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "WEB-1080p", arrId: 70 }),
+      // Last wrote to "Old Profile" as id 70 on the app the instance used to reach.
+      row({ resourceType: "PROFILE_CF", trashId: "Old Profile", name: "Old Profile", arrId: 70, selection: { formats: [{ trashId: "cf1", name: "AMZN", score: -5 }] } }),
+    ]);
+    clientMock.getQualityProfiles.mockResolvedValue([
+      { ...SCHEMA, id: 70, name: "WEB-1080p", formatItems: [{ format: 9, name: "AMZN", score: 0 }, { format: 8, name: "Other", score: 0 }] },
+    ]);
+
+    await runTrashSync("u1", SONARR, { dryRun: false, items: [{ resourceType: "QUALITY_PROFILE", trashId: "qp1" }] });
+    const [id, payload] = clientMock.updateQualityProfile.mock.calls[0];
+    expect(id).toBe(70);
+    // The guide's score, not the stale overlay's -5.
+    expect(payload.formatItems.find((f: { name: string }) => f.name === "AMZN").score).toBe(100);
   });
 
   it("a NOOP profile apply writes nothing to the app", async () => {

@@ -9,7 +9,7 @@ import { QualityChips } from "@/components/quality-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { PlayHistory } from "@/components/play-history";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { qualityChips } from "@/lib/media/quality-chips";

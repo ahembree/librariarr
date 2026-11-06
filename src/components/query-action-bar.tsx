@@ -39,6 +39,9 @@ import {
 } from "@/lib/lifecycle/action-types";
 import { formatBytesNum } from "@/lib/format";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { queryActionGate, queryActionScopeError, queryActionScopeViolation } from "@/lib/query/action-scope";
+import { BlockedReason } from "@/components/rule-scope-gate";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export type ArrFamily = "radarr" | "sonarr" | "lidarr";
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -74,12 +77,26 @@ interface QueryActionBarProps {
   executing: boolean;
   onExecute: (config: QueryActionConfig) => void;
   onClear: () => void;
+  /**
+   * The criteria (`groups`) of the run whose results are on screen, which the
+   * action is checked against: an action on a whole show or artist can't
+   * follow a criterion of one episode or track (`queryActionGate`).
+   */
+  criteria: unknown;
+  /** Whether that run listed individual episodes (`includeEpisodes`). */
+  episodeMode: boolean;
 }
 
 const FAMILY_BY_TYPE: Record<MediaType, ArrFamily> = {
   MOVIE: "radarr",
   SERIES: "sonarr",
   MUSIC: "lidarr",
+};
+
+const TYPE_BY_FAMILY: Record<ArrFamily, MediaType> = {
+  radarr: "MOVIE",
+  sonarr: "SERIES",
+  lidarr: "MUSIC",
 };
 
 const ACTIONS_BY_FAMILY: Record<ArrFamily, { value: string; label: string }[]> = {
@@ -176,6 +193,8 @@ export function QueryActionBar({
   executing,
   onExecute,
   onClear,
+  criteria,
+  episodeMode,
 }: QueryActionBarProps) {
   const [actionType, setActionType] = useState<string>("");
   const [targetQualityProfileId, setTargetQualityProfileId] = useState<number | null>(null);
@@ -216,6 +235,25 @@ export function QueryActionBar({
   const supportsTags = !!family && !deletesArrRecord(submittedActionType);
   const hasTags = supportsTags && (addArrTags.length > 0 || removeArrTags.length > 0);
 
+  // One episode or track never decides for a whole show or artist: an action
+  // on the whole Sonarr series or Lidarr artist can't follow the run's
+  // criteria of one episode or track — the check the server refuses the run
+  // with (`queryActionScopeViolation`). Each option, the tags and Lidarr's
+  // search after are offered disabled with the reason, and Run is off while
+  // the configured action would break it (the run re-ran since it was chosen).
+  const gateFor = (fam: ArrFamily, value: string) =>
+    queryActionGate(TYPE_BY_FAMILY[fam], criteria, episodeMode, value.startsWith(TAG_ONLY_PREFIX) ? "DO_NOTHING" : value);
+  const gate = family ? gateFor(family, effectiveActionType) : null;
+  const runViolation = family
+    ? queryActionScopeViolation(TYPE_BY_FAMILY[family], criteria, episodeMode, {
+        actionType: submittedActionType,
+        addArrTags: supportsTags ? addArrTags : [],
+        removeArrTags: supportsTags ? removeArrTags : [],
+        searchAfterAction: canSearchAfter(submittedActionType) && searchAfterAction,
+      })
+    : null;
+  const runBlockedReason = runViolation ? queryActionScopeError(runViolation) : null;
+
   const targetCount = family
     ? selectionTypeCounts[(Object.keys(FAMILY_BY_TYPE) as MediaType[]).find((t) => FAMILY_BY_TYPE[t] === family)!]
     : 0;
@@ -237,6 +275,7 @@ export function QueryActionBar({
     !!arrInstanceId &&
     targetCount > 0 &&
     !executing &&
+    !runBlockedReason &&
     (!needsProfile || targetQualityProfileId != null) &&
     (!isTagOnly || hasTags);
 
@@ -251,7 +290,7 @@ export function QueryActionBar({
 
   const handleConfirm = () => {
     if (!effectiveActionType || !arrInstanceId) return;
-    if (!family) return;
+    if (!family || runBlockedReason) return;
     onExecute({
       actionType: submittedActionType,
       mediaType: (Object.keys(FAMILY_BY_TYPE) as MediaType[]).find((t) => FAMILY_BY_TYPE[t] === family)!,
@@ -320,10 +359,30 @@ export function QueryActionBar({
               <SelectLabel>{FAMILY_LABEL[fam]}</SelectLabel>
               {ACTIONS_BY_FAMILY[fam].map((a) => {
                 const value = a.value === "DO_NOTHING" ? `${TAG_ONLY_PREFIX}${fam}` : a.value;
+                const label = a.value === "DO_NOTHING" ? "Do Nothing (tags only)" : a.label;
+                const reason = gateFor(fam, value).action;
+                if (!reason) {
+                  return (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  );
+                }
                 return (
-                  <SelectItem key={value} value={value}>
-                    {a.value === "DO_NOTHING" ? "Do Nothing (tags only)" : a.label}
-                  </SelectItem>
+                  <TooltipProvider key={value}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <SelectItem value={value} disabled title={reason}>
+                            {label}
+                          </SelectItem>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="left" className="max-w-xs">
+                        {reason}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 );
               })}
             </SelectGroup>
@@ -352,8 +411,12 @@ export function QueryActionBar({
 
       {supportsTags && (
         <>
-          <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={(tags) => { setAddArrTags(tags); setRemoveArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled} />
-          <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={(tags) => { setRemoveArrTags(tags); setAddArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled} />
+          <BlockedReason reason={gate?.tags ?? null}>
+            <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={(tags) => { setAddArrTags(tags); setRemoveArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled || !!gate?.tags} />
+          </BlockedReason>
+          <BlockedReason reason={gate?.tags ?? null}>
+            <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={(tags) => { setRemoveArrTags(tags); setAddArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled || !!gate?.tags} />
+          </BlockedReason>
         </>
       )}
 
@@ -364,23 +427,31 @@ export function QueryActionBar({
         </label>
       )}
       {supportsSearchAfter && (
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Checkbox checked={searchAfterAction} onCheckedChange={(c) => setSearchAfterAction(c === true)} disabled={controlsDisabled} />
-          {needsProfile ? "Search for upgrade" : "Search after"}
-        </label>
+        <BlockedReason reason={gate?.searchAfter ?? null}>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Checkbox
+              checked={searchAfterAction}
+              onCheckedChange={(c) => setSearchAfterAction(c === true)}
+              disabled={controlsDisabled || !!gate?.searchAfter}
+            />
+            {needsProfile ? "Search for upgrade" : "Search after"}
+          </label>
+        </BlockedReason>
       )}
 
-      <LoadingButton
-        size="sm"
-        className="h-8"
-        disabled={!canRun}
-        loading={executing}
-        icon={Play}
-        iconClassName="h-3.5 w-3.5"
-        onClick={() => setConfirmOpen(true)}
-      >
-        Run Action
-      </LoadingButton>
+      <BlockedReason reason={runBlockedReason}>
+        <LoadingButton
+          size="sm"
+          className="h-8"
+          disabled={!canRun}
+          loading={executing}
+          icon={Play}
+          iconClassName="h-3.5 w-3.5"
+          onClick={() => setConfirmOpen(true)}
+        >
+          Run Action
+        </LoadingButton>
+      </BlockedReason>
 
       {noSelection ? (
         <span className="text-xs text-muted-foreground">Select results below to run an action.</span>

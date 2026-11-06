@@ -17,11 +17,8 @@ import {
   EPISODE_LEVEL_FIELDS,
 } from "@/lib/conditions/helpers";
 import { ruleToWhere, UNSATISFIABLE_WHERE } from "@/lib/conditions/where-builder";
-import {
-  findEpisodeLevelFields,
-  findFieldsInvalidForType,
-  SERIES_SCOPE_EPISODE_CRITERIA_REASON,
-} from "@/lib/conditions/library-type-guard";
+import { findFieldsInvalidForType } from "@/lib/conditions/library-type-guard";
+import { groupScopeViolation, groupScopeSaveError } from "@/lib/conditions/group-scope";
 import { CONDITION_FIELDS } from "@/lib/conditions/fields";
 import type { ConditionGroup } from "@/lib/conditions/types";
 
@@ -162,6 +159,8 @@ describe("Phase 1 clauses", () => {
 });
 
 describe("rule set guards", () => {
+  // The per-episode fields are criteria of one episode under the group-scope
+  // gate (group-scope.ts), which every save, skip, hold and Query action reads.
   it("finds per-episode fields anywhere in the tree, disabled ones included", () => {
     const rules = [{
       id: "g", condition: "AND", rules: [{ id: "r", field: "title", operator: "contains", value: "x", condition: "AND" }],
@@ -169,10 +168,32 @@ describe("rule set guards", () => {
         { id: "r2", field: "episodeNumber", operator: "equals", value: "1", condition: "AND", enabled: false },
       ] }],
     }];
-    expect(findEpisodeLevelFields(rules)).toEqual(["episodeNumber"]);
-    expect(findEpisodeLevelFields([{ id: "r", field: "title", operator: "equals", value: "x" }])).toEqual([]);
-    expect(SERIES_SCOPE_EPISODE_CRITERIA_REASON).toMatch(/series scope/);
+    const violation = groupScopeViolation("SERIES", true, rules);
+    expect(violation).toMatchObject({ judgement: "group", fields: ["episodeNumber"] });
+    expect(groupScopeSaveError(violation!)).toMatch(/turn "Match against entire series" off/i);
+    expect(groupScopeViolation("SERIES", true, [{ id: "r", field: "title", operator: "equals", value: "x" }])).toBeNull();
   });
+
+  it.each(["seasonNumber", "episodeNumber", "seasonsBehindLatest"])(
+    "refuses %s at series scope, and with it off under an action on the whole series",
+    (field) => {
+      expect(groupScopeViolation("SERIES", true, tree(field))?.fields).toEqual([field]);
+      for (const actionType of ["DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR"]) {
+        expect(groupScopeViolation("SERIES", false, tree(field), { actionEnabled: true, actionType })).toMatchObject({
+          judgement: "member",
+          fields: [field],
+        });
+      }
+      // Arr tags act on the whole series, added or removed — or both at once.
+      expect(groupScopeViolation("SERIES", false, tree(field), {
+        actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["old"], removeArrTags: ["keep"],
+      })?.wholeRecordAction).toBe("Arr tags");
+      // The actions on the matched episodes follow them.
+      for (const actionType of ["DELETE_FILES_SONARR", "UNMONITOR_SONARR", "SEARCH_SONARR", "DO_NOTHING"]) {
+        expect(groupScopeViolation("SERIES", false, tree(field), { actionEnabled: true, actionType })).toBeNull();
+      }
+    },
+  );
 
   it("is invalid for movie and music rule sets", () => {
     expect(findFieldsInvalidForType(tree("seasonsBehindLatest"), "MOVIE")).toEqual(["seasonsBehindLatest"]);

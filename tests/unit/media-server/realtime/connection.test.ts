@@ -145,6 +145,17 @@ describe("ServerRealtimeConnection", () => {
     expect(events).toEqual([]);
   });
 
+  it("swallows a Jellyfin KeepAlive without answering it or emitting an event", () => {
+    const { factory, sockets } = makeFactory();
+    new ServerRealtimeConnection(jfConfig, callbacks(), factory).start();
+    sockets[0].fireOpen();
+    sockets[0].sent.length = 0;
+    events.length = 0;
+    sockets[0].fireMessage({ MessageType: "KeepAlive" });
+    expect(sockets[0].sent).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
   it("drops redundant Jellyfin Sessions frames but emits on a real change", () => {
     const { factory, sockets } = makeFactory();
     new ServerRealtimeConnection(jfConfig, callbacks(), factory).start();

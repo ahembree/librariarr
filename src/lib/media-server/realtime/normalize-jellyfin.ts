@@ -13,8 +13,9 @@ import { isRecord } from "./normalize-util";
  *  - `LibraryChanged`                                → library-changed
  *  - `UserDataChanged`                               → watch-changed
  *
- * `ForceKeepAlive`/`KeepAlive` are handled by the connection layer (it replies
- * with a `KeepAlive`) and never reach here as events. Everything else
+ * `ForceKeepAlive`/`KeepAlive` are handled by the connection layer (it answers
+ * `ForceKeepAlive` with a `KeepAlive` and swallows the server's `KeepAlive`
+ * replies) and never reach here as events. Everything else
  * (`GeneralCommand`, `ScheduledTasksInfo`, `ActivityLogEntry`,
  * `RestartRequired`, `ServerShuttingDown`, …) is ignored — connection liveness
  * is tracked by the connection layer, not inferred from server messages.

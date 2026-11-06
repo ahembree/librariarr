@@ -92,8 +92,12 @@ export const POST = withSession(async (session, request: NextRequest) => {
     data.items.map((item) => {
       // Atomic upsert on the (user, instance, resource) composite unique — a
       // concurrent double-submit can't create duplicate managed rows. Re-assigning
-      // an already-managed resource just refreshes its metadata (e.g. a changed
-      // naming selection).
+      // an already-managed resource just refreshes its selection (e.g. a changed
+      // naming selection). Its name is left alone: once a sync has run it is the
+      // name the app resource carries, which is what proves the resource at the
+      // row's recorded id is still its own (`findManagedArrResource`) — the
+      // Profile Formats tab re-sends a profile's assigned name on every save,
+      // which would forget a profile it followed through a rename in the app.
       const selectionData =
         item.selection !== undefined ? { selection: item.selection as object } : {};
       const where =
@@ -125,7 +129,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
           name: item.name,
           ...selectionData,
         },
-        update: { name: item.name, ...selectionData },
+        update: selectionData,
       });
     }),
   );

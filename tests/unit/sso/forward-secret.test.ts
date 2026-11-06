@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { FORWARD_AUTH_PROXY_HEADER, hasForwardAuthSecret, isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
+import {
+  FORWARD_AUTH_PROXY_HEADER,
+  hasForwardAuthSecret,
+  isForwardAuthCredentialHeader,
+  isForwardAuthSecretConfigured,
+} from "@/lib/sso/forward-secret";
 
 const original = process.env.FORWARD_AUTH_SECRET;
 
@@ -54,5 +59,30 @@ describe("hasForwardAuthSecret", () => {
     process.env.FORWARD_AUTH_SECRET = "s3cret-value";
     expect(hasForwardAuthSecret(headers("s3cret-value-and-more"))).toBe(false);
     expect(hasForwardAuthSecret(headers("s3cret-valuex"))).toBe(false);
+  });
+});
+
+describe("isForwardAuthCredentialHeader", () => {
+  // Named as a forward-auth email or name header, any of these would be copied
+  // into the account and read back by a signed-in session.
+  it("matches the proxy secret, authorization and cookie headers, in any case", () => {
+    for (const name of [
+      FORWARD_AUTH_PROXY_HEADER,
+      "X-Librariarr-Proxy-Secret",
+      "Authorization",
+      "authorization",
+      "Proxy-Authorization",
+      "PROXY-AUTHORIZATION",
+      "Cookie",
+      "  Cookie  ",
+    ]) {
+      expect(isForwardAuthCredentialHeader(name), name).toBe(true);
+    }
+  });
+
+  it("leaves identity headers alone", () => {
+    for (const name of ["Remote-User", "Remote-Email", "Remote-Name", "X-Forwarded-User", "X-authentik-name", "Cookies"]) {
+      expect(isForwardAuthCredentialHeader(name), name).toBe(false);
+    }
   });
 });

@@ -1,5 +1,16 @@
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { compareIds } from "@/lib/conditions/compare-ids";
+import { CONDITION_FIELDS } from "@/lib/conditions/fields";
+import {
+  anyEnabled,
+  isArrField,
+  isCrossSystemField,
+  isSeerrField,
+  isSeriesAggregateField,
+  isStreamField,
+} from "@/lib/conditions/helpers";
+import { isStreamQueryField, isStreamQueryGroup } from "@/lib/conditions/stream-query";
+import type { ConditionGroup } from "@/lib/conditions/types";
 
 /**
  * Shared series-aggregate computation. Both the rule engine and the query
@@ -151,6 +162,8 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       // Use series-level summary instead of episode summary.
       summary: representative.parentSummary ?? representative.summary,
       // Clear episode-specific fields — this is a series-level aggregate.
+      // Evaluation reads the show's name as its parentTitle
+      // (serializeSeriesAggregateForEval → withGroupParentTitle).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -173,15 +186,369 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
 }
 
 /**
+ * A group record — a show rolled up from its episodes, an artist from its
+ * tracks — as rule evaluation reads it.
+ *
+ * The group is stored and shown as itself: `title` is the show or the artist
+ * and `parentTitle` is cleared. Every match snapshot consumer relies on that
+ * shape (`matchIdentityChange`, `isGroupSnapshot`, the action's title
+ * snapshot), so the records the engines return keep it. "Artist / Series"
+ * (`parentTitle`) means the series name or the artist, though, so a group
+ * answers it with its own name. Read as NULL it made `parentTitle equals "X"`
+ * match no show, and every negated form (Not Equals, Not Contains, a NOT group)
+ * match every show and artist — on a Delete from Sonarr / Lidarr rule set,
+ * everything else the rules selected.
+ */
+export function withGroupParentTitle<T extends { title?: unknown }>(
+  record: T,
+): T & { parentTitle: string | null } {
+  return { ...record, parentTitle: typeof record.title === "string" ? record.title : null };
+}
+
+/**
+ * Whether a record the engines returned is a group record (see
+ * `withGroupParentTitle`): a show or artist that carries its members, with the
+ * name as its title and no parent.
+ */
+export function isGroupRecord(record: Record<string, unknown>): boolean {
+  return Array.isArray(record.memberIds) && record.parentTitle == null && typeof record.title === "string";
+}
+
+/** The series-aggregate fields (`isSeriesAggregate` in the registry). */
+const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggregate).map((f) => f.value);
+
+// ─── A group judged through its members ───────────────────────────────────
+//
+// A show (its episodes) or an artist (its tracks) evaluated as a whole is ONE
+// record. Some of its fields have a value for the whole group; every other
+// per-item field (resolution, codecs, year, genres, duration, …) has one value
+// per member and none for the group. Reading those off a single representative
+// member (the lowest id) made "Resolution = 4K" match a show only when its
+// first episode was 4K. A group matches a rule when at least ONE member
+// satisfies the whole rule, each member seen as the group record carrying that
+// member's own values for those fields. NOT forms follow: "NOT Genre =
+// Anime" matches a show with at least one episode whose genres leave it out.
+//
+// Every per-member field is a criterion of one episode or track, which is not
+// allowed at series or artist scope at all (`groupScopeViolation`,
+// group-scope.ts — `GROUP_SCOPE_BLOCKED_FIELDS` holds every field this file
+// answers through any one member, the sync keeping none of them alike across a
+// show's episodes or an artist's tracks): saving refuses them, detection skips
+// a rule set holding them, and the group-scope engines match nothing for one.
+// So a rule set the gate admits reads no per-member field (`readsMemberValues`
+// false); judging through any member stays for the rule sets the gate holds.
+// `MEMBER_VALUE_COLUMNS` still lists every per-item column: a match stores and
+// reports the values of the member it matched through.
+//
+// The cross-system fields are a third kind (`isEveryMemberField`): each
+// episode or track has its own value, and a group answers them through EVERY
+// member — it matches only when the rule holds for each member read with its
+// own values for them — so no one member decides for the group, and the gate
+// allows them at group scope.
+
+/**
+ * Fields a group record answers with ONE value for the whole show or artist
+ * (series scope, artist scope): its name (`title`, and `parentTitle` through
+ * `withGroupParentTitle`), the play total, the latest play, the earliest
+ * addition, the summed size, everyone who watched any member, the union of the
+ * members' streams (stream fields and stream queries), the group's own external
+ * ids (its Arr identity, which the Arr and Seerr lookups key on), the series
+ * aggregates and every Arr or Seerr field (one record per group).
+ */
+const GROUP_VALUE_FIELDS = new Set([
+  "title",
+  "parentTitle",
+  "playCount",
+  "lastPlayedAt",
+  "addedAt",
+  "fileSize",
+  "watchedByUser",
+  "hasExternalId",
+]);
+
+/**
+ * Whether a group record answers `field` with one value for the whole group.
+ * Every other field is answered per member: through every member for the
+ * cross-system fields (`isEveryMemberField`), through any one member
+ * (`memberValuesOf`) for the rest.
+ */
+export function isGroupValueField(field: string): boolean {
+  return (
+    GROUP_VALUE_FIELDS.has(field) ||
+    isStreamField(field) ||
+    isStreamQueryField(field) ||
+    isSeriesAggregateField(field) ||
+    isArrField(field) ||
+    isSeerrField(field)
+  );
+}
+
+/**
+ * Whether a group answers `field` through EVERY member: the cross-system fields
+ * — Matched By Rule Set, Has Pending Action, Server Count. Each episode or
+ * track has its own (a rule set matched it, an action is pending on it, it is
+ * on so many servers). Folded into one value for the group — matched if any
+ * member was, pending if any was, the highest count — they let one episode
+ * decide for the whole show: "Matched By Rule Set = X" with Delete from Sonarr
+ * deleted a show one episode of which X matched. A group matches only when the
+ * rule holds for every member, each read with its own values for these fields
+ * and the group's values for everything else (`matchGroupThroughMembers`). The
+ * protective forms read as they did folded: "NOT Matched By Rule Set = Keep"
+ * still leaves out a show any episode of which Keep matched, and "Has Pending
+ * Action = false" one with any pending episode.
+ */
+export function isEveryMemberField(field: string): boolean {
+  return isCrossSystemField(field);
+}
+
+/** The record key a condition field reads where it differs from the field's name. */
+const FIELD_COLUMN: Record<string, string> = { genre: "genres", country: "countries" };
+
+/**
+ * The columns of a member a group record takes from that member: those of every
+ * condition field the group answers through any one member — neither as a
+ * whole (`isGroupValueField`) nor through every member (`isEveryMemberField`,
+ * whose values are not columns of the member's row).
+ */
+export const MEMBER_VALUE_COLUMNS: readonly string[] = CONDITION_FIELDS
+  .filter((f) => !isGroupValueField(f.value) && !isEveryMemberField(f.value))
+  .map((f) => FIELD_COLUMN[f.value] ?? f.value);
+
+/** A member's own values for the per-member fields (`MEMBER_VALUE_COLUMNS`). */
+export function memberValuesOf(member: object): Record<string, unknown> {
+  const row = member as Record<string, unknown>;
+  const values: Record<string, unknown> = {};
+  for (const column of MEMBER_VALUE_COLUMNS) {
+    if (column in row) values[column] = row[column];
+  }
+  return values;
+}
+
+/**
+ * Whether any enabled rule reads a field a group answers through any one of
+ * its members (`MEMBER_VALUE_COLUMNS`). When none does, every member sees the
+ * same values for those, and a group is evaluated once — or, for a rule
+ * reading a cross-system field, once for each member's own values of those
+ * (`isEveryMemberField`).
+ */
+export function readsMemberValues(groups: ConditionGroup[]): boolean {
+  return anyEnabled(groups, (rule) => !isGroupValueField(rule.field) && !isEveryMemberField(rule.field));
+}
+
+/** What `matchGroupThroughMembers` selected a group on. */
+export interface GroupSelection {
+  /** The record the rule held for: the group record, seen through the member. */
+  record: Record<string, unknown>;
+  /** That member's per-member values (empty when the group was evaluated once). */
+  memberValues: Record<string, unknown>;
+  /**
+   * When the group was judged through every member (`everyMember`): each
+   * member's own values for those fields, lowest id first. Also attached to
+   * `record` (`withEveryMemberValues`), which the matched criteria and values
+   * are reported from; a caller that copies the record attaches them again.
+   */
+  everyMemberValues?: ReadonlyArray<Record<string, unknown>>;
+}
+
+/**
+ * Whether a group matches, and through which member. Shared by the series-
+ * and artist-scope engines and Test Media.
+ *
+ * - With `everyMember` — each member's own values for the fields a group
+ *   answers through every member (`isEveryMemberField`, the cross-system
+ *   fields), which the caller passes when a rule reads one: the group matches
+ *   only when the rule holds for EVERY member, each seen as the group record
+ *   carrying that member's own values for those fields. With `perMember` too
+ *   (a rule set the gate holds), each member carries its per-member values as
+ *   well — the stricter reading. A group with no member matches nothing. The
+ *   selection is the group record (with the first member's per-member values
+ *   when `perMember`), carrying every member's values (`everyMemberValues`).
+ * - Otherwise: the first member, lowest id first (`compareIds`), for which the
+ *   group record carrying that member's own per-member values
+ *   (`memberValuesOf`) satisfies the rule, or `null` when none does. With
+ *   `perMember` false (`readsMemberValues`: no rule reads a per-member field)
+ *   every member would see the same record, so the group record is evaluated
+ *   once, as it is.
+ *
+ * The caller stores and reports the selection — the group carrying the
+ * selected member's values — so the match shows the values it was selected
+ * on, not the representative's.
+ */
+export function matchGroupThroughMembers<M extends { id: string }>(
+  group: Record<string, unknown>,
+  members: readonly M[],
+  matches: (record: Record<string, unknown>) => boolean,
+  perMember: boolean,
+  everyMember?: (member: M) => Record<string, unknown>,
+): GroupSelection | null {
+  if (everyMember) return matchGroupThroughEveryMember(group, members, matches, perMember, everyMember);
+  if (!perMember) return matches(group) ? { record: group, memberValues: {} } : null;
+  for (const member of [...members].sort((a, b) => compareIds(a.id, b.id))) {
+    const memberValues = memberValuesOf(member);
+    const record = { ...group, ...memberValues };
+    if (matches(record)) return { record, memberValues };
+  }
+  return null;
+}
+
+/** `matchGroupThroughMembers` with `everyMember`: the rule must hold for every member. */
+function matchGroupThroughEveryMember<M extends { id: string }>(
+  group: Record<string, unknown>,
+  members: readonly M[],
+  matches: (record: Record<string, unknown>) => boolean,
+  perMember: boolean,
+  everyMember: (member: M) => Record<string, unknown>,
+): GroupSelection | null {
+  const ordered = [...members].sort((a, b) => compareIds(a.id, b.id));
+  if (ordered.length === 0) return null;
+  const everyMemberValues = ordered.map(everyMember);
+  // Without per-member values, members with the same cross-system values see
+  // the same record, so each distinct set is evaluated once: most episodes of
+  // a show share theirs.
+  const verdicts = new Map<string, boolean>();
+  for (const [i, member] of ordered.entries()) {
+    const values = everyMemberValues[i];
+    if (perMember) {
+      if (!matches({ ...group, ...memberValuesOf(member), ...values })) return null;
+      continue;
+    }
+    const key = JSON.stringify(values);
+    let passes = verdicts.get(key);
+    if (passes === undefined) {
+      passes = matches({ ...group, ...values });
+      verdicts.set(key, passes);
+    }
+    if (!passes) return null;
+  }
+  const memberValues = perMember ? memberValuesOf(ordered[0]) : {};
+  return {
+    record: withEveryMemberValues({ ...group, ...memberValues }, everyMemberValues),
+    memberValues,
+    everyMemberValues,
+  };
+}
+
+/**
+ * Fields every episode of a show answers alike when a per-episode rule set
+ * (series scope off) is forced through the series path by a series-aggregate
+ * field: the aggregates, injected as constants, and the Arr and Seerr fields,
+ * read from the show's one record. Everything else is the episode's own —
+ * including the fields a whole show answers as a group (`isGroupValueField`:
+ * title, play count, size, streams, watchers, cross-system values, external
+ * ids), because series scope off asks about episodes.
+ */
+function isSeriesConstantField(field: string): boolean {
+  return isSeriesAggregateField(field) || isArrField(field) || isSeerrField(field);
+}
+
+/**
+ * Whether any enabled rule reads a field an episode answers on its own
+ * (`isSeriesConstantField`), or a stream query (an episode's own streams).
+ * When none does, every episode of a show passes or fails alike.
+ */
+export function readsEpisodeValues(groups: ConditionGroup[]): boolean {
+  return anyEnabled(groups, (rule) => !isSeriesConstantField(rule.field), (group) => isStreamQueryGroup(group));
+}
+
+/**
+ * The episodes of a show that match one by one, each with the show's
+ * series-aggregate values carried over as constants. Shared by the lifecycle
+ * engine (`evaluateSeriesScope` with series scope off) and the query engine's
+ * series-aggregate path, so the two select alike.
+ *
+ * A series-aggregate field (episode counts, watched %, …) has no value on a
+ * single episode, so a rule reading one routes a per-episode rule set (series
+ * scope off) or a query through the show's aggregate. The rule is still meant
+ * per episode: the show is a match when at least one episode passes on its
+ * own, and its members are exactly those episodes. The aggregate conditions
+ * pass or fail alike for every episode and the per-episode conditions filter.
+ * The show's own record is no gate: it read every per-episode field off its
+ * representative episode, so "Available Episode Count ≥ 20 and Resolution =
+ * 4K" missed a show whose first episode is 1080p and the others 4K. A show
+ * with no such episode is not a match, even one passing only as a whole (a
+ * summed file size, say).
+ *
+ * `matches(episode, seriesFields)` evaluates one episode with the caller's
+ * evaluator, `seriesFields` spread last onto the episode's record. With
+ * `perEpisode` false (`readsEpisodeValues`: the rule reads only aggregates, Arr
+ * and Seerr fields) every episode would answer alike, so only the first is
+ * evaluated and the show keeps all its episodes or none. Episodes are passed
+ * lowest id first, so the first `matches` call to pass is the first member.
+ */
+export function episodesMatchingIndividually<E extends { id: string }>(
+  episodes: readonly E[],
+  aggregate: Record<string, unknown>,
+  matches: (episode: E, seriesFields: Record<string, unknown>) => boolean,
+  perEpisode: boolean = true,
+): string[] {
+  const seriesFields = Object.fromEntries(SERIES_AGGREGATE_FIELDS.map((field) => [field, aggregate[field]]));
+  if (!perEpisode) {
+    if (episodes.length === 0 || !matches(episodes[0], seriesFields)) return [];
+    return episodes.map((episode) => episode.id);
+  }
+  return episodes.filter((episode) => matches(episode, seriesFields)).map((episode) => episode.id);
+}
+
+// From the global symbol registry, so every bundle's copy of this module reads
+// the same key.
+const EVALUATED_AS = Symbol.for("librariarr.conditions.evaluatedAs");
+
+/**
+ * Attach to a match record the record its rules were evaluated on, where the
+ * two differ: a show matched through its episodes with series scope off is
+ * stored as the show (its name, play total, summed size) but was selected on
+ * its first matching episode's own values. The matched criteria and actual
+ * values (`getMatchedCriteriaForItems`, `getActualValuesForAllRules`) read this
+ * record, so they report what the match was selected on. Non-enumerable: a
+ * spread or `JSON.stringify` never copies it, so a stored snapshot, a preview
+ * row or an API response never carries it.
+ */
+export function withEvaluatedRecord<T extends object>(record: T, evaluated: Record<string, unknown>): T {
+  Object.defineProperty(record, EVALUATED_AS, { value: evaluated, enumerable: false, configurable: true });
+  return record;
+}
+
+/** The record attached by `withEvaluatedRecord`, if any. */
+export function evaluatedRecordOf(record: object): Record<string, unknown> | undefined {
+  return (record as { [EVALUATED_AS]?: Record<string, unknown> })[EVALUATED_AS];
+}
+
+// From the global symbol registry, as `EVALUATED_AS`.
+const EVERY_MEMBER_VALUES = Symbol.for("librariarr.conditions.everyMemberValues");
+
+/**
+ * Attach to a group's record its members' own values for the fields it is
+ * judged on through every member (`isEveryMemberField`, the cross-system
+ * fields): the group has no one value for them, so the matched criteria and
+ * actual values (`getMatchedCriteriaForItems`, `getActualValuesForAllRules`)
+ * report such a criterion as matched only when it holds for every member, and
+ * its value as the members' values. Non-enumerable, as `withEvaluatedRecord`:
+ * never stored or sent. Absent `values` leave the record as it is.
+ */
+export function withEveryMemberValues<T extends object>(
+  record: T,
+  values: ReadonlyArray<Record<string, unknown>> | undefined,
+): T {
+  if (values) Object.defineProperty(record, EVERY_MEMBER_VALUES, { value: values, enumerable: false, configurable: true });
+  return record;
+}
+
+/** The values attached by `withEveryMemberValues`, if any. */
+export function everyMemberValuesOf(record: object): ReadonlyArray<Record<string, unknown>> | undefined {
+  return (record as { [EVERY_MEMBER_VALUES]?: ReadonlyArray<Record<string, unknown>> })[EVERY_MEMBER_VALUES];
+}
+
+/**
  * Convert a `SeriesAggregate` into the plain object shape that the in-memory
  * rule evaluator expects (ISO date strings, computed `watchedEpisodePercentage`,
- * `availableEpisodeCount` alias for `episodeCount`, flattened `streams`).
+ * `availableEpisodeCount` alias for `episodeCount`, flattened `streams`, and
+ * the show's name as its `parentTitle` — `withGroupParentTitle`).
  */
 export function serializeSeriesAggregateForEval(
   series: SeriesAggregate<AggregableEpisode>,
 ): Record<string, unknown> {
   return {
-    ...series,
+    ...withGroupParentTitle(series),
     fileSize: series.fileSize,
     lastPlayedAt: toIsoOrNull(series.lastPlayedAt),
     addedAt: toIsoOrNull(series.addedAt),

@@ -5,7 +5,7 @@ const { mockPrisma, mockWalk, mockAppCache, mockLogger } = vi.hoisted(() => ({
     seerrInstance: { findMany: vi.fn() },
     mediaServer: { findMany: vi.fn() },
     mediaItem: { findMany: vi.fn() },
-    watchHistory: { findMany: vi.fn() },
+    $queryRawUnsafe: vi.fn(),
   },
   mockWalk: vi.fn(),
   mockAppCache: {
@@ -28,6 +28,7 @@ vi.mock("@/lib/cache/memory-cache", () => ({ appCache: mockAppCache }));
 vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
 
 import {
+  completedPlaysByDedupKey,
   getSeerrRequestStats,
   invalidateSeerrCaches,
   USER_REQUESTS_CACHE_PREFIX,
@@ -54,7 +55,40 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.mediaServer.findMany.mockResolvedValue([{ id: "srv1" }]);
   mockPrisma.mediaItem.findMany.mockResolvedValue([]);
-  mockPrisma.watchHistory.findMany.mockResolvedValue([]);
+  mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+});
+
+describe("completedPlaysByDedupKey", () => {
+  it("sends the keys and accounts as one array parameter each, with the completed-play predicate", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ serverUsername: "p", dedupKey: "k1" }]);
+    const rows = await completedPlaysByDedupKey({ dedupKeys: ["k1", "k2"], usernames: ["p"], type: "SERIES", episodesOnly: true });
+    expect(rows).toEqual([{ serverUsername: "p", dedupKey: "k1" }]);
+    const [sql, keys, users, type] = mockPrisma.$queryRawUnsafe.mock.calls[0];
+    // A library-long key list stays one parameter, never one per key.
+    expect(sql).toContain(`mi."dedupKey" = ANY($1::text[])`);
+    expect(sql).toContain(`wh."serverUsername" = ANY($2::text[])`);
+    expect(sql).toContain(`wh."watched" IS DISTINCT FROM false`);
+    expect(sql).toContain(`mi."type" = $3::"LibraryType"`);
+    expect(sql).toContain(`mi."episodeNumber" IS NOT NULL`);
+    expect(sql).toContain("SELECT DISTINCT");
+    expect(keys).toEqual(["k1", "k2"]);
+    expect(users).toEqual(["p"]);
+    expect(type).toBe("SERIES");
+  });
+
+  it("filters on neither type nor episode number unless asked", async () => {
+    await completedPlaysByDedupKey({ dedupKeys: ["k1"], usernames: ["p"] });
+    const call = mockPrisma.$queryRawUnsafe.mock.calls[0];
+    expect(call).toHaveLength(3);
+    expect(call[0]).not.toContain(`mi."type"`);
+    expect(call[0]).not.toContain(`"episodeNumber"`);
+  });
+
+  it("asks nothing for no keys or no accounts", async () => {
+    await expect(completedPlaysByDedupKey({ dedupKeys: [], usernames: ["p"] })).resolves.toEqual([]);
+    await expect(completedPlaysByDedupKey({ dedupKeys: ["k"], usernames: [] })).resolves.toEqual([]);
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
 });
 
 describe("invalidateSeerrCaches", () => {
@@ -172,12 +206,12 @@ describe("getSeerrRequestStats (branches)", () => {
       { dedupKey: "nan", externalIds: [{ externalId: "abc" }] },
       { dedupKey: "m3", externalIds: [{ externalId: "3" }] },
     ]);
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "p", mediaItem: { dedupKey: "m1" } },
-      { serverUsername: "p", mediaItem: { dedupKey: "m1b" } },
-      { serverUsername: "p", mediaItem: { dedupKey: null } },
-      { serverUsername: "p", mediaItem: { dedupKey: "unknown" } },
-      { serverUsername: "q", mediaItem: { dedupKey: "m3" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "p", dedupKey: "m1" },
+      { serverUsername: "p", dedupKey: "m1b" },
+      { serverUsername: "p", dedupKey: null },
+      { serverUsername: "p", dedupKey: "unknown" },
+      { serverUsername: "q", dedupKey: "m3" },
     ]);
 
     const r = await getSeerrRequestStats("u");
@@ -186,8 +220,8 @@ describe("getSeerrRequestStats (branches)", () => {
     expect(by.q.moviesWatched).toBe(1);
     expect(r.totals.moviesWatched).toBe(2);
     // Only the dedupKeys that resolved to a TMDB id were asked about.
-    const where = mockPrisma.watchHistory.findMany.mock.calls[0][0].where;
-    expect([...where.mediaItem.dedupKey.in].sort()).toEqual(["m1", "m1b", "m3"]);
+    const keys = mockPrisma.$queryRawUnsafe.mock.calls[0][1] as string[];
+    expect([...keys].sort()).toEqual(["m1", "m1b", "m3"]);
   });
 
   it("asks no watch history when no requested movie is in the library", async () => {
@@ -195,7 +229,7 @@ describe("getSeerrRequestStats (branches)", () => {
     serveWalks({ a: [{ type: "movie", media: { tmdbId: 1 }, requestedBy: { plexUsername: "p" } }] });
     const r = await getSeerrRequestStats("u");
     expect(r.users[0].moviesWatched).toBe(0);
-    expect(mockPrisma.watchHistory.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   it("does not query episode plays for a show whose episodes carry no dedupKey", async () => {
@@ -206,7 +240,7 @@ describe("getSeerrRequestStats (branches)", () => {
       { id: "e2", dedupKey: null, parentTitle: "Show", seriesKey: "tvdb:7", externalIds: [{ source: "TVDB", externalId: "7" }] },
     ]);
     const r = await getSeerrRequestStats("u");
-    expect(mockPrisma.watchHistory.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
     // With no dedupKeys, every episode row counts.
     expect(r.users[0]).toMatchObject({ episodesAvailable: 2, episodesWatched: 0, seriesWithAnyEpisodeWatched: 0 });
   });
@@ -227,13 +261,13 @@ describe("getSeerrRequestStats (branches)", () => {
       { id: "a2", dedupKey: "a2", parentTitle: "A", seriesKey: "tvdb:7", externalIds: [{ source: "TVDB", externalId: "7" }] },
       { id: "b1", dedupKey: "b1", parentTitle: "B", seriesKey: "tvdb:8", externalIds: [{ source: "TVDB", externalId: "8" }] },
     ]);
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "p", mediaItem: { dedupKey: "a1" } },
-      { serverUsername: "p", mediaItem: { dedupKey: "a1" } }, // replay: one episode
-      { serverUsername: "p", mediaItem: { dedupKey: "b1" } },
-      { serverUsername: "p", mediaItem: { dedupKey: null } },
-      { serverUsername: "p", mediaItem: { dedupKey: "zz" } },
-      { serverUsername: "q", mediaItem: { dedupKey: "a2" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "p", dedupKey: "a1" },
+      { serverUsername: "p", dedupKey: "a1" }, // replay: one episode
+      { serverUsername: "p", dedupKey: "b1" },
+      { serverUsername: "p", dedupKey: null },
+      { serverUsername: "p", dedupKey: "zz" },
+      { serverUsername: "q", dedupKey: "a2" },
     ]);
 
     const r = await getSeerrRequestStats("u");

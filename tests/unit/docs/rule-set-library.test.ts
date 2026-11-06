@@ -77,6 +77,38 @@ describe("docs rule set library", () => {
     expect(checkRuleSetLibrary("```json\n{ not json\n```").problems.get("block #1")?.[0]).toMatch(/^not valid JSON/);
   });
 
+  it("rejects a per-episode criterion in a rule set with series scope on, as saving does", () => {
+    // A whole-show rule may not use a criterion that describes one episode.
+    const series = structuredClone(ruleSets.find((r) => r.type === "SERIES" && r.seriesScope === true && r.actionType === "UNMONITOR_SONARR")!);
+    series.rules[0].rules.push({ id: "res", field: "resolution", operator: "equals", value: "4K", condition: "AND" });
+    expect(ruleSetProblems(series)).toEqual([
+      `With "Match against entire series" on, a rule judges a whole show, so it can't use criteria that describe one ` +
+        `episode or file: Resolution. Turn "Match against entire series" off to check them per episode, or remove them.`,
+    ]);
+    const payload: Record<string, unknown> = { ...series, serverIds: ["server"] };
+    delete payload.version;
+    expect(ruleSetCreateSchema.safeParse(payload).success).toBe(false);
+    // The same rules with series scope off are an import the editor can save
+    // (Unmonitor then acts on the matched episodes).
+    expect(ruleSetProblems({ ...series, seriesScope: false })).toEqual([]);
+  });
+
+  it("rejects a per-episode criterion followed by a whole-show action, judged as the reader will arm it", () => {
+    // The library never arms an action, but a reader does: a Delete from
+    // Sonarr with series scope off may not follow a criterion of one episode.
+    const series = structuredClone(ruleSets.find((r) => r.type === "SERIES" && r.actionType === "DELETE_SONARR")!);
+    series.rules[0].rules.push({ id: "res", field: "resolution", operator: "equals", value: "4K", condition: "AND" });
+    expect(ruleSetProblems({ ...series, seriesScope: false })).toEqual([
+      `"Delete from Sonarr" acts on the whole show, so with "Match against entire series" off it can't follow ` +
+        `criteria that describe one episode or file: Resolution — one episode would decide for the whole show. ` +
+        `Remove them, or switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor Only ` +
+        `or Search for New Copy, without Arr tags).`,
+    ]);
+    // With series scope on, the scope decides, and it names the action too.
+    expect(ruleSetProblems(series)[0]).toMatch(/^With "Match against entire series" on, .* Remove them, or turn "Match against entire series" off and switch to an action/);
+    expect(ruleSetProblems({ ...series, seriesScope: false, actionType: "DELETE_FILES_SONARR" })).toEqual([]);
+  });
+
   it("accepts the valueless operators as the editor stores them", () => {
     // Is Empty / Is Not Empty save `value: ""`, which is not a number.
     const base = structuredClone(ruleSets[0]);

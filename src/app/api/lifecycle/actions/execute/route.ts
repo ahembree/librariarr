@@ -27,6 +27,8 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { ACTION_SIGNATURE_SELECT, actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { coverageOf, episodesToExecute } from "@/lib/lifecycle/episode-coverage";
+import { HOLD_ACTION_SELECT, actionHoldOf } from "@/lib/lifecycle/held-actions";
+import { RULE_SET_VERSION_SELECT, ruleSetVersion } from "@/lib/lifecycle/rule-set-matching";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import {
   destructiveRefusalResponse,
@@ -157,6 +159,24 @@ async function executeRuleSet(
     return NextResponse.json(
       { error: "Actions are turned off for this rule set — turn them on before executing" },
       { status: 400 }
+    );
+  }
+
+  // Held (`actionHoldOf`, the check the scheduled executor makes too): a save
+  // changed what the rule set matches (`actionsHeldSince`), so the stored
+  // matches this route acts on are the old rules' until a detection run
+  // re-checks them; or a per-episode or per-track criterion could make a
+  // whole show or artist the target of its action (this route runs the rule
+  // set's action as configured), which detection skips until it is edited.
+  const hold = actionHoldOf(ruleSet);
+  if (hold) {
+    return NextResponse.json(
+      {
+        error: hold.kind === "groupScope"
+          ? hold.reason
+          : "This rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing",
+      },
+      { status: 409 }
     );
   }
 
@@ -446,7 +466,27 @@ async function executeRuleSet(
 
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
-  const { executed, failed, errors, failures, notAttempted } = await executeActionsForItems(
+  // Every item above — which ones, which members, the action itself — was
+  // judged from the rule set as read at the start and the matches its rules
+  // made. Nothing stops a save (and a detection run releasing its hold and
+  // narrowing the matches) while the items run one after another, so each is
+  // acted on only while the rule set is still that version and unheld.
+  const judgedVersion = ruleSetVersion(ruleSet);
+  const stillJudgedRuleSet = async (): Promise<string | null> => {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id: ruleSet.id, userId: session.userId },
+      select: { type: true, actionsHeldSince: true, ...HOLD_ACTION_SELECT, ...RULE_SET_VERSION_SELECT },
+    });
+    if (!current) return "The rule set was deleted while its actions ran";
+    if (ruleSetVersion(current) !== judgedVersion) {
+      return "The rule set was edited while its actions ran, so the rest were not executed — re-run detection for it (Re-evaluate on the Matches page), then execute again";
+    }
+    const hold = actionHoldOf(current);
+    if (hold) return hold.kind === "groupScope" ? hold.reason : "The rule set was held while its actions ran — re-run detection for it before executing again";
+    return null;
+  };
+
+  const { executed, failed, errors, failures, notAttempted, stopped } = await executeActionsForItems(
     session.userId,
     items,
     {
@@ -466,12 +506,21 @@ async function executeRuleSet(
       ruleSetType: ruleSet.type,
       cleanupMatches: true,
     },
+    undefined,
+    { beforeEach: stillJudgedRuleSet },
   );
 
   // Items failed without anything being sent (their Arr instance was already
   // down) deleted nothing, so they go back to the budget. A failure that did
-  // reach the Arr app stays charged: a timed-out write may have landed.
-  apiReservation?.release(notAttempted);
+  // reach the Arr app stays charged: a timed-out write may have landed. Items
+  // a stop left were never attempted either.
+  apiReservation?.release(notAttempted + (stopped?.remaining ?? 0));
+
+  // Stopped before acting on anything: refused, as the hold check above
+  // refuses — nothing ran.
+  if (stopped && executed === 0 && failed === 0) {
+    return NextResponse.json({ error: stopped.reason }, { status: 409 });
+  }
 
   // Send Discord notification for failures if the rule set has notifications enabled
   if (failed > 0 && ruleSet.discordNotifyOnAction) {
@@ -504,5 +553,6 @@ async function executeRuleSet(
     });
   }
 
-  return NextResponse.json({ executed, failed, errors });
+  // Stopped part-way: what ran is reported, and why the rest did not.
+  return NextResponse.json({ executed, failed, errors, ...(stopped ? { stopped: stopped.reason } : {}) });
 }

@@ -10,7 +10,7 @@ import type { QualitySegment } from "@/lib/media/quality-chips";
 import { Card } from "@/components/ui/card";
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { CACHE_WIDTH_GRID, CACHE_WIDTH_GRID_WIDE, withImageWidth } from "@/lib/image-url";
 import {
   HoverCard,

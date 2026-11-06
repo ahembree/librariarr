@@ -196,20 +196,57 @@ describe("ServerRealtimeConnection — lifecycle edges", () => {
     expect(logger.debug).toHaveBeenCalledWith("Realtime", 'Disconnected from "Server" (code 1006)');
   });
 
-  it("Emby subscribes on open, answers KeepAlive prompts and sends keepalives on the interval", () => {
+  it("Emby subscribes on open, answers ForceKeepAlive, not KeepAlive, and sends keepalives on the interval", () => {
     new ServerRealtimeConnection(config({ type: "EMBY" }), callbacks(), factory).start();
     const socket = sockets[0];
     socket.fireOpen();
     expect(socket.sent).toEqual([JSON.stringify({ MessageType: "SessionsStart", Data: "0,1500" })]);
 
     events.length = 0;
-    socket.fireMessage({ MessageType: "KeepAlive" });
+    socket.fireMessage({ MessageType: "ForceKeepAlive", Data: 60 });
     expect(socket.sent.at(-1)).toBe(JSON.stringify({ MessageType: "KeepAlive" }));
+    // An inbound KeepAlive is the server's answer to ours: swallowed, unanswered.
+    socket.fireMessage({ MessageType: "KeepAlive" });
+    expect(socket.sent.filter((m) => m.includes('"KeepAlive"'))).toHaveLength(1);
     expect(events).toEqual([]);
 
     vi.advanceTimersByTime(30_000);
     expect(socket.sent.filter((m) => m.includes('"KeepAlive"'))).toHaveLength(2);
     expect(socket.pings).toBe(0);
+  });
+
+  it("does not ping-pong with a server that answers every KeepAlive with a KeepAlive", () => {
+    // Jellyfin's WebSocketConnection replies to each inbound KeepAlive with an
+    // outbound one. Answering that reply looped the two sides at network
+    // speed from the first ForceKeepAlive.
+    class EchoingSocket extends FakeSocket {
+      send(d: string) {
+        super.send(d);
+        if (JSON.parse(d).MessageType === "KeepAlive") {
+          setTimeout(() => this.fireMessage({ MessageType: "KeepAlive" }), 5);
+        }
+      }
+    }
+    const echoing: SocketFactory = () => {
+      const s = new EchoingSocket();
+      sockets.push(s);
+      return s;
+    };
+    new ServerRealtimeConnection(config({ type: "JELLYFIN" }), callbacks(), echoing).start();
+    const socket = sockets[0];
+    socket.fireOpen();
+    events.length = 0;
+    const keepAlivesSent = () => socket.sent.filter((m) => JSON.parse(m).MessageType === "KeepAlive").length;
+
+    socket.fireMessage({ MessageType: "ForceKeepAlive", Data: 60 });
+    vi.advanceTimersByTime(10_000);
+    // The one answer to the prompt, echoed back once and left there.
+    expect(keepAlivesSent()).toBe(1);
+
+    // Five minutes on: one more per 30 s keepalive interval, nothing else.
+    vi.advanceTimersByTime(290_000);
+    expect(keepAlivesSent()).toBe(1 + 10);
+    expect(events).toEqual([]);
   });
 
   it("stops the keepalive when the socket closes and sends nothing on a dead socket", () => {

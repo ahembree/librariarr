@@ -113,7 +113,7 @@ describe("useMediaDetailRecord", () => {
     fire({ timestamp: 2, serverId: "s1", libraryTypes: ["MOVIE", "MUSIC"] });
     expect(result.current.syncTick).toBe(1);
     // Plays moving carry no library types, nor does a resync.
-    fire({ timestamp: 3, serverId: "s1", imported: 4 });
+    fire({ timestamp: 3, serverId: "s1" });
     fire({});
     expect(result.current.syncTick).toBe(3);
   });

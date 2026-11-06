@@ -153,32 +153,63 @@ describe("computeDedupKey", () => {
   });
 
   describe("MUSIC type", () => {
-    it("uses parentTitle as artist + title as track", () => {
+    it("uses parentTitle as artist, albumTitle as album and title as track", () => {
       expect(
         computeDedupKey("MUSIC", "Bohemian Rhapsody", {
           parentTitle: "Queen",
+          albumTitle: "A Night at the Opera",
         })
-      ).toBe("music:queen:bohemian rhapsody");
+      ).toBe("track:queen:a night at the opera:bohemian rhapsody");
     });
 
-    it("defaults parentTitle to 'unknown' when null", () => {
+    it("keys the same song on two albums apart", () => {
+      // A studio, live or compilation version is its own track: one key let
+      // dedup show only one of them, even when all sat on one server.
+      const studio = computeDedupKey("MUSIC", "Bohemian Rhapsody", {
+        parentTitle: "Queen",
+        albumTitle: "A Night at the Opera",
+      });
+      const compilation = computeDedupKey("MUSIC", "Bohemian Rhapsody", {
+        parentTitle: "Queen",
+        albumTitle: "Greatest Hits",
+      });
+      expect(studio).not.toBe(compilation);
       expect(
-        computeDedupKey("MUSIC", "Some Track", { parentTitle: null })
-      ).toBe("music:unknown:some track");
+        computeDedupKey("MUSIC", "Intro", { parentTitle: "Artist", albumTitle: "First" }),
+      ).not.toBe(computeDedupKey("MUSIC", "Intro", { parentTitle: "Artist", albumTitle: "Second" }));
     });
 
-    it("defaults parentTitle to 'unknown' when not provided", () => {
-      expect(computeDedupKey("MUSIC", "Some Track")).toBe(
-        "music:unknown:some track"
+    it("keys the same track on two servers alike", () => {
+      expect(
+        computeDedupKey("MUSIC", "Bohemian Rhapsody", { parentTitle: "Queen", albumTitle: "Greatest Hits" }),
+      ).toBe(
+        computeDedupKey("MUSIC", " bohemian  rhapsody", { parentTitle: "QUEEN ", albumTitle: "greatest hits" }),
       );
     });
 
-    it("normalizes both components", () => {
+    it("never starts with the legacy prefix the startup backfill re-keys", () => {
+      expect(computeDedupKey("MUSIC", "Song", { parentTitle: "music", albumTitle: "x" })).toMatch(/^track:/);
+    });
+
+    it("defaults parentTitle and albumTitle to 'unknown' when null", () => {
+      expect(
+        computeDedupKey("MUSIC", "Some Track", { parentTitle: null, albumTitle: null })
+      ).toBe("track:unknown:unknown:some track");
+    });
+
+    it("defaults parentTitle and albumTitle to 'unknown' when not provided", () => {
+      expect(computeDedupKey("MUSIC", "Some Track")).toBe(
+        "track:unknown:unknown:some track"
+      );
+    });
+
+    it("normalizes every component", () => {
       expect(
         computeDedupKey("MUSIC", "  Track  Name  ", {
           parentTitle: "  Artist  Name  ",
+          albumTitle: "  Album   Name ",
         })
-      ).toBe("music:artist name:track name");
+      ).toBe("track:artist name:album name:track name");
     });
   });
 

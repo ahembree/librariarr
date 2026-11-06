@@ -35,6 +35,8 @@ async function seedLibrary(userId: string) {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** Rows tied on count come back in no fixed order; compare them by value. */
+const byValue = (rows: { value: string }[]) => [...rows].sort((a, b) => a.value.localeCompare(b.value));
 beforeEach(cleanDatabase);
 afterAll(async () => {
   await cleanDatabase();
@@ -51,7 +53,29 @@ describe("ai/tools", () => {
     // 5 GB + 2 GB, in decimal gigabytes.
     expect(data.storageGB).toEqual({ total: 7, movies: 7, series: 0, music: 0 });
     expect(data.topPlayedMovies).toEqual([{ title: "B", plays: 3 }]);
+    expect({ ...data.topGenres, movies: byValue(data.topGenres.movies) }).toEqual({
+      movies: [{ value: "Action", count: 1 }, { value: "Drama", count: 1 }],
+      shows: [],
+      artists: [],
+    });
     expect(res.evidence).toEqual({ tool: "get_library_overview", kind: "overview", title: "Library overview", data });
+  });
+
+  it("get_library_overview lists top genres per media type, each in its own unit", async () => {
+    const user = await createTestUser();
+    const server = await seedLibrary(user.id);
+    const shows = await createTestLibrary(server.id, { type: "SERIES" });
+    // One show of three Drama episodes counts as one show.
+    for (const n of [1, 2, 3]) {
+      await createTestMediaItem(shows.id, { type: "SERIES", title: `E${n}`, parentTitle: "The Wire", episodeNumber: n, genres: ["Drama"] });
+    }
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(music.id, { type: "MUSIC", title: "T1", parentTitle: "Portishead", genres: ["Drama", "Trip Hop"] });
+
+    const data = (await tools.get("get_library_overview")!.execute(user.id, {})).data as any;
+    expect(byValue(data.topGenres.movies)).toEqual([{ value: "Action", count: 1 }, { value: "Drama", count: 1 }]);
+    expect(data.topGenres.shows).toEqual([{ value: "Drama", count: 1 }]);
+    expect(byValue(data.topGenres.artists)).toEqual([{ value: "Drama", count: 1 }, { value: "Trip Hop", count: 1 }]);
   });
 
   it("get_breakdown by resolution returns normalized values", async () => {
@@ -159,6 +183,31 @@ describe("ai/tools", () => {
     // to the single logical title so counts match the other aggregation tools.
     expect(data.count).toBe(1);
     expect(data.items[0].title).toBe("Dune");
+  });
+
+  it("search_media reports a show on two servers with one copy's size and plays, as the overview does", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const serverA = await createTestServer(user.id, { name: "Plex" });
+    const serverB = await createTestServer(user.id, { name: "Jellyfin" });
+    for (const [server, canonical] of [[serverA, true], [serverB, false]] as const) {
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      for (const n of [1, 2]) {
+        const ep = await createTestMediaItem(lib.id, {
+          type: "SERIES", title: `E${n}`, parentTitle: "Severance", seriesKey: "tvdb:371980",
+          seasonNumber: 1, episodeNumber: n, fileSize: BigInt(2_000_000_000), playCount: 3,
+        });
+        await prisma.mediaItem.update({ where: { id: ep.id }, data: { dedupKey: `series:tvdb:371980:s1e${n}`, dedupCanonical: canonical } });
+      }
+    }
+
+    const search = (await tools.get("search_media")!.execute(user.id, { mediaTypes: ["SERIES"] })).data as any;
+    const overview = (await tools.get("get_library_overview")!.execute(user.id, {})).data as any;
+
+    expect(search.count).toBe(1);
+    // Two 2 GB episodes and three plays each, once — not once per server.
+    expect(search.items[0]).toMatchObject({ title: "Severance", type: "SERIES", sizeGB: 4, playCount: 6 });
+    expect(search.items[0].sizeGB).toBe(overview.storageGB.series);
   });
 
   it("search_media sorts fileSize numerically, not lexicographically", async () => {

@@ -27,13 +27,13 @@ import {
   hasSeasonsBehindLatestRules as hasSeasonsBehindLatestGroupRules,
   isEpisodeLevelField,
   episodeLevelValue,
-  EPISODE_LEVEL_FIELDS,
 } from "@/lib/conditions/helpers";
 import {
   attachSeasonsBehindLatest,
   episodeFieldValuesOf,
   formatEpisodeFieldValues,
   summarizeEpisodeFields,
+  type EpisodeFieldValues,
 } from "@/lib/conditions/episode-fields";
 import { legacyRulesToGroups } from "./legacy";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -46,6 +46,19 @@ import {
   matchArrayField,
   matchExternalIdField,
   matchNameListField,
+  withGroupParentTitle,
+  isGroupRecord,
+  episodesMatchingIndividually,
+  matchGroupThroughMembers,
+  memberValuesOf,
+  readsMemberValues,
+  readsEpisodeValues,
+  withEvaluatedRecord,
+  evaluatedRecordOf,
+  isEveryMemberField,
+  withEveryMemberValues,
+  everyMemberValuesOf,
+  type GroupSelection,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -54,7 +67,7 @@ import {
 } from "@/lib/conditions/where-builder";
 import {
   fetchCrossSystemData,
-  foldCrossSystemData,
+  crossSystemValuesOf,
   type CrossSystemDataOptions,
 } from "@/lib/conditions/cross-system-data";
 import type { Condition } from "@/lib/conditions/types";
@@ -67,6 +80,8 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { DATE_ONLY_FIELDS } from "@/lib/conditions/fields";
 import { formatDateOnly } from "@/lib/format";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
+import { groupScopeHoldReason, groupScopeViolation, type GroupScopeType } from "@/lib/conditions/group-scope";
+import { logger } from "@/lib/logger";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -299,6 +314,53 @@ export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGrou
  */
 export function hasPlayActivityRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   return hasPlayActivityGroupRules(asGroups(rules));
+}
+
+/**
+ * Whether any rule reads a field a show or artist answers per member
+ * (`readsMemberValues`): the group-scope engines and Test Media then judge a
+ * group through each of its members; otherwise they evaluate it once.
+ */
+export function hasMemberValueRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  return readsMemberValues(asGroups(rules));
+}
+
+/**
+ * Whether any rule reads a field an episode answers on its own in a
+ * per-episode run forced through the series path (`readsEpisodeValues`);
+ * otherwise every episode of a show passes or fails alike.
+ */
+function hasEpisodeValueRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  return readsEpisodeValues(asGroups(rules));
+}
+
+/**
+ * A show or artist evaluated as a whole (series or artist scope), judged
+ * through its members (`matchGroupThroughMembers`): it matches when the group
+ * record carrying one member's own per-member values satisfies the rules, the
+ * first such member (lowest id) being the one it is stored and reported with —
+ * and, when a rule reads a cross-system field (`everyMember`, each member's own
+ * cross-system values), only when the rules hold for every member read with its
+ * own values for those. Shared by `evaluateSeriesScope`, `evaluateMusicScope`
+ * and Test Media so the three select alike. `perMember` is
+ * `hasMemberValueRules(rules)`, computed once per run.
+ */
+export function evaluateGroupThroughMembers<M extends { id: string }>(
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
+  group: Record<string, unknown>,
+  members: readonly M[],
+  perMember: boolean,
+  arrMeta?: ArrMetadata,
+  seerrMeta?: SeerrMetadata,
+  everyMember?: (member: M) => Record<string, unknown>,
+): GroupSelection | null {
+  return matchGroupThroughMembers(
+    group,
+    members,
+    (record) => evaluateAllRulesInMemory(rules, record, arrMeta, seerrMeta),
+    perMember,
+    everyMember,
+  );
 }
 
 /**
@@ -1461,6 +1523,29 @@ const OPERATOR_SYMBOLS: Record<string, string> = {
  * Items must already be confirmed matches from evaluateLifecycleRules().
  */
 
+/**
+ * The record a match's criteria and values are reported from, read as the
+ * engine evaluated it: a show or artist matched as a group answers "Artist /
+ * Series" with its own name (`withGroupParentTitle`), while the record itself
+ * keeps the cleared `parentTitle` its snapshot is stored with. A show selected
+ * through an episode's own values (series scope off, forced through the series
+ * path) carries the record it was evaluated on (`withEvaluatedRecord`).
+ *
+ * The Arr and Seerr records and the result's key stay the match's own: the
+ * engines look a group's metadata up by its own external ids.
+ */
+function asEvaluated(
+  item: Record<string, unknown>,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+): Record<string, unknown> {
+  const evaluated = evaluatedRecordOf(item);
+  // A per-episode selection reports a per-episode criterion (Season Number, …)
+  // from every episode it selected (`episodeFieldValues`, as a grouped match
+  // does), every other one from the first matching episode's record.
+  if (evaluated) return "episodeFieldValues" in item ? { ...evaluated, episodeFieldValues: item.episodeFieldValues } : evaluated;
+  return type !== "MOVIE" && isGroupRecord(item) ? withGroupParentTitle(item) : item;
+}
+
 /** Extract the actual item value for a rule field, formatted for display */
 function getActualValueForField(
   field: RuleField,
@@ -1578,6 +1663,15 @@ function getActualValueForField(
   // Is Watchlisted
   if (field === "isWatchlisted") return String(!!item.isWatchlisted);
 
+  // Matched By Rule Set — the names of the rule sets that matched the item
+  // (`matchedRuleSets`, from fetchCrossSystemData; unknown on a record never
+  // enriched with them)
+  if (field === "matchedByRuleSet") {
+    if (!Array.isArray(item.matchedRuleSets)) return "N/A";
+    const names = [...(item.matchedRuleSets as string[])].sort((a, b) => a.localeCompare(b));
+    return names.length > 0 ? names.join(", ") : "none";
+  }
+
   // Watched By User — show the deduped list of usernames who played the item
   if (field === "watchedByUser") {
     const aggregated = Array.isArray(item.watchedByUsers)
@@ -1645,6 +1739,61 @@ function getActualValueForField(
   return val != null ? String(val) : "N/A";
 }
 
+/**
+ * A group record's members' own values for the fields it is judged on through
+ * every member (`withEveryMemberValues`), as the distinct sets of values with
+ * how many members hold each — or null for any other record.
+ */
+interface EveryMemberValueGroups {
+  /** How many members the group has. */
+  total: number;
+  /** Each distinct set of values, with how many members hold it, in member order. */
+  groups: Array<{ values: Record<string, unknown>; count: number }>;
+}
+
+function everyMemberValueGroups(record: Record<string, unknown>): EveryMemberValueGroups | null {
+  const values = everyMemberValuesOf(record);
+  if (!values) return null;
+  const byKey = new Map<string, { values: Record<string, unknown>; count: number }>();
+  for (const v of values) {
+    const key = JSON.stringify(v);
+    const entry = byKey.get(key);
+    if (entry) entry.count++;
+    else byKey.set(key, { values: v, count: 1 });
+  }
+  return { total: values.length, groups: [...byKey.values()] };
+}
+
+/** How many distinct member values a reported value names before it says how many more there are. */
+const EVERY_MEMBER_VALUES_SHOWN = 5;
+
+/**
+ * The reported value of a field a group answers through every member
+ * (`isEveryMemberField`): there is no one value for the group, so the members'
+ * own — one value when they all agree, otherwise each with how many members
+ * hold it, most common first ("Keep (2 of 3); none (1 of 3)").
+ */
+function everyMemberActualValue(
+  field: RuleField,
+  item: Record<string, unknown>,
+  members: EveryMemberValueGroups,
+): string | null {
+  const counts = new Map<string, number>();
+  for (const { values, count } of members.groups) {
+    const text = getActualValueForField(field, { ...item, ...values });
+    if (text == null) continue;
+    counts.set(text, (counts.get(text) ?? 0) + count);
+  }
+  if (counts.size === 0) return null;
+  if (counts.size === 1) return [...counts.keys()][0];
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  const shown = ranked
+    .slice(0, EVERY_MEMBER_VALUES_SHOWN)
+    .map(([text, count]) => `${text} (${count} of ${members.total})`);
+  const more = ranked.length - shown.length;
+  return shown.join("; ") + (more > 0 ? `; ${more} more` : "");
+}
+
 export function getMatchedCriteriaForItems(
   items: Array<Record<string, unknown>>,
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -1661,21 +1810,29 @@ export function getMatchedCriteriaForItems(
   const streamQueryGroups = collectStreamQueryGroups(rules);
   const result = new Map<string, MatchedCriterion[]>();
 
-  for (const item of items) {
+  for (const record of items) {
+    const item = asEvaluated(record, type);
+    const everyMember = everyMemberValueGroups(record);
     const criteria: MatchedCriterion[] = [];
-    const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
+    const externalIds = (record.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
     const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule, groupName } of allRulesWithGroup) {
+      // A field the group answers through every member holds for the group
+      // only when it holds for each member's own value (`isEveryMemberField`).
+      const members = everyMember && isEveryMemberField(rule.field) ? everyMember : null;
       // A grouped match has no season/episode of its own: a per-episode rule
       // matched when one of its matched episodes' values satisfies it.
-      const groupValues = isEpisodeLevelField(rule.field) ? episodeFieldValuesOf(item, rule.field) : undefined;
-      const matched = groupValues
-        ? groupValues.some((v) => evaluateRuleAgainstItem(rule, { type: "SERIES", [rule.field]: v }, arrMeta, seerrMeta))
-        : evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta);
-      if (matched) {
+      const groupValues = !members && isEpisodeLevelField(rule.field) ? episodeFieldValuesOf(item, rule.field) : undefined;
+      const holds = members
+        ? members.groups.length > 0 &&
+          members.groups.every(({ values }) => evaluateRuleAgainstItem(rule, { ...item, ...values }, arrMeta, seerrMeta))
+        : groupValues
+          ? groupValues.some((v) => evaluateRuleAgainstItem(rule, { type: "SERIES", [rule.field]: v }, arrMeta, seerrMeta))
+          : evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta);
+      if (holds) {
         let displayValue = String(rule.value);
         if (rule.field === "fileSize" || rule.field === "arrSizeOnDisk") displayValue += " MB";
         if (rule.operator === "inLastDays" || rule.operator === "notInLastDays") displayValue += " days";
@@ -1687,7 +1844,9 @@ export function getMatchedCriteriaForItems(
           value: displayValue,
           negate: !!rule.negate,
           groupName,
-          actualValue: getActualValueForField(rule.field, item, arrMeta, seerrMeta) ?? undefined,
+          actualValue: (members
+            ? everyMemberActualValue(rule.field, item, members)
+            : getActualValueForField(rule.field, item, arrMeta, seerrMeta)) ?? undefined,
         });
       }
     }
@@ -1713,7 +1872,7 @@ export function getMatchedCriteriaForItems(
       }
     }
 
-    result.set(item.id as string, criteria);
+    result.set(record.id as string, criteria);
   }
 
   return result;
@@ -1734,44 +1893,33 @@ export function getActualValuesForAllRules(
   const allRulesWithGroup = collectAllRulesWithGroup(rules);
   const result = new Map<string, Map<string, string>>();
 
-  for (const item of items) {
+  for (const record of items) {
+    const item = asEvaluated(record, type);
+    const everyMember = everyMemberValueGroups(record);
     const values = new Map<string, string>();
-    const externalIds = (item.externalIds ?? []) as Array<{ source: string; externalId: string }>;
+    const externalIds = (record.externalIds ?? []) as Array<{ source: string; externalId: string }>;
     const arrExtId = externalIds.find((e) => e.source === arrIdSource);
     const arrMeta = arrData && arrExtId ? arrData[arrExtId.externalId] : undefined;
     const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
     for (const { rule } of allRulesWithGroup) {
-      const actual = getActualValueForField(rule.field, item, arrMeta, seerrMeta);
+      const actual = everyMember && isEveryMemberField(rule.field)
+        ? everyMemberActualValue(rule.field, item, everyMember)
+        : getActualValueForField(rule.field, item, arrMeta, seerrMeta);
       if (actual != null) values.set(rule.id, actual);
     }
 
-    result.set(item.id as string, values);
+    result.set(record.id as string, values);
   }
 
   return result;
-}
-
-/**
- * Options for in-memory evaluation.
- *
- * `relaxedFields`: rules on these fields count as satisfied without being
- * evaluated. Group negation is pushed down to the rules first and the tree is
- * then built from AND/OR alone, so the result is a SUPERSET of the strict
- * evaluation — a gate that a stricter pass must follow. The series aggregate
- * gate relaxes the per-episode fields (an aggregate has no season or episode
- * number), and the per-episode pass decides them.
- */
-export interface InMemoryEvalOptions {
-  relaxedFields?: ReadonlySet<string>;
 }
 
 function evaluateRuleGroupInMemory(
   group: LifecycleRuleGroup,
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
-  seerrMeta?: SeerrMetadata,
-  options: InMemoryEvalOptions = {},
+  seerrMeta?: SeerrMetadata
 ): boolean | null {
   if (group.enabled === false) return null; // Skip disabled group (mirrors Phase 1)
 
@@ -1784,13 +1932,10 @@ function evaluateRuleGroupInMemory(
 
   for (const rule of group.rules) {
     if (rule.enabled === false) continue;
-    const result = options.relaxedFields?.has(rule.field)
-      ? true
-      : evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta);
-    items.push({ condition: rule.condition, result });
+    items.push({ condition: rule.condition, result: evaluateRuleAgainstItem(rule, item, arrMeta, seerrMeta) });
   }
   for (const sub of group.groups ?? []) {
-    const subResult = evaluateRuleGroupInMemory(sub, item, arrMeta, seerrMeta, options);
+    const subResult = evaluateRuleGroupInMemory(sub, item, arrMeta, seerrMeta);
     if (subResult !== null) {
       items.push({ condition: sub.condition, result: subResult });
     }
@@ -1816,8 +1961,7 @@ export function evaluateAllRulesInMemory(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
-  seerrMeta?: SeerrMetadata,
-  options: InMemoryEvalOptions = {},
+  seerrMeta?: SeerrMetadata
 ): boolean {
   if (rules.length === 0) return false;
 
@@ -1827,7 +1971,7 @@ export function evaluateAllRulesInMemory(
     const results: Array<{ condition: LifecycleRuleCondition; result: boolean }> = [];
 
     for (let i = 0; i < groups.length; i++) {
-      const groupResult = evaluateRuleGroupInMemory(groups[i], item, arrMeta, seerrMeta, options);
+      const groupResult = evaluateRuleGroupInMemory(groups[i], item, arrMeta, seerrMeta);
       if (groupResult !== null) {
         results.push({ condition: groups[i].condition, result: groupResult });
       }
@@ -1852,15 +1996,42 @@ export function evaluateAllRulesInMemory(
   // OR within buckets, AND between them — see legacyRulesToGroups).
   const converted = legacyRulesToGroups(rules as LifecycleRule[]);
   if (converted.length === 0) return false;
-  return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta, options);
+  return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
 export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasSeriesAggregateRules, hasEpisodeLevelRules, hasSeasonsBehindLatestRules };
 
 /**
+ * Defense in depth for the group-scope engines: whether `rules` judge whole
+ * shows or artists on a criterion that describes one episode or track
+ * (`groupScopeViolation`), which saving refuses and detection, Preview and
+ * Test Media skip (`checkLifecycleRuleEvaluability`). A caller that reaches an
+ * engine anyway gets no matches — never a whole show matched on one episode —
+ * and the reason is logged.
+ */
+function refusesGroupScope(rules: LifecycleRule[] | LifecycleRuleGroup[], type: GroupScopeType): boolean {
+  const violation = groupScopeViolation(type, true, rules);
+  if (!violation) return false;
+  logger.warn("Lifecycle", `Refusing to evaluate ${type === "SERIES" ? "series" : "artist"} scope — ${groupScopeHoldReason(violation)}`);
+  return true;
+}
+
+/**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
  * first, then evaluate rules against the aggregated series data.
  * This is the default for SERIES type rule sets.
+ *
+ * A show matches when at least one episode satisfies the rules, each episode
+ * seen as the show's record carrying its own per-episode values
+ * (`evaluateGroupThroughMembers`); the show's own values (name, play total,
+ * size, streams, watchers, aggregates, Arr, Seerr) are the same for every
+ * episode. The match is stored and reported with the first such episode's
+ * values. Criteria that describe one episode (Resolution, Year, Genre, Content
+ * Rating, a stream query, … — every per-episode field) are not allowed in
+ * series scope (`groupScopeViolation`): rules holding one match nothing here,
+ * so the rules this evaluates read only the show's own values — and the
+ * cross-system fields, which each episode has its own of: a show matches only
+ * when the rules hold for every episode read with its own (`isEveryMemberField`).
  */
 export async function evaluateSeriesScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -1868,16 +2039,16 @@ export async function evaluateSeriesScope(
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap,
   /**
-   * When true, after a series matches at the aggregate level, restrict its
-   * `memberIds` to the episodes that ALSO individually satisfy the rule
-   * (re-evaluated per-episode with the series-aggregate fields injected as
-   * series-level constants). Used when the series path was FORCED by an
-   * aggregate field while `seriesScope` is false — the user asked for
-   * per-episode scope, so a member-scoped file delete must act only on the
-   * matching episodes, not every episode of the series. With `seriesScope`
-   * true (whole-series intent) this stays false and every episode is a member.
-   * The restricted set is always a subset of the series' episodes, so this can
-   * only narrow a deletion (never wrong-target or over-delete).
+   * When true, the run is per episode (series scope off) and was FORCED onto
+   * the series path by a series-aggregate field: a show is a match when at
+   * least one of its episodes satisfies the rules on its own, with the
+   * series-aggregate fields injected as series-level constants
+   * (`episodesMatchingIndividually`), and its `memberIds` are exactly those
+   * episodes — a member-scoped file delete acts only on them. Here every field
+   * but the aggregates, Arr and Seerr is the episode's own (its title, play
+   * count, size, streams, watchers, cross-system values), as on the flat
+   * per-episode path. With `seriesScope` true (whole-series intent) this stays
+   * false and every episode is a member.
    */
   restrictMembersToEpisodeMatches: boolean = false,
   /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
@@ -1885,19 +2056,20 @@ export async function evaluateSeriesScope(
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
+  // Series scope (not a per-episode run forced through here by an aggregate
+  // field, where every criterion is checked per episode): no per-episode
+  // criteria.
+  if (!restrictMembersToEpisodeMatches && refusesGroupScope(rules, "SERIES")) return [];
 
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
-  // Per-episode fields have no value on a series aggregate. The aggregate gate
-  // treats them as satisfied (a superset) and the per-episode pass decides
-  // them, so a series matches only through episodes that match — and its
-  // members are those episodes, whatever the caller asked for. A rule set in
-  // series scope never gets here with one (`checkLifecycleRuleEvaluability`);
-  // this keeps a stored one from reading NULL on the aggregate, where a
-  // negated rule would match every show.
+  // Per-episode fields (Season Number, Episode Number, Seasons Behind Latest)
+  // have no value on a series aggregate. Series scope refuses them above (the
+  // group-scope gate blocks them), so they reach here only with series scope
+  // off, where every episode is judged with its own values
+  // (`episodesMatchingIndividually`, below) and the match reports the
+  // distinct values of the episodes it selected (`episodeFieldValues`).
   const episodeLevel = hasEpisodeLevelRules(rules);
-  const restrictMembers = restrictMembersToEpisodeMatches || episodeLevel;
-  const aggregateGateOptions: InMemoryEvalOptions = episodeLevel ? { relaxedFields: EPISODE_LEVEL_FIELDS } : {};
 
   // Fetch ALL episodes across the user's SERIES libraries
   const allEpisodes = await prisma.mediaItem.findMany({
@@ -1961,15 +2133,15 @@ export async function evaluateSeriesScope(
     }
   > = [];
 
-  // Retain the raw episode rows per series so member ids can be restricted to
-  // per-episode matches below (only when restricting members).
+  // The raw episode rows per series (lowest id first): a show is judged through
+  // them below, in either scope.
   const episodesByRepId = new Map<string, typeof allEpisodes>();
 
   for (const [, episodes] of seriesMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
     episodes.sort((a, b) => compareIds(a.id, b.id));
     const representative = episodes[0];
-    if (restrictMembers) episodesByRepId.set(representative.id, episodes);
+    episodesByRepId.set(representative.id, episodes);
     const totalPlays = episodes.reduce((sum, ep) => sum + ep.playCount, 0);
     const totalSize = episodes.reduce(
       (sum, ep) => sum + (ep.fileSize ?? BigInt(0)),
@@ -2034,7 +2206,9 @@ export async function evaluateSeriesScope(
       title: representative.parentTitle ?? representative.title,
       // Use series-level summary instead of episode summary
       summary: representative.parentSummary ?? representative.summary,
-      // Clear episode-specific fields — this is a series-level aggregate
+      // Clear episode-specific fields — this is a series-level aggregate, and
+      // the match's group snapshot. Rules read the show's name as its
+      // parentTitle (withGroupParentTitle, below).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -2054,25 +2228,53 @@ export async function evaluateSeriesScope(
     });
   }
 
-  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  // Cross-system fields: each episode's own. A whole show is judged through
+  // every episode's (`isEveryMemberField`), a per-episode run each episode by
+  // its own.
   const crossSystem = hasCrossSystemFieldRules(rules)
     ? await fetchCrossSystemData(allEpisodes.map((ep) => ep.id), crossSystemOptions)
+    : undefined;
+  const everyEpisode = crossSystem
+    ? (ep: { id: string }) => ({ ...crossSystemValuesOf(crossSystem, ep.id) })
     : undefined;
 
   // Evaluate rules in-memory against aggregated series records
   const externalIdSource = "TVDB";
-  const matching = [];
+  // Whether a rule reads a value an episode holds on its own — each show is
+  // then judged through its episodes; otherwise it is evaluated once, as every
+  // episode would answer alike. Decided once for the run.
+  const perMember = restrictMembersToEpisodeMatches
+    ? hasEpisodeValueRules(rules)
+    : hasMemberValueRules(rules);
+
+  // The match record: the show (its name, totals, aggregates) carrying the
+  // per-episode values of the episode it was selected through, plus the
+  // computed fields getMatchedCriteriaForItems reports (they exist only on the
+  // evaluation object, not on the raw aggregated series record).
+  const toResult = (series: (typeof aggregated)[number]) => ({
+    ...series,
+    fileSize: series.fileSize ?? null,
+    matchedEpisodes: series.episodeCount,
+    memberIds: series.memberIds,
+    latestEpisodeViewDate: series.latestEpisodeViewDate ?? null,
+    // MAX(lastPlayedAt) across all episodes — the aggregate already stores it on lastPlayedAt.
+    seriesLastPlayedAt: series.lastPlayedAt ?? null,
+    availableEpisodeCount: series.episodeCount,
+    watchedEpisodePercentage: series.episodeCount > 0
+      ? (series.watchedEpisodeCount / series.episodeCount) * 100
+      : 0,
+    streams: series.allStreams ?? [],
+  });
+  type SeriesScopeMatch = ReturnType<typeof toResult> & { episodeFieldValues?: EpisodeFieldValues };
+  const matching: SeriesScopeMatch[] = [];
 
   for (const series of aggregated) {
-    // Folded over every episode, before a forced per-episode run narrows the
-    // members; also carried on the returned record, so the criteria and actual
-    // values reported for a match (getMatchedCriteriaForItems) see what the
-    // match was selected on — as the flat path's records do.
-    const cross = foldCrossSystemData(series.memberIds, crossSystem);
-    // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
+    // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format).
+    // No cross-system values: the show has none of its own, and each episode
+    // carries its own in either scope (below).
     const item: Record<string, unknown> = {
-      ...series,
-      ...cross,
+      // The show's name answers "Artist / Series" (withGroupParentTitle).
+      ...withGroupParentTitle(series),
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
         ? series.lastPlayedAt instanceof Date
@@ -2121,88 +2323,105 @@ export async function evaluateSeriesScope(
 
     const seerrMeta = lookupSeerrMeta(series.externalIds ?? [], seerrData, "SERIES");
 
-    if (evaluateAllRulesInMemory(rules, item, arrMeta, seerrMeta, aggregateGateOptions)) {
-      let episodeFieldValues: ReturnType<typeof summarizeEpisodeFields> | undefined;
-      if (restrictMembers) {
-        // Re-evaluate per-episode with the 6 series-aggregate fields injected as
-        // series-level constants (so aggregate rules pass for every episode and
-        // only the per-episode conditions actually filter). Keep only matching
-        // episodes as members. Same arr/seerr meta — correlation is series-level.
-        const aggInjection = {
-          availableEpisodeCount: item.availableEpisodeCount,
-          watchedEpisodeCount: item.watchedEpisodeCount,
-          watchedEpisodePercentage: item.watchedEpisodePercentage,
-          latestEpisodeViewDate: item.latestEpisodeViewDate,
-          seriesLastPlayedAt: item.seriesLastPlayedAt,
-          lastEpisodeAddedAt: item.lastEpisodeAddedAt,
-          lastEpisodeAiredAt: item.lastEpisodeAiredAt,
-        };
-        const epis = episodesByRepId.get(series.id) ?? [];
-        const matchedEpisodes = epis
-          .filter((ep) => {
-            const epExternalIds = "externalIds" in ep
-              ? (ep.externalIds as Array<{ source: string; externalId: string }>)
-              : [];
-            const epItem: Record<string, unknown> = {
-              ...ep,
-              fileSize: ep.fileSize?.toString() ?? null,
-              lastPlayedAt: ep.lastPlayedAt?.toISOString() ?? null,
-              addedAt: ep.addedAt?.toISOString() ?? null,
-              originallyAvailableAt: ep.originallyAvailableAt?.toISOString() ?? null,
-              streams: "streams" in ep ? ep.streams : [],
-              watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
-              externalIds: epExternalIds,
-              ...crossSystem?.get(ep.id),
-              ...aggInjection,
-            };
-            return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
-          });
-        series.memberIds = matchedEpisodes.map((ep) => ep.id);
-        // The match stands for its member episodes from here on, as the
-        // Pending page and the diff total it (`aggregateGroupMembers`): its size
-        // is theirs, not the whole show's. (The aggregate gate above already
-        // read the show's total.)
-        const memberSize = matchedEpisodes.reduce((sum, ep) => sum + (ep.fileSize ?? BigInt(0)), BigInt(0));
-        series.fileSize = memberSize > BigInt(0) ? memberSize.toString() : null;
+    // Lowest id first: the first to pass is the one the match is stored with.
+    const episodes = episodesByRepId.get(series.id) ?? [];
+
+    if (restrictMembersToEpisodeMatches) {
+      // Per episode: the show is a match when an episode passes on its own,
+      // with the series aggregates carried over as series-level constants —
+      // the selection the query engine's aggregate path shares — and its
+      // members are exactly those episodes. The show's own record is no gate:
+      // it read every per-episode field off the representative. Same arr/seerr
+      // meta: correlation is series-level.
+      const first: { episode?: EpisodeRow; record?: Record<string, unknown> } = {};
+      const memberIds = episodesMatchingIndividually(
+        episodes,
+        item,
+        (ep, seriesFields) => {
+          const epExternalIds = "externalIds" in ep
+            ? (ep.externalIds as Array<{ source: string; externalId: string }>)
+            : [];
+          const epItem: Record<string, unknown> = {
+            ...ep,
+            fileSize: ep.fileSize?.toString() ?? null,
+            lastPlayedAt: ep.lastPlayedAt?.toISOString() ?? null,
+            addedAt: ep.addedAt?.toISOString() ?? null,
+            originallyAvailableAt: ep.originallyAvailableAt?.toISOString() ?? null,
+            streams: "streams" in ep ? ep.streams : [],
+            watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
+            externalIds: epExternalIds,
+            ...crossSystem?.get(ep.id),
+            ...seriesFields,
+          };
+          const passes = evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
+          if (passes && !first.record) {
+            first.episode = ep;
+            first.record = epItem;
+          }
+          return passes;
+        },
+        perMember,
+      );
+      // Passing only as a whole (a summed file size, say) is not a match when
+      // the rule is per episode: with no member an episode-scoped action fell
+      // back to the representative, which never matched, and its settled
+      // empty member list then read as covering the whole show.
+      if (memberIds.length === 0 || !first.episode || !first.record) continue;
+      // The match stands for its member episodes from here on, as the Pending
+      // page and the diff total it (`aggregateGroupMembers`): its episode count
+      // and size are theirs, not the whole show's.
+      const memberSet = new Set(memberIds);
+      const memberEpisodes = episodes.filter((ep) => memberSet.has(ep.id));
+      const memberSize = memberEpisodes.reduce((sum, ep) => sum + (ep.fileSize ?? BigInt(0)), BigInt(0));
+      // Stored as the show with the first matching episode's per-episode
+      // values — but the group snapshot's shape (no season or episode of its
+      // own: the matched episodes' are `episodeFieldValues`); its criteria are
+      // reported from that episode's own record.
+      const result: SeriesScopeMatch = {
+        ...toResult({
+          ...series,
+          ...(memberValuesOf(first.episode) as Partial<typeof series>),
+          seasonNumber: null,
+          episodeNumber: null,
+          ...(episodeLevel ? { seasonsBehindLatest: null } : {}),
+          fileSize: memberSize > BigInt(0) ? memberSize.toString() : null,
+          memberIds,
+        }),
+        matchedEpisodes: memberIds.length,
         // What the matched episodes' seasons and numbers are, for the criteria
         // and values the match reports (episode-fields.ts).
-        if (episodeLevel) {
-          episodeFieldValues = summarizeEpisodeFields(matchedEpisodes as unknown as Array<Record<string, unknown>>);
-        }
-        // Passing only as a whole (a summed file size, say) is not a match when
-        // the rule is per episode: with no member an episode-scoped action fell
-        // back to the representative, which never matched, and its settled
-        // empty member list then read as covering the whole show.
-        if (series.memberIds.length === 0) continue;
-      }
-      matching.push({ ...series, ...cross, ...(episodeFieldValues ? { episodeFieldValues } : {}) });
+        ...(episodeLevel
+          ? { episodeFieldValues: summarizeEpisodeFields(memberEpisodes as unknown as Array<Record<string, unknown>>) }
+          : {}),
+      };
+      matching.push(withEvaluatedRecord(result, first.record));
+      continue;
     }
+
+    // Whole show: a match when one episode, seen as the show carrying its own
+    // per-episode values, satisfies the rules — and, for a cross-system
+    // criterion, only when every episode does with its own cross-system
+    // values; every episode stays a member. The match reports those values
+    // per episode (withEveryMemberValues).
+    const selection = evaluateGroupThroughMembers(rules, item, episodes, perMember, arrMeta, seerrMeta, everyEpisode);
+    if (!selection) continue;
+    matching.push(withEveryMemberValues(
+      toResult({ ...series, ...(selection.memberValues as Partial<typeof series>) }),
+      selection.everyMemberValues,
+    ));
   }
 
-  return matching.map((item) => ({
-    ...item,
-    fileSize: item.fileSize ?? null,
-    // Restricted to its matching episodes, a match reports how many it acts on.
-    matchedEpisodes: restrictMembers ? item.memberIds.length : item.episodeCount,
-    memberIds: item.memberIds,
-    // Expose computed fields so getMatchedCriteriaForItems can evaluate
-    // series-scope rules (these only exist on the enriched evaluation object,
-    // not on the raw aggregated series record)
-    latestEpisodeViewDate: item.latestEpisodeViewDate ?? null,
-    // MAX(lastPlayedAt) across all episodes — the aggregate already stores it on lastPlayedAt.
-    seriesLastPlayedAt: item.lastPlayedAt ?? null,
-    availableEpisodeCount: item.episodeCount,
-    watchedEpisodePercentage: item.episodeCount > 0
-      ? (item.watchedEpisodeCount / item.episodeCount) * 100
-      : 0,
-    streams: item.allStreams ?? [],
-  }));
+  return matching;
 }
 
 /**
  * Evaluate rules at the artist scope: aggregate ALL tracks into artists
  * first, then evaluate rules against the aggregated artist data.
- * This is the default for MUSIC type rule sets.
+ * This is the default for MUSIC type rule sets. Criteria that describe one
+ * track (Audio Codec, Year, Album, a stream query, …) are not allowed in
+ * artist scope (`groupScopeViolation`): rules holding one match nothing here.
+ * The cross-system fields are each track's own: an artist matches only when
+ * the rules hold for every track read with its own (`isEveryMemberField`).
  */
 export async function evaluateMusicScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -2213,6 +2432,7 @@ export async function evaluateMusicScope(
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
+  if (refusesGroupScope(rules, "MUSIC")) return [];
 
   const needsStreams = hasStreamRules(rules);
   const needsWatchHistory = hasWatchedByUserRules(rules);
@@ -2270,10 +2490,15 @@ export async function evaluateMusicScope(
     Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; watchedByUsers: string[]; memberIds: string[] }
   > = [];
 
+  // The raw track rows per artist (lowest id first): an artist is judged
+  // through them below.
+  const tracksByRepId = new Map<string, typeof allTracks>();
+
   for (const [, tracks] of artistMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
     tracks.sort((a, b) => compareIds(a.id, b.id));
     const representative = tracks[0];
+    tracksByRepId.set(representative.id, tracks);
     const totalPlays = tracks.reduce((sum, t) => sum + t.playCount, 0);
     const totalSize = tracks.reduce(
       (sum, t) => sum + (t.fileSize ?? BigInt(0)),
@@ -2314,7 +2539,9 @@ export async function evaluateMusicScope(
       ...representative,
       // Use artist name as title so "title" rules match against the artist
       title: representative.parentTitle ?? representative.title,
-      // Clear track-specific fields — this is an artist-level aggregate
+      // Clear track-specific fields — this is an artist-level aggregate, and
+      // the match's group snapshot. Rules read the artist's name as its
+      // parentTitle (withGroupParentTitle, below).
       parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
@@ -2331,19 +2558,29 @@ export async function evaluateMusicScope(
 
   // Evaluate rules in-memory against aggregated artist records
   const externalIdSource = "MUSICBRAINZ";
-  const matching = [];
+  // Whether a rule reads a value a track holds on its own: each artist is then
+  // judged through its tracks; otherwise it is evaluated once.
+  const perMember = hasMemberValueRules(rules);
+  const matching: Array<{
+    artist: (typeof aggregated)[number];
+    everyMemberValues: GroupSelection["everyMemberValues"];
+  }> = [];
 
-  // Cross-system fields, read across each artist's tracks (foldCrossSystemData).
+  // Cross-system fields: each track's own. An artist is judged through every
+  // track's (`isEveryMemberField`), as a show through its episodes'.
   const crossSystem = hasCrossSystemFieldRules(rules)
     ? await fetchCrossSystemData(allTracks.map((t) => t.id), crossSystemOptions)
     : undefined;
+  const everyTrack = crossSystem
+    ? (t: { id: string }) => ({ ...crossSystemValuesOf(crossSystem, t.id) })
+    : undefined;
 
   for (const artist of aggregated) {
-    // Also carried on the returned record (see evaluateSeriesScope).
-    const cross = foldCrossSystemData(artist.memberIds, crossSystem);
+    // No cross-system values: the artist has none of its own (each track
+    // carries its own, below).
     const item: Record<string, unknown> = {
-      ...artist,
-      ...cross,
+      // The artist's name answers "Artist / Series" (withGroupParentTitle).
+      ...withGroupParentTitle(artist),
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
         ? artist.lastPlayedAt instanceof Date
@@ -2364,12 +2601,23 @@ export async function evaluateMusicScope(
     );
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
-    if (evaluateAllRulesInMemory(rules, item, arrMeta)) {
-      matching.push({ ...artist, ...cross });
+    // A match when one track, seen as the artist carrying its own per-track
+    // values (year, codecs, album, …), satisfies the rules — and, for a
+    // cross-system criterion, only when every track does with its own
+    // cross-system values; stored with the first such track's values, every
+    // track a member.
+    const selection = evaluateGroupThroughMembers(
+      rules, item, tracksByRepId.get(artist.id) ?? [], perMember, arrMeta, undefined, everyTrack,
+    );
+    if (selection) {
+      matching.push({
+        artist: { ...artist, ...(selection.memberValues as Partial<typeof artist>) },
+        everyMemberValues: selection.everyMemberValues,
+      });
     }
   }
 
-  return matching.map((item) => ({
+  return matching.map(({ artist: item, everyMemberValues }) => withEveryMemberValues({
     ...item,
     fileSize: item.fileSize ?? null,
     matchedEpisodes: item.trackCount,
@@ -2377,7 +2625,7 @@ export async function evaluateMusicScope(
     // Expose allStreams as streams so getMatchedCriteriaForItems can evaluate
     // stream-based rules against the aggregated artist record
     streams: item.allStreams ?? [],
-  }));
+  }, everyMemberValues));
 }
 
 export async function evaluateLifecycleRules(
@@ -2581,7 +2829,10 @@ export function groupSeriesResults<
 
   return [...groups.values()].map(({ representative, count, totalPlays, totalSize, latestPlayed, memberIds, members }) => ({
     ...representative,
-    // Use series name as title, clear episode-specific fields
+    // Use series name as title, clear episode-specific fields. The rules were
+    // already evaluated per episode, against each episode's own parentTitle;
+    // this is the match's group snapshot, whose criteria are reported with the
+    // show's name as its parentTitle (asEvaluated → withGroupParentTitle).
     title: representative.parentTitle ?? representative.title,
     parentTitle: null,
     seasonNumber: null,

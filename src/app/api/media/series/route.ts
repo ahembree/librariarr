@@ -98,8 +98,13 @@ const listGet = withSession(async (session, request: NextRequest) => {
     if (Number.isNaN(n)) {
       return NextResponse.json({ error: "seasonNumber must be an integer" }, { status: 400 });
     }
+    // Season 0 holds the episodes with no season too, as the season listings
+    // group them (`COALESCE("seasonNumber", 0)`): matched exactly, a Specials
+    // card made of unnumbered episodes opened an empty season page. In an AND,
+    // as `search` below takes `OR`.
+    if (n === 0) where.AND = [{ OR: [{ seasonNumber: 0 }, { seasonNumber: null }] }];
     // Out of the column's range it matches nothing, rather than failing the query.
-    where.seasonNumber = intEqualsFilter(n);
+    else where.seasonNumber = intEqualsFilter(n);
   }
   // `escapeLike`: `search` becomes a LIKE pattern, and nothing else escapes
   // `%` / `_` / `\` — live, `?search=1_ Things` matched "10 Things I Hate

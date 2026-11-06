@@ -10,6 +10,7 @@ import {
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
+  createTestRuleSet,
   createTestApiKey,
 } from "../../setup/test-helpers";
 
@@ -72,6 +73,7 @@ import { GET as appMediaItemGET } from "@/app/api/media/[id]/route";
 import { GET as appSyncStatusGET } from "@/app/api/sync/status/route";
 import { API_SCOPES, API_SCOPE_INFO, type ApiScope } from "@/lib/api-keys/scopes";
 import { TASK_LIFECYCLE_DETECTION, TASK_LIFECYCLE_EXECUTION, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { groupScopeHoldReason, groupScopeViolation } from "@/lib/conditions/group-scope";
 
 const prisma = getTestPrisma();
 
@@ -332,6 +334,132 @@ describe("/api/v1 endpoints", () => {
       setMockSession({ isLoggedIn: true, userId: user.id });
       const viaApp = await expectJson<Status>(await callRoute(appSyncStatusGET), 200);
       expect(viaApp.jobs[0].error).toBe("connect ECONNREFUSED 192.168.1.20:32400");
+    });
+
+    it("GET /lifecycle/actions reports which rule sets' actions are held, and since when", async () => {
+      // A save that changed what a rule set matches holds its actions until
+      // detection re-checks them (`RuleSet.actionsHeldSince`); executing one
+      // answers 409 meanwhile, so a client reads the hold from the listing.
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const film = await createTestMediaItem(library.id, { title: "Arrival", year: 2016 });
+      const heldSince = new Date("2026-03-01T12:00:00.000Z");
+      const held = await createTestRuleSet(user.id, { name: "Edited", actionEnabled: true, actionType: "DELETE_RADARR" });
+      await prisma.ruleSet.update({ where: { id: held.id }, data: { actionsHeldSince: heldSince } });
+      const unheld = await createTestRuleSet(user.id, { name: "Untouched", actionEnabled: true, actionType: "UNMONITOR_RADARR" });
+      for (const ruleSet of [held, unheld]) {
+        await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            ruleSetId: ruleSet.id,
+            mediaItemId: film.id,
+            actionType: ruleSet.actionType!,
+            status: "PENDING",
+            scheduledFor: new Date(),
+          },
+        });
+      }
+      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:read"] });
+
+      type Listing = { groups: Array<{ ruleSet: { id: string; actionsHeldSince: string | null }; count: number }> };
+      const viaApi = await expectJson<Listing>(
+        await call(ROUTES.find((r) => r.label === "GET /lifecycle/actions")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      const holds = Object.fromEntries(viaApi.groups.map((g) => [g.ruleSet.id, [g.ruleSet.actionsHeldSince, g.count]]));
+      expect(holds).toEqual({ [held.id]: [heldSince.toISOString(), 1], [unheld.id]: [null, 1] });
+    });
+
+    it("holds a series-scoped rule set's actions for a per-episode criterion: listed with the reason, execute refused", async () => {
+      // Saved before such criteria were refused at series scope (or restored):
+      // its actions wait until it is edited, and a key cannot run them.
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const episode = await createTestMediaItem(library.id, { type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const rules = [{
+        id: "g1", condition: "AND", groups: [],
+        rules: [{ id: "r1", field: "resolution", operator: "equals", value: "4K", condition: "AND" }],
+      }];
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Per-episode", type: "SERIES", seriesScope: true, rules, serverIds: [server.id],
+        actionEnabled: true, actionType: "UNMONITOR_SONARR",
+      });
+      await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: episode.id, itemData: { id: episode.id, title: "Show" } } });
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, ruleSetId: ruleSet.id, mediaItemId: episode.id, actionType: "UNMONITOR_SONARR",
+          status: "PENDING", scheduledFor: new Date(),
+        },
+      });
+      const reason = groupScopeHoldReason(groupScopeViolation("SERIES", true, rules)!);
+      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:read", "lifecycle:execute"] });
+
+      type Listing = { groups: Array<{ ruleSet: { id: string; actionsHeldSince: string | null; scopeHoldReason: string | null } }> };
+      const listing = await expectJson<Listing>(
+        await call(ROUTES.find((r) => r.label === "GET /lifecycle/actions")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      expect(listing.groups.map((g) => g.ruleSet)).toEqual([
+        expect.objectContaining({ id: ruleSet.id, actionsHeldSince: null, scopeHoldReason: reason }),
+      ]);
+
+      const refused = await expectJson<{ error: string }>(
+        await call(
+          ROUTES.find((r) => r.label === "POST /lifecycle/actions/execute")!,
+          { authorization: `Bearer ${key}` },
+          { body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] } },
+        ),
+        409,
+      );
+      expect(refused.error).toBe(reason);
+      expect((await prisma.lifecycleAction.findFirstOrThrow({ where: { ruleSetId: ruleSet.id } })).status).toBe("PENDING");
+    });
+
+    it("holds a whole-show action following a per-episode criterion with series scope off: listed with the reason, execute refused", async () => {
+      // Delete from Sonarr acts on the whole show; with series scope off one
+      // 4K episode would decide for every other. Saved before that was refused.
+      const user = await setupUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const episode = await createTestMediaItem(library.id, { type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const rules = [{
+        id: "g1", condition: "AND", groups: [],
+        rules: [{ id: "r1", field: "resolution", operator: "equals", value: "4K", condition: "AND" }],
+      }];
+      const ruleSet = await createTestRuleSet(user.id, {
+        name: "Whole show", type: "SERIES", seriesScope: false, rules, serverIds: [server.id],
+        actionEnabled: true, actionType: "DELETE_SONARR",
+      });
+      await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: episode.id, itemData: { id: episode.id, title: "Show" } } });
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, ruleSetId: ruleSet.id, mediaItemId: episode.id, actionType: "DELETE_SONARR",
+          status: "PENDING", scheduledFor: new Date(),
+        },
+      });
+      const reason = groupScopeHoldReason(groupScopeViolation("SERIES", false, rules, { actionEnabled: true, actionType: "DELETE_SONARR" })!);
+      expect(reason).toMatch(/^This rule set's action \("Delete from Sonarr"\) acts on the whole show/);
+      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:read", "lifecycle:execute"] });
+
+      type Listing = { groups: Array<{ ruleSet: { id: string; scopeHoldReason: string | null } }> };
+      const listing = await expectJson<Listing>(
+        await call(ROUTES.find((r) => r.label === "GET /lifecycle/actions")!, { authorization: `Bearer ${key}` }),
+        200,
+      );
+      expect(listing.groups.map((g) => g.ruleSet)).toEqual([expect.objectContaining({ id: ruleSet.id, scopeHoldReason: reason })]);
+
+      const refused = await expectJson<{ error: string }>(
+        await call(
+          ROUTES.find((r) => r.label === "POST /lifecycle/actions/execute")!,
+          { authorization: `Bearer ${key}` },
+          { body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] } },
+        ),
+        409,
+      );
+      expect(refused.error).toBe(reason);
+      expect((await prisma.lifecycleAction.findFirstOrThrow({ where: { ruleSetId: ruleSet.id } })).status).toBe("PENDING");
     });
 
     it("POST /jobs/sync queues a sync per enabled server, attributed to the key", async () => {

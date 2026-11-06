@@ -381,10 +381,10 @@ describe("GET /api/media/search", () => {
     ]);
   });
 
-  // `dedupKey` names a track by artist + title and an episode by show +
-  // SxxExx, so on ONE server two different rows can share it: the same song
-  // on a studio album and a compilation, or episodes with no numbers. Only a
-  // copy on ANOTHER server is the same item.
+  // On ONE server two different rows can share a `dedupKey` — episodes with no
+  // numbers, or (under the artist + title key tracks carried before it named
+  // the album, kept here) the same song on a studio album and a compilation.
+  // Only a copy on ANOTHER server is the same item.
   it("counts same-titled tracks on one server separately, and a copy on another server once", async () => {
     const user = await createTestUser();
     const serverA = await createTestServer(user.id, { name: "A" });
@@ -393,7 +393,7 @@ describe("GET /api/media/search", () => {
     const libB = await createTestLibrary(serverB.id, { type: "MUSIC" });
     const track = (libraryId: string, ratingKey: string, albumTitle: string, title: string) => ({
       libraryId, ratingKey, type: "MUSIC" as const, title, parentTitle: "Queen", albumTitle,
-      // As computeDedupKey writes it for a track: artist + title, no album.
+      // A key shared across albums: artist + title, no album.
       dedupKey: `music:queen:${title.toLowerCase()}`,
     });
     await getTestPrisma().mediaItem.createMany({

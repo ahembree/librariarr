@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionCanScopeToEpisodes, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -15,7 +15,7 @@ import {
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { ARR_FAMILY_FOR_TYPE, ARR_TYPE_FOR_FAMILY, familyOfArrInstance, findArrInstance } from "@/lib/arr/instances";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules, hasEpisodeLevelRules } from "@/lib/conditions/helpers";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
@@ -27,6 +27,7 @@ import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 import { collapseActionItems } from "@/lib/query/collapse-actions";
+import { queryActionEpisodeScope, queryActionScopeError, queryActionScopeViolation } from "@/lib/query/action-scope";
 import { actedRecords, markRecordsActed } from "@/lib/query/run-records";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -126,6 +127,26 @@ export const POST = withSession(async (session, request: NextRequest) => {
   }
   const resolvedType: MediaType = targetType;
 
+  const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
+
+  // ONE EPISODE NEVER DECIDES FOR A WHOLE SHOW. The query judges each episode
+  // and track on its own, so an action on the whole Sonarr series or Lidarr
+  // artist (a whole-record delete, a quality profile, tags, Lidarr's unmonitor
+  // and search, Sonarr's in the grouped view, …) may follow only what every
+  // member of a show or artist answers alike — "Resolution = 4K" with Delete
+  // from Sonarr deleted every show with one 4K episode. The predicate and
+  // field list of a rule set with the scope off and this action
+  // (`groupScopeViolation`); actions on the matched members only stay free.
+  const scopeViolation = queryActionScopeViolation(resolvedType, queryGroups, query.includeEpisodes, {
+    actionType,
+    addArrTags,
+    removeArrTags,
+    searchAfterAction,
+  });
+  if (scopeViolation) {
+    return NextResponse.json({ error: queryActionScopeError(scopeViolation) }, { status: 400 });
+  }
+
   // MATCH-ALL SAFETY: Arr/Seerr criteria the engine cannot actually evaluate
   // are treated as "not found / never requested", which makes negative rules
   // like `foundInArr = false` vacuously TRUE for every item of the affected
@@ -137,7 +158,6 @@ export const POST = withSession(async (session, request: NextRequest) => {
   //  - Seerr rules can never be evaluated for MUSIC (Seerr has no music
   //    requests), and otherwise require at least one enabled instance
   //    (fetchSeerrDataForQuery reads all of them).
-  const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
   if (hasArrRules(queryGroups)) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
     const selectedArrId = query.arrServerIds?.[familyKey];
@@ -362,10 +382,8 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // grouped view of a query with a season/episode criterion, whose show row
     // stands for the episodes it matched (the rule set it converts to has
     // series scope off): "Unmonitor seasons 1–3" must not unmonitor the show.
-    const episodeScope =
-      resolvedType === "SERIES" &&
-      (!!query.includeEpisodes || hasEpisodeLevelRules(queryGroups)) &&
-      actionCanScopeToEpisodes(actionType);
+    // As the scope gate above read it (`queryActionEpisodeScope`).
+    const episodeScope = queryActionEpisodeScope(resolvedType, query.includeEpisodes, actionType, queryGroups);
     const isMemberScoped = actsOnMembers(actionType, episodeScope);
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 

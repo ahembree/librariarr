@@ -373,6 +373,31 @@ describe("MUSIC libraries", () => {
   });
 });
 
+describe("MUSIC dedup keys", () => {
+  it("keeps a song's versions on two albums apart, and folds a track's copies on two servers", async () => {
+    const { user, server } = await newServer();
+    const second = await createTestServer(user.id, { name: "Second" });
+    setLibraries({ key: "3", title: "Music", type: "artist" });
+    fake.catalog["3"] = [
+      { ratingKey: "t1", key: "/t1", type: "track", title: "Song", grandparentRatingKey: "a1", grandparentTitle: "Artist", parentTitle: "Studio Album" },
+      { ratingKey: "t2", key: "/t2", type: "track", title: "Song", grandparentRatingKey: "a1", grandparentTitle: "Artist", parentTitle: "Live Album" },
+    ];
+
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    await syncMediaServer(second.id, undefined, { skipWatchHistory: true });
+
+    const rows = await prisma.mediaItem.findMany({
+      select: { ratingKey: true, dedupKey: true, library: { select: { mediaServerId: true } } },
+    });
+    const keyOf = (serverId: string, ratingKey: string) =>
+      rows.find((r) => r.library.mediaServerId === serverId && r.ratingKey === ratingKey)?.dedupKey;
+    expect(keyOf(server.id, "t1")).toBe("track:artist:studio album:song");
+    expect(keyOf(server.id, "t2")).toBe("track:artist:live album:song");
+    expect(keyOf(second.id, "t1")).toBe(keyOf(server.id, "t1"));
+    expect(keyOf(second.id, "t2")).toBe(keyOf(server.id, "t2"));
+  });
+});
+
 describe("movie metadata", () => {
   it("persists rich metadata, streams and de-duplicated external ids", async () => {
     const { server } = await newServer();

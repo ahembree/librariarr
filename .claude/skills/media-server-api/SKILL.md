@@ -58,4 +58,5 @@ curl -sL $P | yq '{security: .components.securitySchemes, headers: (.components.
 - `invalidateCachedUrls(libraryId, urls)` **must purge every width** (`ALL_CACHE_WIDTHS`) and writes `_stats.json` once per call.
 - The media server resizes: `fetchImage(path, { width })` uses Plex's photo transcoder (`/photo/:/transcode?url=…&width=W&height=W&minSize=1&upscale=0`, falling back to the raw path on error, non-image or empty body) or Jellyfin/Emby `maxWidth`, sent with `NO_BREAKER_MARK`.
 - `sharp.concurrency(1)`; the cache's own file walks and deletes run `FILE_OP_CONCURRENCY` (8) at a time.
+- The image proxy (`/api/media/[id]/image`) caches each item's server connection under `image-meta:` (5 min, part of `invalidateMediaCaches()`) and each failed upstream fetch for 60 s under `imageFailureCacheKey(serverUrl, thumbPath)` (`src/lib/cache/invalidate.ts`; the URL encoded so one server's prefix never matches another's). `PUT /api/servers/[id]` drops the failures recorded under the server's previous URL (`invalidateImageFailures`) whenever its URL, token or TLS setting changes; a sync does not (`tests/integration/servers/connection-cache.test.ts`).
 

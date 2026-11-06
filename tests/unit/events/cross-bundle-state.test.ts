@@ -33,6 +33,8 @@ const ALLOWED: Record<string, string> = {
   "src/lib/maintenance/enforcer.ts#initialized":
     "the enforcer is started only from instrumentation; routes reach the module through the realtime manager's import and never call it",
   "src/lib/maintenance/enforcer.ts#isRunning": "enforcer state, instrumentation copy only (see initialized)",
+  "src/lib/maintenance/enforcer.ts#tickRequested":
+    "enforcer state, instrumentation copy only (see initialized); the realtime manager that also requests ticks is created by instrumentation's startRealtime",
   "src/lib/maintenance/enforcer.ts#prerollRunning": "enforcer state, instrumentation copy only (see initialized)",
   "src/lib/maintenance/enforcer.ts#prerollInitialized": "enforcer state, instrumentation copy only (see initialized)",
   "src/lib/maintenance/enforcer.ts#pendingTerminations": "enforcer state, instrumentation copy only (see initialized)",

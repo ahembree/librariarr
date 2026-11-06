@@ -17,13 +17,23 @@
  * and the WHERE builder returns `{}` for the field.
  *
  * The fields are answerable only for an episode. A series aggregate has no
- * season or episode number, so:
- *  - a lifecycle rule set using one must have series scope off (refused by the
- *    rule set routes, `checkLifecycleRuleEvaluability` and the rule builder);
+ * season or episode number, and one episode's must never decide for its whole
+ * show, so they are criteria of one member under the group-scope gate
+ * (`groupScopeViolation`, group-scope.ts — the one predicate every save, skip,
+ * hold and Query action reads):
+ *  - a lifecycle rule set using one must have series scope off, and with it off
+ *    its armed action must act only on the matched episodes (Delete Files Only,
+ *    Unmonitor Only, Search for New Copy, Do Nothing — without Arr tags): Delete
+ *    from Sonarr, Unmonitor/Monitor & Delete Files (which unmonitor/monitor the
+ *    series), Change Quality Profile and Arr tags act on the whole series;
+ *  - the Query page's whole-record actions refuse a query using one
+ *    (`queryActionScopeViolation`), and in its grouped view Sonarr's Unmonitor
+ *    Only and Search for New Copy act on the matched episodes
+ *    (`queryActionEpisodeScope`);
  *  - where a series aggregate is still evaluated (a series-aggregate field forces
- *    the aggregate path), the aggregate gate treats these rules as satisfied
- *    (`EPISODE_LEVEL_FIELDS` as the evaluators' `relaxedFields`) and the
- *    per-episode pass that follows decides which episodes match.
+ *    the aggregate path), each episode is judged on its own with the
+ *    aggregates injected (`episodesMatchingIndividually`), so these read the
+ *    episode's own values.
  *
  * A grouped match (one row per show) carries `episodeFieldValues`, the distinct
  * values of each field across its matched episodes (`summarizeEpisodeFields`),

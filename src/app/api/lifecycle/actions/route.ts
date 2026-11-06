@@ -14,6 +14,7 @@ import {
 } from "@/lib/lifecycle/action-target";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
+import { scopeHoldReason } from "@/lib/lifecycle/held-actions";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -72,6 +73,22 @@ interface RuleSetGroup {
     removeArrTags: string[];
     arrInstanceId: string | null;
     targetQualityProfileId?: number | null;
+    /**
+     * When a save that changed what the rule set matches held its actions
+     * (`RuleSet.actionsHeldSince`, ISO), null when they are not held. Until
+     * the next detection run re-checks its matches, Execute, Execute All and
+     * force-retry answer 409 and the scheduled executor leaves them pending:
+     * the Pending page marks the rule set's rows and disables those buttons
+     * from it. Per rule set, as the hold is.
+     */
+    actionsHeldSince: string | null;
+    /**
+     * Set while the rule set judges whole shows or artists (series or artist
+     * scope) on per-episode or per-track criteria (`scopeHoldReason`,
+     * held-actions.ts): why its actions are held — refused the same way —
+     * until it is edited. Null otherwise.
+     */
+    scopeHoldReason: string | null;
   };
   items: ActionItem[];
   count: number;
@@ -92,7 +109,9 @@ const MEDIA_ITEM_SELECT = {
 const RULE_SET_SELECT = {
   id: true, name: true, type: true, seriesScope: true, actionType: true, actionDelayDays: true,
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
-  removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
+  removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true, actionsHeldSince: true,
+  // Read for the group-scope hold only (`scopeHoldReason`), never returned.
+  rules: true, actionEnabled: true,
 } as const;
 
 type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: string }>;
@@ -101,7 +120,9 @@ type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: stri
  * The user's rule sets and each library's server, read once. They used to come
  * through Prisma's per-row relation includes (`ruleSet`, `library.mediaServer`),
  * which stitched the same handful of rows onto every action — measured at
- * ~150 ms of a 10.8k-action listing.
+ * ~150 ms of a 10.8k-action listing. Each rule set's holds
+ * (`actionsHeldSince`, `scopeHoldReason`) come with it, so the listing reports
+ * them without a read per row.
  */
 async function loadActionLookups(userId: string) {
   const [ruleSets, libraries] = await Promise.all([
@@ -112,7 +133,15 @@ async function loadActionLookups(userId: string) {
     }),
   ]);
   return {
-    ruleSetById: new Map(ruleSets.map((rs) => [rs.id, rs])),
+    ruleSetById: new Map(
+      ruleSets.map(({ rules, actionEnabled, ...rs }) => [rs.id, {
+        ...rs,
+        actionsHeldSince: rs.actionsHeldSince?.toISOString() ?? null,
+        // Its rules, scope and action: with the scope off, an action on the
+        // whole show or artist following per-episode criteria is held too.
+        scopeHoldReason: scopeHoldReason({ ...rs, rules, actionEnabled }),
+      }]),
+    ),
     servers: new Map(libraries.map((l) => [l.id, l.mediaServer])) as LibraryServers,
   };
 }
@@ -566,6 +595,8 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
       removeArrTags: [] as string[],
       arrInstanceId: null,
       targetQualityProfileId: a.targetQualityProfileId ?? null,
+      actionsHeldSince: null,
+      scopeHoldReason: null,
       deleted: true,
     };
 

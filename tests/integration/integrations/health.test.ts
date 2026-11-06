@@ -53,6 +53,16 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 }));
 
 import { GET } from "@/app/api/integrations/health/route";
+import * as sonarrRoutes from "@/app/api/integrations/sonarr/route";
+import * as sonarrItem from "@/app/api/integrations/sonarr/[id]/route";
+import * as radarrRoutes from "@/app/api/integrations/radarr/route";
+import * as radarrItem from "@/app/api/integrations/radarr/[id]/route";
+import * as lidarrRoutes from "@/app/api/integrations/lidarr/route";
+import * as lidarrItem from "@/app/api/integrations/lidarr/[id]/route";
+import * as seerrRoutes from "@/app/api/integrations/seerr/route";
+import * as seerrItem from "@/app/api/integrations/seerr/[id]/route";
+import * as tracearrItem from "@/app/api/integrations/tracearr/[id]/route";
+import { callRouteWithParams, createTestTracearrInstance } from "../../setup/test-helpers";
 import { appCache } from "@/lib/cache/memory-cache";
 import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
@@ -259,5 +269,91 @@ describe("GET /api/integrations/health", () => {
     expect(mockRadarrTestConnection).toHaveBeenCalledTimes(2);
     expect(fresh.radarr.reachable).toBe(1);
     expect(fresh.arrAnyReachable).toBe(true);
+  });
+});
+
+// Every add, edit and delete of an instance of a type the check probes drops
+// the cached answer, so the dashboard strip and the rule editor / Query
+// warnings show the change on their next read instead of up to 30 s later.
+describe("the next health read after an instance change", () => {
+  const TYPES = [
+    { label: "sonarr", create: createTestSonarrInstance, routes: sonarrRoutes, item: sonarrItem, test: mockSonarrTestConnection },
+    { label: "radarr", create: createTestRadarrInstance, routes: radarrRoutes, item: radarrItem, test: mockRadarrTestConnection },
+    { label: "lidarr", create: createTestLidarrInstance, routes: lidarrRoutes, item: lidarrItem, test: mockLidarrTestConnection },
+    { label: "seerr", create: createTestSeerrInstance, routes: seerrRoutes, item: seerrItem, test: mockSeerrTestConnection },
+  ] as const;
+
+  describe.each(TYPES)("$label", ({ label, create, routes, item, test }) => {
+    let userId: string;
+
+    beforeEach(async () => {
+      userId = (await createTestUser()).id;
+      // A URL change re-sends the stored key, which needs a recent sign-in.
+      setMockSession({ isLoggedIn: true, userId, authenticatedAt: Date.now() });
+    });
+
+    it("probes again after an edit that fixes the URL", async () => {
+      const instance = await create(userId, { name: "Mine", url: "http://wrong.test" });
+      test.mockResolvedValue({ ok: false, error: "ECONNREFUSED" });
+      expect((await getHealth())[label]).toMatchObject({ configured: 1, reachable: 0 });
+
+      test.mockResolvedValue({ ok: true });
+      await expectJson(
+        await callRouteWithParams(item.PUT, { id: instance.id }, { method: "PUT", body: { url: "http://right.test" } }),
+        200,
+      );
+      expect((await getHealth())[label]).toMatchObject({
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: instance.id, reachable: true, error: null }],
+      });
+    });
+
+    it("leaves out an instance disabled since the last read", async () => {
+      const instance = await create(userId);
+      test.mockResolvedValue({ ok: false, error: "down" });
+      expect((await getHealth())[label].configured).toBe(1);
+
+      await expectJson(
+        await callRouteWithParams(item.PUT, { id: instance.id }, { method: "PUT", body: { enabled: false } }),
+        200,
+      );
+      expect((await getHealth())[label]).toEqual({ configured: 0, reachable: 0, instances: [] });
+    });
+
+    it("leaves out an instance deleted since the last read", async () => {
+      const instance = await create(userId);
+      test.mockResolvedValue({ ok: false, error: "down" });
+      expect((await getHealth())[label].configured).toBe(1);
+
+      await expectJson(await callRouteWithParams(item.DELETE, { id: instance.id }, { method: "DELETE" }), 200);
+      expect((await getHealth())[label]).toEqual({ configured: 0, reachable: 0, instances: [] });
+    });
+
+    it("lists an instance added since the last read", async () => {
+      test.mockResolvedValue({ ok: true });
+      expect((await getHealth())[label].configured).toBe(0);
+
+      await expectJson(
+        await callRoute(routes.POST, { method: "POST", body: { name: "New", url: "http://new.test", apiKey: "key" } }),
+        201,
+      );
+      expect((await getHealth())[label]).toMatchObject({ configured: 1, reachable: 1 });
+    });
+  });
+
+  it("keeps the cached answer across a Tracearr edit, which the check does not probe", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const tracearr = await createTestTracearrInstance(user.id);
+    await getHealth();
+    const cached = appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY);
+    expect(cached).toBeDefined();
+
+    await expectJson(
+      await callRouteWithParams(tracearrItem.PUT, { id: tracearr.id }, { method: "PUT", body: { name: "Renamed" } }),
+      200,
+    );
+    expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toBe(cached);
   });
 });

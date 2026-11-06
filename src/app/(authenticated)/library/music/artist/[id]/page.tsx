@@ -8,7 +8,7 @@ import { QualityBar } from "@/components/media-card";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { DetailPageStates, genreChips } from "@/components/media-detail-parts";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover, hoverDataFromAlbum } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";

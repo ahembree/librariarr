@@ -10,7 +10,7 @@ The Stream Manager provides real-time monitoring of active media streams and too
 
 ## Active Sessions
 
-The sessions view shows all currently active streams across your connected servers. It polls every 5 seconds as a baseline, and — when [Real-Time Sync](/docs/features/real-time-sync/) is enabled — pushes updates within ~2 seconds of a play, pause, or stop via the server's WebSocket. Real-time events also run the maintenance, blackout and transcode enforcers as soon as a stream changes — immediately on the first change, then at most once every 2 seconds while a server keeps sending session updates — instead of on their 30-second poll.
+The sessions view shows all currently active streams across your connected servers. It polls every 5 seconds as a baseline, and — when [Real-Time Sync](/docs/features/real-time-sync/) is enabled — pushes updates within ~2 seconds of a play, pause, or stop via the server's WebSocket. Real-time events also run the maintenance, blackout and transcode enforcers as soon as a stream changes — immediately on the first change, then at most once every 2 seconds while a server keeps sending session updates — instead of on their 30-second poll. A change that arrives while a check is still running is checked again as soon as that check finishes.
 
 ### Information Displayed
 

@@ -149,6 +149,40 @@ describe("RealtimeManager", () => {
     expect(sockets).toHaveLength(2);
   });
 
+  it("applies queued library changes and an armed watch refresh when only the connection changes", async () => {
+    const { mgr, sockets } = await setup([jfServer]);
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"], ItemsRemoved: ["r"] } });
+    sockets[0].fireMessage({ MessageType: "UserDataChanged" });
+    expect(h.enqueueJob).not.toHaveBeenCalled();
+
+    // A new token recycles the socket inside both debounce windows. Disposing
+    // the debouncers used to throw the add, the delete and the refresh away.
+    h.mediaServer.findMany.mockResolvedValue([{ ...jfServer, accessToken: "new-token" }]);
+    await mgr.reconcile();
+
+    expect(h.enqueueJob.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+      [TASK_SYNC_INCREMENTAL, { serverId: "j1", changedIds: ["a"], removedIds: ["r"] }],
+      [TASK_SYNC_WATCH_HISTORY, { serverId: "j1", incremental: true }],
+    ]);
+    // Applied once, not again when the old windows would have closed.
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it("drops queued changes for a server that is removed or disabled", async () => {
+    const jf2: ServerRow = { ...jfServer, id: "j2", name: "JF2", url: "http://jf2" };
+    const { mgr, sockets } = await setup([jfServer, jf2]);
+    for (const socket of sockets) socket.fireMessage({ MessageType: "UserDataChanged" });
+    sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"] } });
+
+    h.mediaServer.findMany.mockResolvedValue([jf2]); // j1 removed or disabled
+    await mgr.reconcile();
+    vi.advanceTimersByTime(10 * 60_000);
+    // Only the server still wanted keeps its refresh.
+    expect(h.enqueueJob.mock.calls.map((c) => c[1])).toEqual([{ serverId: "j2", incremental: true }]);
+  });
+
   it("closes all connections when realtime is disabled", async () => {
     const { mgr, sockets } = await setup([jfServer, plexServer]);
     h.appSettings.findFirst.mockResolvedValue({ realtimeSync: false });

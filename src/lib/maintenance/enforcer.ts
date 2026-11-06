@@ -19,6 +19,13 @@ import type { MediaServerType } from "@/generated/prisma/client";
 
 let initialized = false;
 let isRunning = false;
+// A realtime `session-changed` tick asked for while a pass runs. That pass may
+// already have read its sessions, so the request is remembered and answered by
+// one more pass when it ends — never by overlapping it, and however many
+// requests arrive meanwhile, by one pass. The 30 s interval's tick does not
+// set it: a pass slower than the interval would otherwise run the next one
+// back to back, polling every media server continuously.
+let tickRequested = false;
 let prerollRunning = false;
 
 // Tracks when a session was first seen for pending termination.
@@ -116,8 +123,13 @@ export function isBlackoutActive(schedule: ScheduleWindow): boolean {
   return isBlackoutWindowActive(schedule);
 }
 
-// Cache the last-set preroll path per user to avoid redundant Plex API calls
-const lastPrerollPath = new Map<string, string>();
+// The preroll path the enforcer last applied to each Plex server ("" once it
+// cleared it), keyed by server id, to avoid redundant Plex API calls. Per
+// server, not per user: keyed by user, a Plex server added or re-enabled while
+// a schedule was active was skipped as "already applied" until the desired path
+// next changed. `userId` is the server's owner, for the cleanup once that user
+// has no enabled schedule left.
+const lastPrerollPath = new Map<string, { userId: string; path: string }>();
 
 /**
  * Clear a server's preroll only when it is one the enforcer would have set:
@@ -175,8 +187,9 @@ export async function processPrerollSchedules() {
     }
 
     // Also handle users who have NO active schedules but previously had preroll set
-    // We need to clear for them. Track which users were processed.
+    // We need to clear for them. Track which users and servers were processed.
     const processedUserIds = new Set<string>();
+    const visitedServerIds = new Set<string>();
 
     for (const [userId, { servers, schedules: userSchedules }] of byUser) {
       processedUserIds.add(userId);
@@ -184,16 +197,16 @@ export async function processPrerollSchedules() {
       // Find highest-priority active schedule
       const activeSchedule = userSchedules.find((s) => isPrerollWindowActive(s));
       const desiredPath = activeSchedule?.prerollPath ?? "";
-      const cached = lastPrerollPath.get(userId);
-
-      if (cached === desiredPath) continue; // No change needed
 
       // The paths this user's schedules set — the only ones a clear may remove.
-      const ownPaths = new Set(userSchedules.map((s) => s.prerollPath).filter(Boolean));
-      if (cached) ownPaths.add(cached);
+      const schedulePaths = userSchedules.map((s) => s.prerollPath).filter(Boolean);
+
+      for (const server of servers) visitedServerIds.add(server.id);
+      // No change needed on a server that already has the desired path.
+      const outdated = servers.filter((server) => lastPrerollPath.get(server.id)?.path !== desiredPath);
 
       const outcomes = await Promise.allSettled(
-        servers.map(async (server) => {
+        outdated.map(async (server) => {
           const client = createMediaServerClient(server.type, server.url, server.accessToken, {
             skipTlsVerify: server.tlsSkipVerify,
           });
@@ -201,64 +214,72 @@ export async function processPrerollSchedules() {
           if (desiredPath) {
             await client.setPrerollPath?.(desiredPath);
             logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
-          } else if (await clearPrerollIfOurs(client, ownPaths)) {
-            logger.info("Enforcer", "Preroll: cleared (no active schedule)");
+          } else {
+            const ownPaths = new Set(schedulePaths);
+            const cached = lastPrerollPath.get(server.id)?.path;
+            if (cached) ownPaths.add(cached);
+            if (await clearPrerollIfOurs(client, ownPaths)) {
+              logger.info("Enforcer", "Preroll: cleared (no active schedule)");
+            }
           }
+
+          // Recorded only once this server took it. Caching a path a server
+          // did not take would suppress its retries for the rest of the
+          // schedule window; a failed server is retried next tick.
+          lastPrerollPath.set(server.id, { userId, path: desiredPath });
         }),
       );
 
-      const anyFailed = outcomes.some((o) => o.status === "rejected");
       for (const o of outcomes) {
         if (o.status === "rejected") {
           logger.error("Enforcer", "Preroll: could not update server", { error: String(o.reason) });
         }
       }
-
-      // Only record the path as applied when every server accepted it.
-      // Caching a path that no server actually took (all calls failed) would
-      // suppress retries for the rest of the schedule window, leaving the
-      // preroll unset until the desired path next changes. A partial failure
-      // stays uncached so the succeeded servers are harmlessly re-applied and
-      // the failed ones retried next tick.
-      if (!anyFailed) {
-        lastPrerollPath.set(userId, desiredPath);
-      }
     }
 
-    // Clean up cache for users with no enabled schedules
-    for (const userId of lastPrerollPath.keys()) {
-      if (!processedUserIds.has(userId)) {
-        // User no longer has any enabled schedules — clear preroll if cached
-        if (lastPrerollPath.get(userId) !== "") {
-          // Need to look up their servers
-          const user = await prisma.user.findUnique({
-            where: { id: userId },
-            select: {
-              mediaServers: {
-                where: { type: "PLEX", enabled: true },
-                select: { type: true, url: true, accessToken: true, tlsSkipVerify: true },
-              },
-            },
-          });
-          if (user) {
-            await Promise.allSettled(
-              user.mediaServers.map(async (server) => {
-                try {
-                  const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                    skipTlsVerify: server.tlsSkipVerify,
-                  });
-                  if (await clearPrerollIfOurs(client, new Set([lastPrerollPath.get(userId)!]))) {
-                    logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
-                  }
-                } catch (error) {
-                  logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
-                }
-              }),
-            );
-          }
-          lastPrerollPath.set(userId, "");
-        }
-      }
+    // Servers that were given a path but not visited this run. A server
+    // disabled, removed or no longer Plex while its user's schedules still run
+    // is forgotten (never contacted), so it gets the path afresh if it comes
+    // back. One whose user has no enabled schedule left has the preroll the
+    // enforcer set cleared.
+    const toClear = new Map<string, Map<string, string>>(); // userId → serverId → path
+    for (const [serverId, { userId, path }] of lastPrerollPath) {
+      if (visitedServerIds.has(serverId)) continue;
+      lastPrerollPath.delete(serverId);
+      if (processedUserIds.has(userId) || !path) continue;
+      if (!toClear.has(userId)) toClear.set(userId, new Map());
+      toClear.get(userId)!.set(serverId, path);
+    }
+
+    // Clear for users with no enabled schedules
+    for (const [userId, paths] of toClear) {
+      // Need to look up their servers
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          mediaServers: {
+            where: { type: "PLEX", enabled: true },
+            select: { id: true, type: true, url: true, accessToken: true, tlsSkipVerify: true },
+          },
+        },
+      });
+      if (!user) continue;
+      await Promise.allSettled(
+        user.mediaServers
+          .filter((server) => paths.has(server.id))
+          .map(async (server) => {
+            try {
+              const client = createMediaServerClient(server.type, server.url, server.accessToken, {
+                skipTlsVerify: server.tlsSkipVerify,
+              });
+              if (await clearPrerollIfOurs(client, new Set([paths.get(server.id)!]))) {
+                logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+              }
+            } catch (error) {
+              logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
+            }
+          }),
+      );
     }
   } catch (error) {
     logger.error("Enforcer", "Error processing preroll schedules", { error: String(error) });
@@ -323,11 +344,33 @@ function createTickSessions() {
   };
 }
 
-/** Single enforcement tick — exported for direct testing. */
-export async function runEnforcerTick() {
-  if (isRunning) return;
+/**
+ * Single enforcement tick — exported for direct testing. A realtime tick
+ * requested while one runs is not dropped: a stream that started after the
+ * running pass read its sessions would otherwise play on until the next 30 s
+ * pass (a blackout's `terminate_immediate`, a maintenance grace period starting
+ * late). It runs as one coalesced catch-up pass, like the realtime manager's
+ * `reconcile()`. The interval's own tick passes `catchUp: false` and is simply
+ * skipped while a pass runs, as before.
+ */
+export async function runEnforcerTick({ catchUp = true }: { catchUp?: boolean } = {}) {
+  if (isRunning) {
+    if (catchUp) tickRequested = true;
+    return;
+  }
   isRunning = true;
+  try {
+    do {
+      tickRequested = false;
+      await runEnforcerPass();
+    } while (tickRequested);
+  } finally {
+    isRunning = false;
+  }
+}
 
+/** One pass over every enforcer, with a fresh read of each server's sessions. */
+async function runEnforcerPass() {
   const tick = createTickSessions();
 
   try {
@@ -779,8 +822,6 @@ export async function runEnforcerTick() {
 
     } catch (error) {
       logger.error("Enforcer", "Error in enforcer", { error: String(error) });
-    } finally {
-      isRunning = false;
     }
 }
 
@@ -799,7 +840,7 @@ export function initializeMaintenanceEnforcer() {
   if (initialized) return;
   initialized = true;
 
-  setInterval(runEnforcerTick, 30000);
+  setInterval(() => void runEnforcerTick({ catchUp: false }), 30000);
 
   logger.info("Enforcer", "Maintenance enforcer initialized — polling every 30 seconds");
 }
@@ -809,6 +850,7 @@ export function _resetForTesting() {
   initialized = false;
   prerollInitialized = false;
   isRunning = false;
+  tickRequested = false;
   prerollRunning = false;
   pendingTerminations.clear();
   knownBlackoutSessions.clear();

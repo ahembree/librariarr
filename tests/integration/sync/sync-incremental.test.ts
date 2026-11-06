@@ -51,6 +51,7 @@ vi.mock("@/lib/dedup/recompute-canonical", () => ({ recomputeCanonical: sideEffe
 
 // Import after mocks
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 
 const movieMeta = (ratingKey: string, over: Record<string, unknown> = {}) => ({
   ratingKey,
@@ -316,6 +317,51 @@ describe("syncMediaServerItems", () => {
     expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m3" } })).toBeNull();
   });
 
+  it("keeps an item reported removed AND changed when the server finds it present", async () => {
+    // Jellyfin/Emby can send `ItemsRemoved:[X]` and `ItemsAdded:[X]` (or
+    // `ItemsUpdated:[X]`) in one debounce window; the realtime manager keeps
+    // the changed and removed sets apart, so X arrives in both lists. The
+    // fetch is the server's current answer — X is there — so X must be
+    // upserted and kept, not upserted and then deleted with everything that
+    // cascades from it. An id only in `removedIds` is still deleted.
+    const user = await createTestUser();
+    const prisma = getTestPrisma();
+    const jellyfin = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    const library = await createTestLibrary(jellyfin.id, { key: "lib-1", type: "MOVIE" });
+    const kept = await createTestMediaItem(library.id, { ratingKey: "jf-x", title: "Before" });
+    await createTestMediaItem(library.id, { ratingKey: "jf-gone" });
+    await prisma.watchHistory.create({
+      data: { mediaItemId: kept.id, mediaServerId: jellyfin.id, serverUsername: "roommate", watchedAt: new Date("2025-07-01T00:00:00Z") },
+    });
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: kept.id, reason: "keep" } });
+    const present = movieMeta("jf-x", { title: "After" });
+    delete (present as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(present);
+
+    const result = await syncMediaServerItems(jellyfin.id, ["jf-x"], ["jf-x", "jf-gone"]);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(1);
+    expect(result.deleted).toBe(1);
+    const row = await prisma.mediaItem.findFirst({ where: { ratingKey: "jf-x" } });
+    expect(row?.id).toBe(kept.id);
+    expect(row?.title).toBe("After");
+    expect(await prisma.watchHistory.count({ where: { mediaItemId: kept.id } })).toBe(1);
+    expect(await prisma.lifecycleException.count({ where: { mediaItemId: kept.id } })).toBe(1);
+    expect(await prisma.mediaItem.findFirst({ where: { ratingKey: "jf-gone" } })).toBeNull();
+  });
+
+  it("still deletes an id reported removed AND changed when the server 404s it", async () => {
+    const { server, library } = await seed();
+    await createTestMediaItem(library.id, { ratingKey: "m-both" });
+    mockGetItemMetadata.mockRejectedValue({ response: { status: 404 } });
+
+    const result = await syncMediaServerItems(server.id, ["m-both"], ["m-both"]);
+
+    expect(result.deleted).toBe(1);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m-both" } })).toBeNull();
+  });
+
   it("falls back (never deletes) on a transient fetch error", async () => {
     const { server, library } = await seed();
     await createTestMediaItem(library.id, { ratingKey: "m4" });
@@ -330,11 +376,17 @@ describe("syncMediaServerItems", () => {
 
   it("skips when a full sync is already running for the server", async () => {
     const { server } = await seed();
-    await getTestPrisma().syncJob.create({
+    const running = await getTestPrisma().syncJob.create({
       data: { mediaServerId: server.id, status: "RUNNING" },
     });
+    beginSyncRun(running.id);
 
-    const result = await syncMediaServerItems(server.id, ["m1"], []);
+    let result;
+    try {
+      result = await syncMediaServerItems(server.id, ["m1"], []);
+    } finally {
+      endSyncRun(running.id);
+    }
 
     expect(result).toEqual({ status: "skipped", upserted: 0, deleted: 0, reason: "full sync in progress" });
     expect(mockGetItemMetadata).not.toHaveBeenCalled();

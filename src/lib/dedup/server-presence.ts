@@ -13,59 +13,42 @@ import type { ServerPresence } from "./deduplicate";
  * Build a map of dedupKey → ServerPresence[] for the given keys.
  * Used by flat routes (movies, series, music) to attach multi-server
  * badges to each item.
+ *
+ * One statement with the keys as a single array parameter. The keys are every
+ * listed row's, so the remainder of a progressive load (`limit=0&offset=100`)
+ * passes one per canonical row of the library. As a Prisma `in` list that was
+ * a bind parameter per key, and Prisma (7.10) splits an over-long list into
+ * several statements only for an unordered, unpaged `findMany` — this one was
+ * ordered (oldest copy first) — so past 32,767 the Movies, Episodes and Tracks
+ * remainder requests answered 500 (P2029) and the pages silently stopped at
+ * their first 100 rows.
  */
 export async function getServerPresenceByDedupKey(
   dedupKeys: string[],
   serverIds: string[],
 ): Promise<Map<string, ServerPresence[]>> {
-  if (dedupKeys.length === 0) return new Map();
+  if (dedupKeys.length === 0 || serverIds.length === 0) return new Map();
 
-  const items = await prisma.mediaItem.findMany({
-    where: {
-      dedupKey: { in: dedupKeys },
-      library: { mediaServerId: { in: serverIds } },
-    },
-    // A server holding two copies lists the oldest, as getServerPresenceByGroup
-    // does — unordered, which copy's id a badge linked to was arbitrary.
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: {
-      id: true,
-      dedupKey: true,
-      library: {
-        select: {
-          mediaServer: { select: { id: true, name: true, type: true } },
-        },
-      },
-    },
-  });
-
-  const map = new Map<string, ServerPresence[]>();
-
-  for (const item of items) {
-    if (!item.dedupKey || !item.library.mediaServer) continue;
-    const key = item.dedupKey;
-    let servers = map.get(key);
-    if (!servers) {
-      servers = [];
-      map.set(key, servers);
-    }
-    // Avoid duplicate server entries per dedupKey
-    if (!servers.some((s) => s.serverId === item.library.mediaServer!.id)) {
-      servers.push({
-        serverId: item.library.mediaServer.id,
-        serverName: item.library.mediaServer.name,
-        serverType: item.library.mediaServer.type,
-        mediaItemId: item.id,
-      });
-    }
-  }
-
-  // Sort servers alphabetically within each group (two same-named servers by id)
-  for (const servers of map.values()) {
-    servers.sort((a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId));
-  }
-
-  return map;
+  // A server holding two copies lists the oldest (by `createdAt`, then id), as
+  // getServerPresenceByGroup does — see `readGroupPresence` for the aggregate.
+  const rows = await prisma.$queryRawUnsafe<PresenceRow[]>(
+    `SELECT p.group_key,
+       ms.id as "serverId", ms.name as "serverName", ms.type::text as "serverType",
+       p.media_item_id as "mediaItemId"
+     FROM (
+       SELECT mi."dedupKey" as group_key, l."mediaServerId" as server_id,
+         (MIN(ARRAY[to_char(mi."createdAt", 'YYYYMMDDHH24MISSUS'), mi.id]))[2] as media_item_id
+       FROM "MediaItem" mi
+       JOIN "Library" l ON mi."libraryId" = l.id
+       WHERE mi."dedupKey" = ANY($1::text[])
+         AND l."mediaServerId" = ANY($2::text[])
+       GROUP BY 1, 2
+     ) p
+     JOIN "MediaServer" ms ON ms.id = p.server_id`,
+    [...new Set(dedupKeys)],
+    serverIds,
+  );
+  return foldPresence(rows);
 }
 
 /**

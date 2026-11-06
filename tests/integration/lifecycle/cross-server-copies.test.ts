@@ -58,6 +58,16 @@ const UNWATCHED = [
   },
 ];
 
+/** The artist by name: a value every one of its tracks carries. */
+const THE_ARTIST = [
+  {
+    id: "g1",
+    condition: "AND",
+    rules: [{ id: "r1", field: "parentTitle", operator: "equals", value: "The Artist", condition: "AND" }],
+    groups: [],
+  },
+];
+
 /** The same movie (TMDB 603) on two servers, plus an unrelated one. */
 async function twoServerMovie() {
   const user = await createTestUser();
@@ -246,7 +256,11 @@ describe("track-scope music", () => {
     const tracks = [await track(l1.id, 1), await track(l1.id, 2), await track(l1.id, 3)];
     const copy = opts.servers === 2 ? await track(l2.id, 1) : null;
     const ruleSet = await createTestRuleSet(user.id, {
-      name: "Unplayed tracks", type: "MUSIC", seriesScope: false, rules: UNWATCHED,
+      // An artist-level action may follow only what every track of the
+      // artist answers alike (its name, Arr): with the scope off, one track's
+      // own play count would decide for the whole artist (group-scope.ts).
+      name: "Unplayed tracks", type: "MUSIC", seriesScope: false,
+      rules: opts.actionType === "DELETE_FILES_LIDARR" ? UNWATCHED : THE_ARTIST,
       serverIds: opts.servers === 2 ? [s1.id, s2.id] : [s1.id],
       actionEnabled: true, actionType: opts.actionType, arrInstanceId: "lidarr-1",
     });

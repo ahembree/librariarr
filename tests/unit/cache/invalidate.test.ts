@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { appCache } from "@/lib/cache/memory-cache";
-import { invalidateMediaCaches, invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
+import {
+  imageFailureCacheKey,
+  invalidateImageFailures,
+  invalidateMediaCaches,
+  invalidateRuleSetNameCaches,
+} from "@/lib/cache/invalidate";
 
 describe("invalidateMediaCaches", () => {
   it("invalidates every media-derived cache prefix", () => {
@@ -71,5 +76,32 @@ describe("invalidateRuleSetNameCaches", () => {
     expect(appCache.get("query-distinct-values")).toBeUndefined();
     expect(appCache.get("distinct-values:genres")).toEqual(["Drama"]);
     appCache.invalidate("distinct-values:genres");
+  });
+});
+
+describe("invalidateImageFailures", () => {
+  it("drops the cached artwork failures of one server URL, and only those", () => {
+    const thumb = "/library/metadata/1/thumb/1";
+    const mine = imageFailureCacheKey("http://plex", thumb);
+    // Its URL starts with the other's: an unencoded `image-fail:http://plex:`
+    // prefix would have matched it.
+    const longerUrl = imageFailureCacheKey("http://plex:32400", thumb);
+    const other = imageFailureCacheKey("http://jellyfin:8096", "/Items/1/Images/Primary");
+    for (const key of [mine, longerUrl, other]) appCache.set(key, true);
+
+    invalidateImageFailures("http://plex");
+
+    expect(appCache.get(mine)).toBeUndefined();
+    expect(appCache.get(longerUrl)).toBe(true);
+    expect(appCache.get(other)).toBe(true);
+    appCache.clear();
+  });
+
+  it("is not part of the media invalidation a sync runs", () => {
+    const key = imageFailureCacheKey("http://plex:32400", "/thumb");
+    appCache.set(key, true);
+    invalidateMediaCaches();
+    expect(appCache.get(key)).toBe(true);
+    appCache.clear();
   });
 });

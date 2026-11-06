@@ -21,19 +21,20 @@ import {
   matchNameListField,
   aggregateEpisodesIntoSeries,
   serializeSeriesAggregateForEval,
+  episodesMatchingIndividually,
+  readsEpisodeValues,
   type AggregableEpisode,
 } from "@/lib/conditions";
 import {
   isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules,
-  hasEpisodeLevelRules, hasSeasonsBehindLatestRules, isEpisodeLevelField, episodeLevelValue,
-  EPISODE_LEVEL_FIELDS, SERIES_AGGREGATE_FIELDS,
+  hasSeasonsBehindLatestRules, isEpisodeLevelField, episodeLevelValue,
 } from "@/lib/conditions/helpers";
 import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where";
 import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
@@ -271,6 +272,7 @@ interface SeriesGroupRow {
 async function groupSeriesEpisodes(
   where: Prisma.MediaItemWhereInput,
   preFilteredIds?: string[],
+  options: ExecuteQueryOptions = {},
 ): Promise<Array<Record<string, unknown>>> {
   let ids: string[];
 
@@ -293,6 +295,12 @@ async function groupSeriesEpisodes(
   }
 
   if (ids.length === 0) return [];
+
+  // One copy of each episode, when asked: the matched copies of one episode
+  // (one `dedupKey`) on several servers reduced to the canonical one, else the
+  // lowest id. Every figure below then counts the episode once, as the
+  // deduplicated stats do; `servers` is still read over every matched copy.
+  const countedIds = options.oneCopyPerEpisode ? await oneCopyOfEachEpisode(ids) : ids;
 
   // Step 2: Group by parentTitle via raw SQL
   const rows = await prisma.$queryRaw<SeriesGroupRow[]>`
@@ -322,10 +330,11 @@ async function groupSeriesEpisodes(
     FROM "MediaItem" mi
     JOIN "Library" l ON mi."libraryId" = l.id
     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-    WHERE mi.id = ANY(${ids})
+    WHERE mi.id = ANY(${countedIds})
       AND mi."seriesKey" IS NOT NULL
     GROUP BY mi."seriesKey"
   `;
+  const allServers = countedIds === ids ? null : await serversBySeries(ids);
 
   return rows.map((r) => ({
     id: r.id,
@@ -368,11 +377,54 @@ async function groupSeriesEpisodes(
     matchedEpisodes: r.matchedEpisodes,
     seasonCount: r.seasonCount,
     // By name, ties by id — the order the library listings use.
-    servers: [...r.servers].sort(
+    servers: [...(allServers?.get(r.group_key) ?? r.servers)].sort(
       (a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId),
     ),
     library: null,
   }));
+}
+
+/**
+ * Of `ids`, one per episode: where several share a `dedupKey` (copies of one
+ * episode on several servers), the canonical copy, else the lowest id. A row
+ * with no key stands for itself.
+ */
+async function oneCopyOfEachEpisode(ids: string[]): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT DISTINCT ON (COALESCE(mi."dedupKey", mi.id)) mi.id
+    FROM "MediaItem" mi
+    WHERE mi.id = ANY(${ids})
+    ORDER BY COALESCE(mi."dedupKey", mi.id), mi."dedupCanonical" DESC, mi.id
+  `;
+  return rows.map((r) => r.id);
+}
+
+/** Every server holding one of `ids`, per show (`seriesKey`). */
+async function serversBySeries(ids: string[]): Promise<Map<string, SeriesGroupRow["servers"]>> {
+  const rows = await prisma.$queryRaw<{ group_key: string; servers: SeriesGroupRow["servers"] }[]>`
+    SELECT mi."seriesKey" as group_key,
+      jsonb_agg(DISTINCT jsonb_build_object('serverId', ms.id, 'serverName', ms.name, 'serverType', ms.type)) as servers
+    FROM "MediaItem" mi
+    JOIN "Library" l ON mi."libraryId" = l.id
+    JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
+    WHERE mi.id = ANY(${ids})
+      AND mi."seriesKey" IS NOT NULL
+    GROUP BY mi."seriesKey"
+  `;
+  return new Map(rows.map((r) => [r.group_key, r.servers]));
+}
+
+/** How `executeQuery` folds what it matched. */
+export interface ExecuteQueryOptions {
+  /**
+   * A grouped show row counts each episode once: of an episode's matched
+   * copies on several servers (one `dedupKey`), only the canonical one (else
+   * the lowest id) feeds the show's size, plays, episode and season counts and
+   * dates. The Query page lists every copy and sums them; the AI assistant's
+   * `search_media`, whose figures must agree with the deduplicated stats
+   * (`computeLibraryStats`' `seriesSize`), asks for this when dedup is on.
+   */
+  oneCopyPerEpisode?: boolean;
 }
 
 /**
@@ -388,6 +440,7 @@ export async function executeQuery(
   page: number = 1,
   limit: number = 50,
   onProgress?: ProgressEmit,
+  options: ExecuteQueryOptions = {},
 ): Promise<QueryResult> {
   // Arr criteria are judged per media type against that type's selected Arr
   // server. A type with none (or a disabled one) has no Arr data, so a rule
@@ -409,12 +462,12 @@ export async function executeQuery(
         };
       }
       const result = await runQueryDefinition(
-        { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress,
+        { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress, options,
       );
       return warnings.length > 0 ? { ...result, warnings: [...(result.warnings ?? []), ...warnings] } : result;
     }
   }
-  return runQueryDefinition(definition, userId, page, limit, onProgress);
+  return runQueryDefinition(definition, userId, page, limit, onProgress, options);
 }
 
 /** The media types of the enabled libraries a query over `serverIds` searches. */
@@ -435,7 +488,8 @@ async function runQueryDefinition(
   userId: string,
   page: number,
   limit: number,
-  onProgress?: ProgressEmit,
+  onProgress: ProgressEmit | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<QueryResult> {
   const { mediaTypes, serverIds: requestedServerIds, groups, sortBy, sortOrder } = definition;
 
@@ -542,11 +596,11 @@ async function runQueryDefinition(
   // For series-aggregate rules: aggregate episodes into series first, then evaluate
   let groupedShowsPromise: Promise<Array<Record<string, unknown>>>;
   if (hasSeriesAggregateRules(groups)) {
-    groupedShowsPromise = aggregateSeriesAndFilter(effectiveServerIds, groups, arrDataByType, seerrDataByType);
+    groupedShowsPromise = aggregateSeriesAndFilter(effectiveServerIds, groups, arrDataByType, seerrDataByType, options);
   } else if (needsFullInMemoryEval) {
-    groupedShowsPromise = filterAndGroupSeriesEpisodes(where, groups, arrDataByType, seerrDataByType);
+    groupedShowsPromise = filterAndGroupSeriesEpisodes(where, groups, arrDataByType, seerrDataByType, options);
   } else {
-    groupedShowsPromise = groupSeriesEpisodes(where);
+    groupedShowsPromise = groupSeriesEpisodes(where, undefined, options);
   }
 
   const [flatItems, groupedShows] = await Promise.all([
@@ -607,17 +661,24 @@ async function runQueryDefinition(
 }
 
 /**
- * For grouped series queries that reference series-aggregate fields
+ * For series queries that reference series-aggregate fields
  * (`watchedEpisodePercentage`, `availableEpisodeCount`, etc.): fetch ALL
- * episodes for the relevant SERIES libraries (with NO rule-level WHERE),
- * aggregate into one record per series, then evaluate every rule against
- * the aggregate. This matches the rule engine's `evaluateSeriesScope`
- * semantics — aggregates must be computed over every episode of a series,
- * not over the subset that happens to satisfy other rules, otherwise
- * counts and percentages are skewed.
+ * episodes for the relevant SERIES libraries (with NO rule-level WHERE) and
+ * aggregate them into one record per series. Aggregates must be computed over
+ * every episode of a series, not over the subset that happens to satisfy
+ * other rules, otherwise counts and percentages are skewed.
  *
- * Episode-level fields (year, fileSize, etc.) are evaluated against the
- * representative episode's value via the aggregated record.
+ * Every other criterion is per episode: a show survives when at least one of
+ * its episodes passes on its own, with the aggregates carried over as
+ * series-level constants (`episodesMatchingIndividually`, the selection
+ * `evaluateSeriesScope` makes with series scope off), and only those episodes
+ * survive. The show's aggregate record is no gate — it reads episode-level
+ * fields (resolution, fileSize, …) off its representative episode, so a show
+ * whose first episode is 1080p and the rest 4K never passed "Resolution =
+ * 4K". Both views list the episodes that matched — the episode view as rows,
+ * the grouped view as each show's matched episodes — and the query-actions
+ * route acts on those. Whole shows are acted on where the action itself is
+ * whole-show (Delete from Sonarr, quality profile, grouped Unmonitor / Search).
  */
 async function computeAggregateSurvivingEpisodeIds(
   effectiveServerIds: string[],
@@ -642,41 +703,38 @@ async function computeAggregateSurvivingEpisodeIds(
     episodes as unknown as AggregableEpisode[],
     { includeStreams: hasStreamRules(groups) },
   );
-  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  // Cross-system fields, each episode's own (the selection is per episode).
   const crossSystem = hasCrossSystemRules(groups)
     ? await fetchCrossSystemData(episodes.map((ep) => ep.id))
     : undefined;
 
-  // Per-episode fields (season/episode numbers) have no value on a series
-  // aggregate: the aggregate gate treats them as satisfied, and only the
-  // episodes that then match with the aggregates injected survive — the
-  // lifecycle engine's `evaluateSeriesScope` with members restricted.
-  const episodeLevel = hasEpisodeLevelRules(groups);
-  if (episodeLevel && hasSeasonsBehindLatestRules(groups)) await attachSeasonsBehindLatest(episodes);
-  const episodeById = episodeLevel
-    ? new Map(episodes.map((ep) => [ep.id, ep as unknown as Record<string, unknown>]))
-    : undefined;
-
+  // Seasons Behind Latest has no column: measured per episode before the
+  // per-episode pass below, as the lifecycle engine measures it.
+  if (hasSeasonsBehindLatestRules(groups)) await attachSeasonsBehindLatest(episodes);
+  const episodeById = new Map(
+    (episodes as unknown as Array<Record<string, unknown> & { id: string }>).map((ep) => [ep.id, ep]),
+  );
+  // Whether a criterion reads a value an episode holds on its own; when none
+  // does (aggregates, Arr, Seerr only) a show is evaluated once.
+  const perEpisode = readsEpisodeValues(groups);
   const survivingIds: string[] = [];
   for (const series of aggregates) {
-    const item: Record<string, unknown> = { ...serializeSeriesAggregateForEval(series), ...foldCrossSystemData(series.memberIds, crossSystem) };
+    // The show's aggregates (and its external ids, for the series-level Arr /
+    // Seerr record).
+    const item = serializeSeriesAggregateForEval(series);
     const { arrMeta, seerrMeta } = lookupExternalMeta(
       item, arrDataByType, seerrDataByType,
     );
-    if (!evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta, episodeLevel ? { relaxedFields: EPISODE_LEVEL_FIELDS } : {})) {
-      continue;
-    }
-    if (!episodeById) {
-      survivingIds.push(...series.memberIds);
-      continue;
-    }
-    const aggregateValues = Object.fromEntries(SERIES_AGGREGATE_FIELDS.map((f) => [f, item[f]]));
-    for (const id of series.memberIds) {
-      const ep = episodeById.get(id);
-      if (!ep) continue;
-      const epItem = { ...ep, ...crossSystem?.get(id), ...aggregateValues };
-      if (evaluateAllQueryRulesInMemory(groups, epItem, arrMeta, seerrMeta)) survivingIds.push(id);
-    }
+    // Each episode as the per-episode paths read it (its own row and
+    // cross-system values), with the series aggregates as constants, lowest id
+    // first. Same arr/seerr meta: correlation is series-level.
+    survivingIds.push(...episodesMatchingIndividually(
+      series.memberIds.map((id) => episodeById.get(id)!),
+      item,
+      (ep, seriesFields) =>
+        evaluateAllQueryRulesInMemory(groups, { ...ep, ...crossSystem?.get(ep.id), ...seriesFields }, arrMeta, seerrMeta),
+      perEpisode,
+    ));
   }
 
   return survivingIds;
@@ -685,15 +743,16 @@ async function computeAggregateSurvivingEpisodeIds(
 async function aggregateSeriesAndFilter(
   effectiveServerIds: string[],
   groups: QueryGroup[],
-  arrDataByType?: Record<string, ArrDataMap>,
-  seerrDataByType?: Record<string, SeerrDataMap>,
+  arrDataByType: Record<string, ArrDataMap> | undefined,
+  seerrDataByType: Record<string, SeerrDataMap> | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<Array<Record<string, unknown>>> {
   const survivingIds = await computeAggregateSurvivingEpisodeIds(
     effectiveServerIds, groups, arrDataByType, seerrDataByType,
   );
   if (survivingIds.length === 0) return [];
   // `where` is ignored when preFilteredIds is supplied (it queries by id).
-  return groupSeriesEpisodes({}, survivingIds);
+  return groupSeriesEpisodes({}, survivingIds, options);
 }
 
 /**
@@ -703,8 +762,10 @@ async function aggregateSeriesAndFilter(
  * operators matches everything — and the /api/query/actions route re-runs this
  * same path to resolve members, so deletes mis-target). Resolve which SERIES
  * survive via aggregation (exactly like the grouped `aggregateSeriesAndFilter`)
- * and return their member EPISODES individually. Flat (movie/music) types in
- * scope are evaluated normally and combined, mirroring the grouped path.
+ * and return their matching EPISODES individually — the ones that pass on
+ * their own with the aggregates injected, not every episode of the show.
+ * Flat (movie/music) types in scope are evaluated normally and combined,
+ * mirroring the grouped path.
  */
 async function executeEpisodesWithSeriesAggregate(
   definition: QueryDefinition,
@@ -745,9 +806,10 @@ async function executeEpisodesWithSeriesAggregate(
       : Promise.resolve([]),
   ]);
 
-  // Surviving episodes already passed the aggregate evaluation at the series
-  // level — do NOT re-evaluate them per-episode (that's the very bug this path
-  // avoids, since the aggregate field reads NULL on an episode).
+  // Surviving episodes already passed, each on its own with the series
+  // aggregates injected (computeAggregateSurvivingEpisodeIds). Do NOT
+  // re-evaluate them through the ungrouped per-episode path — an aggregate
+  // field reads NULL there.
   const serializedEpisodes = episodeRows.map(serializeItem);
 
   // Flat items: full in-memory evaluation (handles all rule types correctly).
@@ -793,8 +855,9 @@ async function executeEpisodesWithSeriesAggregate(
 async function filterAndGroupSeriesEpisodes(
   where: Prisma.MediaItemWhereInput,
   groups: QueryGroup[],
-  arrDataByType?: Record<string, ArrDataMap>,
-  seerrDataByType?: Record<string, SeerrDataMap>,
+  arrDataByType: Record<string, ArrDataMap> | undefined,
+  seerrDataByType: Record<string, SeerrDataMap> | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<Array<Record<string, unknown>>> {
   const seriesWhere: Prisma.MediaItemWhereInput = {
     ...where,
@@ -828,7 +891,7 @@ async function filterAndGroupSeriesEpisodes(
 
   if (survivingIds.length === 0) return [];
 
-  return groupSeriesEpisodes(where, survivingIds);
+  return groupSeriesEpisodes(where, survivingIds, options);
 }
 
 /** Execute the ungrouped query path */
@@ -1437,24 +1500,12 @@ function evaluateQueryRuleInMemory(
   return negate ? !result : result;
 }
 
-/**
- * `relaxedFields`: rules on these fields count as satisfied. Group negation is
- * pushed down first and the tree is AND/OR alone, so the result is a superset
- * of the strict evaluation — the series aggregate gate relaxes the per-episode
- * fields, and a per-episode pass decides them (the lifecycle engine's
- * `InMemoryEvalOptions`).
- */
-interface QueryEvalOptions {
-  relaxedFields?: ReadonlySet<string>;
-}
-
 /** Recursively evaluate a query group in memory */
 function evaluateQueryGroupInMemory(
   group: QueryGroup,
   item: Record<string, unknown>,
   arrMeta: ArrMetadata | undefined,
   seerrMeta: SeerrMetadata | undefined,
-  options: QueryEvalOptions = {},
 ): boolean | null {
   if (group.enabled === false) return null;
 
@@ -1469,14 +1520,12 @@ function evaluateQueryGroupInMemory(
     if (rule.enabled === false) continue;
     items.push({
       condition: rule.condition,
-      result: options.relaxedFields?.has(rule.field)
-        ? true
-        : evaluateQueryRuleInMemory(rule, item, arrMeta, seerrMeta),
+      result: evaluateQueryRuleInMemory(rule, item, arrMeta, seerrMeta),
     });
   }
 
   for (const sub of group.groups ?? []) {
-    const subResult = evaluateQueryGroupInMemory(sub, item, arrMeta, seerrMeta, options);
+    const subResult = evaluateQueryGroupInMemory(sub, item, arrMeta, seerrMeta);
     if (subResult !== null) {
       items.push({ condition: sub.condition, result: subResult });
     }
@@ -1499,7 +1548,6 @@ export function evaluateAllQueryRulesInMemory(
   item: Record<string, unknown>,
   arrMeta: ArrMetadata | undefined,
   seerrMeta: SeerrMetadata | undefined,
-  options: QueryEvalOptions = {},
 ): boolean {
   // Rewrite group-level NOT into per-rule negation first (negation.ts) so
   // this phase agrees with the Phase 1 WHERE built by buildGroupConditions.
@@ -1507,7 +1555,7 @@ export function evaluateAllQueryRulesInMemory(
   const results: Array<{ condition: LifecycleRuleCondition; passed: boolean }> = [];
 
   for (const group of normalizedGroups) {
-    const result = evaluateQueryGroupInMemory(group, item, arrMeta, seerrMeta, options);
+    const result = evaluateQueryGroupInMemory(group, item, arrMeta, seerrMeta);
     if (result === null) continue;
     results.push({ condition: group.condition, passed: result });
   }

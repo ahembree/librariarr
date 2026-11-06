@@ -17,7 +17,6 @@ import {
   Inbox,
   LayoutGrid,
   Loader2,
-  Play,
   RotateCcw,
   ShieldOff,
   TableProperties,
@@ -50,6 +49,20 @@ import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
 import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
 import { useSetState } from "@/hooks/use-set-state";
+import {
+  ExecuteAllButton,
+  ExecuteNowButton,
+  HeldChip,
+  RetryActionButton,
+} from "@/components/held-actions";
+import {
+  heldActionCount,
+  heldCountLabel,
+  holdReasonOf,
+  isActionHeld,
+  skippedHeldLabel,
+  type HoldingRuleSet,
+} from "@/lib/lifecycle/held-actions";
 
 interface ActionItem {
   id: string;
@@ -106,6 +119,18 @@ interface RuleSetGroup {
     arrInstanceId: string | null;
     targetQualityProfileId?: number | null;
     deleted?: boolean;
+    /**
+     * Set (ISO) while a save that changed what the rule set matches holds its
+     * actions, until the next detection run re-checks them: the server
+     * refuses Execute, Execute All and Retry (409), so the page disables them.
+     */
+    actionsHeldSince?: string | null;
+    /**
+     * Set while the rule set uses per-episode/per-track criteria at series or
+     * artist scope: its actions are held, and refused the same way, until it
+     * is edited. The reason, as the server words it.
+     */
+    scopeHoldReason?: string | null;
   };
   items: ActionItem[];
   count: number;
@@ -149,6 +174,7 @@ function actionHoverContent(mi: ActionMediaItem, withImage: boolean) {
 function VirtualizedActionTable({
   items,
   ruleSetId,
+  hold,
   isPending,
   executingItems,
   retryingItems,
@@ -163,6 +189,8 @@ function VirtualizedActionTable({
 }: {
   items: ActionItem[];
   ruleSetId: string;
+  /** The group's rule set: while it is held, Execute and Retry are disabled with the reason. */
+  hold: HoldingRuleSet;
   isPending: boolean;
   executingItems: ReadonlySet<string>;
   retryingItems: ReadonlySet<string>;
@@ -219,6 +247,7 @@ function VirtualizedActionTable({
               const hasMediaItem = action.mediaItem.id !== null;
               const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
               const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
+              const heldReason = isActionHeld(hold, action) ? holdReasonOf(hold) : null;
 
               const tableRow = (
                 <tr
@@ -298,11 +327,14 @@ function VirtualizedActionTable({
                     )}
                   </td>
                   <td className="p-4 align-middle">
-                    <ColorChip
-                      className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}
-                    >
-                      {STATUS_LABELS[action.status] ?? action.status}
-                    </ColorChip>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <ColorChip
+                        className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}
+                      >
+                        {STATUS_LABELS[action.status] ?? action.status}
+                      </ColorChip>
+                      {heldReason && <HeldChip reason={heldReason} />}
+                    </div>
                     {action.error && (
                       <div className="mt-1 max-w-64">
                         <p
@@ -327,15 +359,11 @@ function VirtualizedActionTable({
                   {isPending && (
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <LoadingButton
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
+                        <ExecuteNowButton
+                          heldReason={heldReason}
+                          executing={isItemExecuting}
                           disabled={!hasMediaItem}
-                          loading={isItemExecuting}
-                          icon={Play}
-                          iconClassName="h-4 w-4"
-                          title="Execute now"
+                          onExecute={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
                         />
                         <LoadingButton
                           variant="ghost"
@@ -354,14 +382,10 @@ function VirtualizedActionTable({
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {action.status === "FAILED" && !isDeletedRuleSet && hasMediaItem && (
-                          <LoadingButton
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onRetryAction(action)}
-                            loading={retryingItems.has(action.id)}
-                            icon={Play}
-                            iconClassName="h-4 w-4 text-amber"
-                            title="Force retry"
+                          <RetryActionButton
+                            heldReason={heldReason}
+                            retrying={retryingItems.has(action.id)}
+                            onRetry={() => onRetryAction(action)}
                           />
                         )}
                         <Button
@@ -411,6 +435,8 @@ interface PendingActionCardProps {
   isMovie: boolean;
   priority: boolean;
   excepted: boolean;
+  /** Why the action's rule set holds it, or null (`isActionHeld`, `holdReasonOf`). */
+  heldReason: string | null;
   onItemClick: (action: ActionItem) => void;
   getHex: (category: ChipColorCategory, value: string) => string;
 }
@@ -426,6 +452,7 @@ const PendingActionCard = memo(function PendingActionCard({
   isMovie,
   priority,
   excepted,
+  heldReason,
   onItemClick,
   getHex,
 }: PendingActionCardProps) {
@@ -463,9 +490,12 @@ const PendingActionCard = memo(function PendingActionCard({
           mi.matchedEpisodes ? undefined : qualitySegments(qualityChips(mi, isMusic ? "music" : "video"), getHex)
         }
         badges={
-          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
-            {STATUS_LABELS[action.status] ?? action.status}
-          </ColorChip>
+          <>
+            <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+              {STATUS_LABELS[action.status] ?? action.status}
+            </ColorChip>
+            {heldReason && <HeldChip reason={heldReason} />}
+          </>
         }
       />
     </div>
@@ -475,11 +505,14 @@ const PendingActionCard = memo(function PendingActionCard({
 function PendingActionCardGrid({
   items,
   ruleSetType,
+  hold,
   onItemClick,
   exceptedItemIds,
 }: {
   items: ActionItem[];
   ruleSetType: string;
+  /** The group's rule set: its held cards carry the Held chip. */
+  hold: HoldingRuleSet;
   /** Stable: the cards are memoised on it. */
   onItemClick: (action: ActionItem) => void;
   exceptedItemIds: ReadonlySet<string>;
@@ -503,6 +536,7 @@ function PendingActionCardGrid({
     overscan: 5,
   });
 
+  const heldReason = holdReasonOf(hold);
   const renderCard = useCallback(
     (action: ActionItem, { priority }: GridCardContext) => (
       <PendingActionCard
@@ -511,11 +545,12 @@ function PendingActionCardGrid({
         isMovie={isMovie}
         priority={priority}
         excepted={exceptedItemIds.has(action.mediaItem.id!)}
+        heldReason={heldReason && isActionHeld(hold, action) ? heldReason : null}
         onItemClick={onItemClick}
         getHex={getHex}
       />
     ),
-    [isMusic, isMovie, exceptedItemIds, onItemClick, getHex],
+    [isMusic, isMovie, exceptedItemIds, hold, heldReason, onItemClick, getHex],
   );
 
   return (
@@ -533,9 +568,10 @@ function PendingActionCardGrid({
 
 const ruleSetOfGroup = (g: RuleSetGroup) => g.ruleSet;
 
-// Detection is what CREATES pending actions, and an execute removes them and
-// moves the deletion stats: the listing and the stats card above it re-read
-// on both, so the two halves of this page never disagree.
+// Detection is what CREATES pending actions — and releases a rule set's held
+// ones (`actionsHeldSince`), which the listing then reports unheld — and an
+// execute removes them and moves the deletion stats: the listing and the stats
+// card above it re-read on both, so the two halves of this page never disagree.
 const PENDING_EVENTS = ["lifecycle:action-executed", "lifecycle:detection-completed"] as const;
 
 /** The execute route's announcement of the run this page asked for. */
@@ -723,6 +759,16 @@ export default function PendingActionsPage() {
   // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
   const executeAll = async (ruleSetId: string) => {
     setConfirmExecuteRuleSetId(null);
+    // A held rule set's actions are skipped, and the hold is the rule set's:
+    // nothing is left to send (the route would answer 409). Its button is
+    // disabled; this covers a hold the listing reported while the dialog was open.
+    const group = groups.find((g) => g.ruleSet.id === ruleSetId);
+    const held = group ? heldActionCount(group) : 0;
+    const heldReason = group ? holdReasonOf(group.ruleSet) : null;
+    if (heldReason && held > 0) {
+      toast.info(skippedHeldLabel(held), { description: heldReason });
+      return;
+    }
     executingRuleActions.add(ruleSetId);
     setExecuteResults((prev) => {
       const next = { ...prev };
@@ -749,6 +795,8 @@ export default function PendingActionsPage() {
         } else if (data.executed > 0) {
           toast.success(`${data.executed} action${data.executed !== 1 ? "s" : ""} executed`);
         }
+        // The rule set changed while the actions ran: the rest were left.
+        if (data.stopped) toast.warning("Stopped before the rest", { description: data.stopped });
       } else {
         setExecuteResults((prev) => ({
           ...prev,
@@ -985,6 +1033,13 @@ export default function PendingActionsPage() {
               const isExecuting = executingRules.has(group.ruleSet.id);
               const result = executeResults[group.ruleSet.id];
 
+              // Held since an edit changed what the rule set matches, or for
+              // per-episode criteria at series scope: the rows it holds
+              // (pending, failed) can't run until detection re-checks them, or
+              // until the rule set is edited.
+              const heldCount = heldActionCount(group);
+              const heldReason = heldCount > 0 ? holdReasonOf(group.ruleSet) : null;
+
               // Per-rule deletion stats — contextual to active tab
               const rs = ruleSetStatsMap.get(group.ruleSet.id);
               const showPending = statusFilter === "PENDING" || statusFilter === "ALL";
@@ -1012,7 +1067,14 @@ export default function PendingActionsPage() {
                   countLabel={`${group.count} item${group.count !== 1 ? "s" : ""}`}
                   expanded={isExpanded}
                   onToggle={() => toggleExpand(group.ruleSet.id)}
-                  meta={stats}
+                  meta={
+                    heldReason ? (
+                      <>
+                        <HeldChip reason={heldReason} />
+                        {stats}
+                      </>
+                    ) : stats
+                  }
                   actions={
                     // Execute All button (only for PENDING filter, not for deleted rule sets)
                     isPending && group.count > 0 && !group.ruleSet.deleted ? (
@@ -1032,16 +1094,13 @@ export default function PendingActionsPage() {
                             )}
                           </span>
                         )}
-                        <LoadingButton
-                          size="sm"
-                          variant="default"
-                          onClick={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
-                          loading={isExecuting}
-                          icon={Play}
-                          iconClassName="h-4 w-4 mr-1"
-                        >
-                          {isExecuting ? "Executing..." : "Execute All"}
-                        </LoadingButton>
+                        <ExecuteAllButton
+                          held={heldCount}
+                          heldReason={heldReason}
+                          heldLabel={heldCountLabel(heldCount, group.ruleSet)}
+                          executing={isExecuting}
+                          onExecuteAll={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
+                        />
                       </div>
                     ) : undefined
                   }
@@ -1051,6 +1110,7 @@ export default function PendingActionsPage() {
                       <VirtualizedActionTable
                         items={group.items}
                         ruleSetId={group.ruleSet.id}
+                        hold={group.ruleSet}
                         isPending={isPending}
                         executingItems={executingItems}
                         retryingItems={retryingItems}
@@ -1067,6 +1127,7 @@ export default function PendingActionsPage() {
                       <PendingActionCardGrid
                         items={group.items}
                         ruleSetType={group.ruleSet.type}
+                        hold={group.ruleSet}
                         onItemClick={openDetailPanel}
                         exceptedItemIds={exceptedItemIds}
                       />
