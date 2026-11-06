@@ -451,6 +451,17 @@ const actionTypeEnum = z.enum([
 // Shared sort modes for a Plex collection's item ordering.
 const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 
+// A rule set may add some Arr tags and remove others in the same action, but
+// one tag in both lists would be added and then removed again.
+function tagListsDisjoint(value: { addArrTags?: string[]; removeArrTags?: string[] }): boolean {
+  const added = new Set((value.addArrTags ?? []).map((t) => t.trim().toLowerCase()));
+  return !(value.removeArrTags ?? []).some((t) => added.has(t.trim().toLowerCase()));
+}
+const TAG_LISTS_OVERLAP = {
+  message: "A tag cannot be both added and removed",
+  path: ["removeArrTags"],
+};
+
 export const ruleSetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -471,7 +482,7 @@ export const ruleSetCreateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 export const ruleSetUpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -492,7 +503,7 @@ export const ruleSetUpdateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required").optional(),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 // Collection (reusable Plex collection definition) CRUD.
 export const collectionCreateSchema = z.object({

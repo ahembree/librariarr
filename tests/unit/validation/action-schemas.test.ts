@@ -187,3 +187,31 @@ describe("actionType validation", () => {
     });
   });
 });
+
+describe("Arr tag operations", () => {
+  const payload = {
+    name: "Tags",
+    type: "MOVIE" as const,
+    rules: [validGroup],
+    serverIds: ["s1"],
+  };
+
+  it("accepts adding some tags and removing others in one rule set", () => {
+    const create = ruleSetCreateSchema.safeParse({ ...payload, addArrTags: ["keep", "archived"], removeArrTags: ["new"] });
+    expect(create.success).toBe(true);
+    const update = ruleSetUpdateSchema.safeParse({ addArrTags: ["archived"], removeArrTags: ["new", "watching"] });
+    expect(update.success).toBe(true);
+  });
+
+  it("refuses a tag that is both added and removed, case-insensitively", () => {
+    const create = ruleSetCreateSchema.safeParse({ ...payload, addArrTags: ["Archived"], removeArrTags: ["archived "] });
+    expect(failedPaths(create)).toEqual(["removeArrTags"]);
+    const update = ruleSetUpdateSchema.safeParse({ addArrTags: ["x"], removeArrTags: ["X"] });
+    expect(failedPaths(update)).toEqual(["removeArrTags"]);
+  });
+
+  it("accepts either list alone", () => {
+    expect(ruleSetUpdateSchema.safeParse({ addArrTags: ["a"] }).success).toBe(true);
+    expect(ruleSetUpdateSchema.safeParse({ removeArrTags: ["a"] }).success).toBe(true);
+  });
+});
