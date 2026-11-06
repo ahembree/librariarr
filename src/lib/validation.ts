@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
 import { NextResponse } from "next/server";
 import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
 import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
@@ -451,6 +452,12 @@ const actionTypeEnum = z.enum([
 // Shared sort modes for a Plex collection's item ordering.
 const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 
+// One action may add some Arr tags and remove others, but never the same tag.
+const TAG_LISTS_OVERLAP = {
+  message: "A tag cannot be both added and removed",
+  path: ["removeArrTags"],
+};
+
 export const ruleSetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -471,7 +478,7 @@ export const ruleSetCreateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 export const ruleSetUpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -492,7 +499,7 @@ export const ruleSetUpdateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required").optional(),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 // Collection (reusable Plex collection definition) CRUD.
 export const collectionCreateSchema = z.object({
@@ -1018,7 +1025,7 @@ export const queryActionSchema = z.object({
   searchAfterAction: z.boolean().optional().default(false),
   addArrTags: z.array(z.string()).optional().default([]),
   removeArrTags: z.array(z.string()).optional().default([]),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 export const savedQueryCreateSchema = z.object({
   name: z.string().min(1).max(100),

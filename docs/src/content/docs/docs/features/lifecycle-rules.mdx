@@ -469,7 +469,7 @@ Every library type offers the same eight actions, against Radarr (movies), Sonar
 
 The three file-delete actions can **Search for new copy after file deletion**.
 
-**Manage Tags** adds or removes *arr tags alongside the action, including **Do Nothing**. It is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them.
+**Manage Tags** adds and removes *arr tags alongside the action, including **Do Nothing**. It has two lists, **Add Tags** and **Remove Tags**, and one action can use both — for example, add `archived` while removing `new`. A tag can be in only one of the lists: picking it in one takes it out of the other. Tags are added first, then removed, and the record is written once. **Manage Tags** is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them.
 
 ### Which files a file delete removes
 
@@ -505,7 +505,7 @@ Each action links a rule set to an *arr instance:
 2. Switch on **Enable lifecycle action** and choose the **Action type**
 3. Set the **Delay (days)** — how long after a match the action runs (default 7)
 4. Set action-specific options (import list exclusion, target quality profile, search after)
-5. Optionally turn on **Manage Tags** to add or remove tags
+5. Optionally turn on **Manage Tags** to add tags, remove tags, or both
 
 <Aside type="caution">
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.

@@ -483,6 +483,61 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.name).toBe("Updated Name");
     });
 
+    describe("Arr tag lists", () => {
+      async function seed() {
+        const user = await createTestUser();
+        const ruleSet = await createTestRuleSet(user.id, { name: "Tags" });
+        await getTestPrisma().ruleSet.update({
+          where: { id: ruleSet.id },
+          data: { addArrTags: ["Archived"], removeArrTags: ["new"] },
+        });
+        setMockSession({ isLoggedIn: true, userId: user.id });
+        return ruleSet;
+      }
+
+      function put(id: string, body: Record<string, unknown>) {
+        return callRouteWithParams(PUT, { id }, { url: `/api/lifecycle/rules/${id}`, method: "PUT", body });
+      }
+
+      it("saves both lists together", async () => {
+        const ruleSet = await seed();
+        await expectJson(await put(ruleSet.id, { addArrTags: ["keep"], removeArrTags: ["new", "watching"] }), 200);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.addArrTags).toEqual(["keep"]);
+        expect(row.removeArrTags).toEqual(["new", "watching"]);
+      });
+
+      it("refuses a removeArrTags-only body naming a stored added tag", async () => {
+        const ruleSet = await seed();
+        const body = await expectJson<{ error: string; details: string[] }>(
+          await put(ruleSet.id, { removeArrTags: ["archived"] }),
+          400,
+        );
+        expect(body.details).toEqual(["removeArrTags: A tag cannot be both added and removed"]);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.removeArrTags).toEqual(["new"]);
+      });
+
+      it("refuses an addArrTags-only body naming a stored removed tag", async () => {
+        const ruleSet = await seed();
+        const body = await expectJson<{ details: string[] }>(await put(ruleSet.id, { addArrTags: ["NEW"] }), 400);
+        expect(body.details).toEqual(["addArrTags: A tag cannot be both added and removed"]);
+      });
+
+      it("accepts one list that does not overlap the stored other", async () => {
+        const ruleSet = await seed();
+        await expectJson(await put(ruleSet.id, { addArrTags: ["Archived", "keep"] }), 200);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.addArrTags).toEqual(["Archived", "keep"]);
+      });
+
+      it("answers 404 for a one-list body on a rule set that does not exist", async () => {
+        const user = await createTestUser();
+        setMockSession({ isLoggedIn: true, userId: user.id });
+        await expectJson(await put("missing", { addArrTags: ["a"] }), 404);
+      });
+    });
+
     it("rejects a rules update carrying fields invalid for the rule set's type", async () => {
       const user = await createTestUser();
       // Default type is MOVIE.
