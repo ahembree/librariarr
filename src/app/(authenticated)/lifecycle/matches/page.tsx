@@ -183,18 +183,17 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
     const badge = (
       <ColorChip
         key={idx}
-        className="border-border text-muted-foreground text-[11px] font-normal"
+        className="gap-1 border-border text-muted-foreground text-[11px] font-normal"
       >
+        {/* The chip is inline-flex, which drops whitespace text nodes; the gap spaces the parts. */}
         {c.groupName && (
-          <span className="text-sky mr-0.5">[{c.groupName}]</span>
+          <span className="text-sky">[{c.groupName}]</span>
         )}
         {c.negate && (
-          <span className="text-red mr-0.5">NOT</span>
+          <span className="text-red">NOT</span>
         )}
         <span className="text-muted-foreground">{c.field}</span>
-        {" "}
         <span>{c.operator}</span>
-        {" "}
         <span className="font-medium">{c.value}</span>
       </ColorChip>
     );
