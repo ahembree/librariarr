@@ -62,6 +62,7 @@ export function invalidateRuleSetNameCaches(): void {
 /**
  * `/api/integrations/health`'s cached answer. One key, not one per user: the
  * app has a single admin. Kept here so the route that caches it and the
- * routes that drop it (`invalidateSeerrCaches`) cannot name different keys.
+ * routes that drop it (every instance add/edit/delete of a type it checks,
+ * in `instanceChanged`; `invalidateSeerrCaches`) cannot name different keys.
  */
 export const INTEGRATIONS_HEALTH_CACHE_KEY = "integrations:health";

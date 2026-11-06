@@ -4,6 +4,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MASKED_VALUE, sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
@@ -199,6 +200,13 @@ export const TRACEARR: IntegrationConfig<TracearrClient> = {
 /** Every instance type, in the order the settings page and the instances route list them. */
 export const INTEGRATIONS = { sonarr: SONARR, radarr: RADARR, lidarr: LIDARR, seerr: SEERR, tracearr: TRACEARR } as const;
 
+/**
+ * The types `/api/integrations/health` probes, in the order it reports them:
+ * the ones the dashboard's status strip and the rule editor / Query page
+ * warnings show. Nothing warns about Tracearr's reachability.
+ */
+export const HEALTH_CHECKED = [SONARR, RADARR, LIDARR, SEERR] as const;
+
 function delegateOf(config: IntegrationConfig, db: Prisma.TransactionClient = prisma): InstanceDelegate {
   return (db as unknown as Record<InstanceModel, InstanceDelegate>)[config.model];
 }
@@ -243,6 +251,12 @@ function instanceChanged(config: IntegrationConfig, id: string): void {
   // The rule editor's preview, diff and Test Media read Arr data through a
   // short cache; an edited or deleted instance must not answer from it.
   if (config.detachOnDelete) invalidateArrMetadataCache();
+  // The health answer lists every enabled instance of these types and whether
+  // it answered: a fixed URL, a disabled or deleted instance or a new one must
+  // show on the next read, not once its 30 s cache runs out.
+  if (HEALTH_CHECKED.some((checked) => checked.type === config.type)) {
+    appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
+  }
   config.afterChange?.();
 }
 
