@@ -1,14 +1,12 @@
 /**
  * Seerr request statistics for a requested show longer than Postgres takes
  * bind parameters, against the real database. Watch correlation looks plays up
- * by the dedupKey of every canonical episode of every requested show, as one
- * `in` list inside the WatchHistory → MediaItem relation filter. That stays
- * under the limit only because both lookups are unordered, unpaged findMany
- * calls, which Prisma (7.10) splits into several statements: an `orderBy`, a
- * `take`, or turning one into a `groupBy`/`count` stops the split and the
- * dashboard's request card and the requester drill-down answer 500 (P2029)
- * past ~32.7k requested episodes. This pins both answers there. The episodes
- * are bulk-inserted in SQL.
+ * by the dedupKey of every canonical episode of every requested show. As a
+ * Prisma `in` inside the WatchHistory → MediaItem relation filter that went out
+ * as ~32k bind parameters per statement, and in the full suite's database
+ * state each route took over 15 s; `completedPlaysByDedupKey` now sends the
+ * keys as one array parameter. This pins both answers at 33k episodes. The
+ * episodes are bulk-inserted in SQL.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";

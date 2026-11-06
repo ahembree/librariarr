@@ -5,7 +5,7 @@ const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn() },
   mediaServer: { findMany: vi.fn() },
   mediaItem: { findMany: vi.fn() },
-  watchHistory: { findMany: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
 }));
 
 const mockSeerrClient = vi.hoisted(() => ({
@@ -74,7 +74,7 @@ describe("getSeerrRequestStats", () => {
     mockSeerrClient.getRequests.mockReset();
     mockPrisma.mediaServer.findMany.mockResolvedValue([{ id: "srv1" }]);
     mockPrisma.mediaItem.findMany.mockResolvedValue([]);
-    mockPrisma.watchHistory.findMany.mockResolvedValue([]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
   });
 
   it("returns configured=false when user has no Seerr instances", async () => {
@@ -137,7 +137,7 @@ describe("getSeerrRequestStats", () => {
     expect(result.users[0].correlatable).toBe(false);
     expect(result.users[0].moviesWatched).toBe(0);
     // No media account to match plays on, so no watch history is read.
-    expect(mockPrisma.watchHistory.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   it("aggregates the same plexUsername across multiple Seerr instances", async () => {
@@ -266,8 +266,8 @@ describe("getSeerrRequestStats", () => {
       },
     ]);
     // alice watched the movie
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "alice", mediaItem: { dedupKey: "movie-100" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "alice", dedupKey: "movie-100" },
     ]);
 
     const result = await getSeerrRequestStats("user1");
@@ -292,9 +292,9 @@ describe("getSeerrRequestStats", () => {
       { id: "ep3", dedupKey: "ep-3", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
     ]);
     // alice watched ep1 and ep2
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "alice", mediaItem: { dedupKey: "ep-1" } },
-      { serverUsername: "alice", mediaItem: { dedupKey: "ep-2" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "alice", dedupKey: "ep-1" },
+      { serverUsername: "alice", dedupKey: "ep-2" },
     ]);
 
     const result = await getSeerrRequestStats("user1");
@@ -329,13 +329,13 @@ describe("getSeerrRequestStats", () => {
         { id: "e2", dedupKey: "e2-dedup", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
         { id: "e3", dedupKey: "e3-dedup", parentTitle: "Show", seriesKey: "tvdb:500", externalIds: [{ source: "TVDB", externalId: "500" }] },
       ]);
-    mockPrisma.watchHistory.findMany
+    mockPrisma.$queryRawUnsafe
       .mockResolvedValueOnce([
-        { serverUsername: "alice", mediaItem: { dedupKey: "m1-dedup" } },
+        { serverUsername: "alice", dedupKey: "m1-dedup" },
       ])
       .mockResolvedValueOnce([
-        { serverUsername: "alice", mediaItem: { dedupKey: "e1-dedup" } },
-        { serverUsername: "alice", mediaItem: { dedupKey: "e2-dedup" } },
+        { serverUsername: "alice", dedupKey: "e1-dedup" },
+        { serverUsername: "alice", dedupKey: "e2-dedup" },
       ]);
 
     const result = await getSeerrRequestStats("user1");
@@ -419,7 +419,7 @@ describe("getSeerrRequestStats", () => {
     expect(result.users[0].episodesAvailable).toBe(0);
     // No item or watch-history query attempted
     expect(mockPrisma.mediaItem.findMany).not.toHaveBeenCalled();
-    expect(mockPrisma.watchHistory.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   it("sorts users by requestCount descending", async () => {
@@ -456,8 +456,8 @@ describe("getSeerrRequestStats", () => {
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
       { id: "m1", dedupKey: "matrix", externalIds: [{ externalId: "603" }] },
     ]);
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "alice", mediaItem: { dedupKey: "matrix" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "alice", dedupKey: "matrix" },
     ]);
 
     const result = await getSeerrRequestStats("user1");
@@ -477,17 +477,15 @@ describe("getSeerrRequestStats", () => {
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
       { id: "m1", dedupKey: "m-100", externalIds: [{ externalId: "100" }] },
     ]);
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "Alice", mediaItem: { dedupKey: "m-100" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "Alice", dedupKey: "m-100" },
     ]);
 
     const result = await getSeerrRequestStats("user1");
 
     expect(result.users[0].correlatable).toBe(true);
     expect(result.users[0].moviesWatched).toBe(1);
-    expect(mockPrisma.watchHistory.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ serverUsername: { in: ["Alice"] } }) })
-    );
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledWith(expect.any(String), ["m-100"], ["Alice"], "MOVIE");
   });
 
   it("adopts a plexUsername from a later requester folded into the same key", async () => {
@@ -532,8 +530,8 @@ describe("getSeerrRequestStats", () => {
       { id: "e1", dedupKey: "e1", parentTitle: "Show", seriesKey: "tmdb:12345", externalIds: [{ source: "TMDB", externalId: "12345" }] },
       { id: "e2", dedupKey: "e2", parentTitle: "Show", seriesKey: "tmdb:12345", externalIds: [{ source: "TMDB", externalId: "12345" }] },
     ]);
-    mockPrisma.watchHistory.findMany.mockResolvedValueOnce([
-      { serverUsername: "alice", mediaItem: { dedupKey: "e1" } },
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { serverUsername: "alice", dedupKey: "e1" },
     ]);
 
     const result = await getSeerrRequestStats("user1");
