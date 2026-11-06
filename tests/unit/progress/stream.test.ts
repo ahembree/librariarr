@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createGunzip, gunzipSync } from "node:zlib";
-import { progressStreamResponse } from "@/lib/progress/stream";
+import { progressStreamResponse, HEARTBEAT_INTERVAL_MS } from "@/lib/progress/stream";
 
 async function readLines(response: Response): Promise<Array<Record<string, unknown>>> {
   const text = await response.text();
@@ -12,6 +12,33 @@ async function readLines(response: Response): Promise<Array<Record<string, unkno
 }
 
 describe("progressStreamResponse", () => {
+  // A slow run writes nothing for minutes; the heartbeat keeps reverse proxies
+  // from closing the idle stream, and stops once the run settles.
+  it("writes heartbeats while the run is quiet, none while it is busy or after it ends", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (v: { ok: true }) => void;
+      let emitNow!: (u: { type: "phase"; key: string }) => void;
+      const response = progressStreamResponse((emit) => {
+        emitNow = emit;
+        return new Promise((r) => { finish = r; });
+      });
+      const text = response.text();
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      // Busy: an event every half interval leaves no gap for a heartbeat.
+      for (let i = 0; i < 4; i++) {
+        emitNow({ type: "phase", key: `p${i}` });
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS / 2);
+      }
+      finish({ ok: true });
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      const types = (await text).split("\n").filter(Boolean).map((l) => JSON.parse(l).type);
+      expect(types).toEqual(["heartbeat", "heartbeat", "heartbeat", "phase", "phase", "phase", "phase", "result"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sets NDJSON streaming headers", () => {
     const response = progressStreamResponse(async () => ({ ok: true }));
     expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");

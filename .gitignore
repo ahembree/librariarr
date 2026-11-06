@@ -60,6 +60,8 @@ next-env.d.ts
 # AI assistant and IDE configs
 .claude/*
 !.claude/skills/
+!.claude/settings.json
+!.claude/hooks/
 .serena/
 .mcp.json
 .vscode/

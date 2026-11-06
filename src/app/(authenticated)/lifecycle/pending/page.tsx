@@ -38,6 +38,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { PageHeader } from "@/components/page-header";
+import { LoadingButton } from "@/components/loading-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
 import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
@@ -262,7 +263,7 @@ function VirtualizedActionTable({
                         {hasMediaItem && exceptedItemIds.has(action.mediaItem.id!) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                              <ShieldOff className="h-3.5 w-3.5 text-excluded shrink-0" />
                             </TooltipTrigger>
                             <TooltipContent>Excluded from lifecycle actions</TooltipContent>
                           </Tooltip>
@@ -364,19 +365,16 @@ function VirtualizedActionTable({
                           disabled={!hasMediaItem}
                           onExecute={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
                         />
-                        <Button
+                        <LoadingButton
                           variant="ghost"
                           size="icon"
                           onClick={() => onExclude(action)}
-                          disabled={!hasMediaItem || excludingItems.has(action.mediaItem.id!)}
+                          disabled={!hasMediaItem}
+                          loading={hasMediaItem && excludingItems.has(action.mediaItem.id!)}
+                          icon={ShieldOff}
+                          iconClassName="h-4 w-4 text-excluded"
                           title="Exclude from lifecycle actions"
-                        >
-                          {hasMediaItem && excludingItems.has(action.mediaItem.id!) ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ShieldOff className="h-4 w-4 text-orange-400" />
-                          )}
-                        </Button>
+                        />
                       </div>
                     </td>
                   )}
@@ -464,8 +462,8 @@ const PendingActionCard = memo(function PendingActionCard({
       {excepted && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-excluded/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-background" />
             </div>
           </TooltipTrigger>
           <TooltipContent>Excluded from lifecycle actions</TooltipContent>
@@ -1089,7 +1087,7 @@ export default function PendingActionsPage() {
                                 {result.executed} executed
                               </span>
                             ) : (
-                              <span className="text-yellow-500 flex items-center gap-1">
+                              <span className="text-amber flex items-center gap-1">
                                 <AlertTriangle className="h-3.5 w-3.5" />
                                 {result.executed} ok, {result.failed} failed
                               </span>
@@ -1193,7 +1191,7 @@ export default function PendingActionsPage() {
             return (
               <div className="space-y-2">
                 {arrTitleMatch && (
-                  <p className="text-sm text-yellow-500">
+                  <p className="text-sm text-amber">
                     Arr title: &quot;{arrTitleMatch[1]}&quot;
                   </p>
                 )}

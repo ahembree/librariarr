@@ -37,7 +37,7 @@ function FeatureChip({
   title,
   children,
 }: {
-  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted" | "red";
+  tone: "green" | "amber" | "sky" | "muted" | "red";
   title?: string;
   children: React.ReactNode;
 }) {
@@ -46,8 +46,6 @@ function FeatureChip({
     green: "border-green/30 bg-green-dim text-green",
     amber: "border-amber/30 bg-amber-dim text-amber",
     sky: "border-sky/30 bg-sky-dim text-sky",
-    purple: "border-purple-400/30 bg-purple-400/15 text-purple-400",
-    cyan: "border-cyan-400/30 bg-cyan-400/15 text-cyan-400",
     muted: "border-border bg-muted/40 text-muted-foreground",
   };
   return (
@@ -93,7 +91,7 @@ function RuleSetChips({
       {ruleSet.enabled && ruleSet.actionEnabled && <FeatureChip tone="amber">Action</FeatureChip>}
       {ruleSet.enabled && !!ruleSet.collectionId && <FeatureChip tone="sky">Collection</FeatureChip>}
       {ruleSet.enabled && (ruleSet.addArrTags?.length > 0 || ruleSet.removeArrTags?.length > 0) && (
-        <FeatureChip tone="purple">Tags</FeatureChip>
+        <FeatureChip tone="muted">Tags</FeatureChip>
       )}
       {scopeLabels && (
         <FeatureChip tone="muted">
@@ -101,7 +99,7 @@ function RuleSetChips({
         </FeatureChip>
       )}
       {ruleSet.serverIds?.length > 0 && (
-        <FeatureChip tone="cyan">
+        <FeatureChip tone="muted">
           {ruleSet.serverIds.length} server{ruleSet.serverIds.length !== 1 ? "s" : ""}
         </FeatureChip>
       )}
@@ -561,11 +559,11 @@ export function RuleSetSwitcherBar(props: RuleSetNavigatorProps) {
             type="button"
             onClick={() => setOpen(true)}
             aria-haspopup="dialog"
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[10.5px] uppercase tracking-wide text-muted-foreground">
+              <span className="eyebrow block">
                 {active ? `Rule set ${index + 1} of ${ruleSets.length}` : `${ruleSets.length} saved rule set${ruleSets.length !== 1 ? "s" : ""}`}
               </span>
               <span className="block truncate text-sm font-medium">

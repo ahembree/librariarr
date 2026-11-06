@@ -276,7 +276,7 @@ export function QueryActionBar({
   const controlsDisabled = noSelection || noFamilies;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2">
       <span className="text-sm font-medium">
         {noSelection ? (
           "Actions"
@@ -378,7 +378,7 @@ export function QueryActionBar({
         iconClassName="h-3.5 w-3.5"
         onClick={() => setConfirmOpen(true)}
       >
-        Run action
+        Run Action
       </LoadingButton>
 
       {noSelection ? (

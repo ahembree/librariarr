@@ -11,7 +11,11 @@ export interface LoadingButtonProps extends ComponentProps<typeof Button> {
   loading?: boolean;
   /** The icon shown while not loading; none leaves the space empty until then. */
   icon?: LucideIcon;
-  /** The icon's (and the spinner's) classes. */
+  /**
+   * The icon's (and the spinner's) classes. Size anything but 16px with a
+   * `size-*` class: Button gives every svg without one `size-4`, which beats
+   * `h-3.5 w-3.5`.
+   */
   iconClassName?: string;
 }
 

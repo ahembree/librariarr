@@ -1,9 +1,10 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Loader2, Save } from "lucide-react";
+import { AlertTriangle, Check, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
+import { LoadingButton } from "@/components/loading-button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -321,20 +322,15 @@ export function SaveRuleSetButton({
 }) {
   return (
     <BlockedReason reason={blockedReason}>
-      <Button
+      <LoadingButton
         onClick={onSave}
         disabled={!!blockedReason || disabled}
-        className={justSaved ? "bg-green hover:bg-green text-white" : ""}
+        className={justSaved ? "bg-green text-background hover:bg-green" : ""}
+        loading={loading}
+        icon={justSaved ? Check : Save}
       >
-        {loading ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : justSaved ? (
-          <Check className="mr-2 h-4 w-4" />
-        ) : (
-          <Save className="mr-2 h-4 w-4" />
-        )}
         {justSaved ? "Saved" : "Save"}
-      </Button>
+      </LoadingButton>
     </BlockedReason>
   );
 }

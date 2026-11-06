@@ -326,7 +326,10 @@ export function TopPlayed({
   const visibleCount = [showMovies, showSeries, showMusic].filter(Boolean).length;
 
   return (
-    <div className={`grid gap-6 h-full ${visibleCount >= 2 ? "lg:grid-cols-2" : ""}`}>
+    // Columns by the card's width (the dashboard cell is a size container),
+    // not the window's. A height set shorter than the lists scrolls them as
+    // one, instead of running them out of the cell over the cards below.
+    <div className={`grid h-full gap-6 overflow-auto ${visibleCount >= 2 ? "@2xl:grid-cols-2" : ""}`}>
       {showMovies && movieCard}
       {showSeries && seriesCard}
       {showMusic && musicCard}

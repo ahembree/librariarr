@@ -171,9 +171,9 @@ export function MediaDetailHero({
   }, []);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       {/* Hero section */}
-      <div className="relative h-[55vh] min-h-70 sm:min-h-100 max-h-175 w-full overflow-hidden">
+      <div className="relative h-[55dvh] min-h-70 sm:min-h-100 max-h-175 w-full overflow-hidden">
         {/* Background artwork layer */}
         <div className="absolute inset-0">
           {artFailed ? (
@@ -288,7 +288,7 @@ export function MediaDetailHero({
 
             {/* Title + metadata */}
             <div className="min-w-0 flex-1">
-              <h1 className="text-xl font-bold font-display leading-tight tracking-tight text-white sm:text-3xl lg:text-4xl">
+              <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight text-foreground">
                 {title}
               </h1>
 

@@ -64,6 +64,9 @@ const SERVER_TYPES = [
   { type: "EMBY" as const, label: "Emby", description: "Connect with your server URL and API key", ...SERVER_TYPE_STYLES.EMBY.onboarding },
 ] as const;
 
+// The Plex mode's colours: the Plex server-type style, as the chooser card uses.
+const PLEX_STYLE = SERVER_TYPE_STYLES.PLEX.onboarding;
+
 // Color config per manual server type (derived from centralized styles)
 const MANUAL_COLORS: Record<ManualServerType, NonNullable<(typeof SERVER_TYPE_STYLES)[string]["manual"]>> = {
   JELLYFIN: SERVER_TYPE_STYLES.JELLYFIN.manual!,
@@ -428,7 +431,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-dvh items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
@@ -438,7 +441,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
 
   if (mode === "choose") {
     return (
-      <div className="flex min-h-screen items-center justify-center auth-backdrop p-8">
+      <div className="flex min-h-dvh items-center justify-center auth-backdrop p-8">
         <div className="w-full max-w-3xl space-y-8">
           <div className="text-center">
             <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
@@ -519,9 +522,9 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
 
   if (mode === "plex") {
     return (
-      <div className="flex min-h-screen items-center justify-center auth-backdrop p-8">
+      <div className="flex min-h-dvh items-center justify-center auth-backdrop p-8">
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full bg-amber-500/5 blur-3xl" />
+          <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full ${PLEX_STYLE.glowColor} blur-3xl`} />
         </div>
         <div className="relative w-full max-w-5xl space-y-8">
           <div className="text-center">
@@ -535,7 +538,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                 Back
               </button>
             )}
-            <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20">
+            <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
               <Logo size={96} />
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Select Your Plex Servers</h1>
@@ -564,11 +567,11 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                 return (
                   <Card
                     key={id}
-                    className={`max-w-sm flex-1 min-w-0 sm:min-w-72 ${isAdded ? "border-amber-500/40" : error ? "border-destructive/50" : "border-amber-500/15"}`}
+                    className={`max-w-sm flex-1 min-w-0 sm:min-w-72 ${isAdded ? PLEX_STYLE.borderColor : error ? "border-destructive/50" : ""}`}
                   >
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
-                        <Server className="h-5 w-5 text-amber-500" />
+                        <Server className={`h-5 w-5 ${PLEX_STYLE.iconColor}`} />
                         {server.name}
                       </CardTitle>
                       <CardDescription>
@@ -595,7 +598,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                                   onClick={() => setCustomUrls((prev) => ({ ...prev, [id]: conn.uri }))}
                                   className={`block w-full rounded px-2 py-1 text-left text-xs transition-colors ${
                                     currentUrl === conn.uri
-                                      ? "bg-amber-500/10 text-amber-400"
+                                      ? `${PLEX_STYLE.bgColor} ${PLEX_STYLE.iconColor}`
                                       : "text-muted-foreground hover:bg-muted"
                                   }`}
                                 >
@@ -666,28 +669,27 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                               ))}
                             </div>
                           </div>
-                          <Button
+                          <LoadingButton
                             onClick={() => confirmLibrarySelection(id)}
-                            disabled={savingLibraries}
-                            className="w-full bg-amber-500 text-black hover:bg-amber-600"
+                            loading={savingLibraries}
+                            className="w-full"
                           >
-                            {savingLibraries && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Confirm & Sync
-                          </Button>
+                          </LoadingButton>
                         </div>
                       )}
 
                       {!isSelectingLibs && (
-                        <Button
+                        <LoadingButton
                           onClick={() => addPlexServer(server)}
-                          disabled={isAdding || isAdded}
-                          className={`w-full ${isAdded ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20" : "bg-amber-500 text-black hover:bg-amber-600"}`}
+                          loading={isAdding}
+                          icon={isAdded ? Check : undefined}
+                          disabled={isAdded}
+                          className={`w-full ${isAdded ? `border ${SERVER_TYPE_STYLES.PLEX.classes}` : ""}`}
                           variant={isAdded ? "secondary" : "default"}
                         >
-                          {isAdding && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                          {isAdded && <Check className="mr-2 h-4 w-4" />}
                           {isAdded ? "Added & Syncing" : isAdding ? "Connecting..." : error ? "Retry" : "Add Server"}
-                        </Button>
+                        </LoadingButton>
                       )}
                     </CardContent>
                   </Card>
@@ -701,7 +703,6 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
               onClick={() => router.push("/")}
               size="lg"
               disabled={addedServers.size === 0}
-              className="bg-amber-500 text-black hover:bg-amber-600 disabled:opacity-40"
             >
               Continue to Dashboard
             </Button>
@@ -720,7 +721,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
   const typeLabel = manualType === "JELLYFIN" ? "Jellyfin" : "Emby";
 
   return (
-    <div className="flex min-h-screen items-center justify-center auth-backdrop p-8">
+    <div className="flex min-h-dvh items-center justify-center auth-backdrop p-8">
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 rounded-full ${colors.glow} blur-3xl`} />
       </div>
@@ -734,10 +735,10 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
             <ArrowLeft className="h-4 w-4" />
             Back
           </button>
-          <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${manualType === "JELLYFIN" ? "bg-purple-500/15 ring-1 ring-purple-500/20" : "bg-emerald-500/15 ring-1 ring-emerald-500/20"}`}>
-            <Server className={`h-8 w-8 ${manualType === "JELLYFIN" ? "text-purple-400" : "text-emerald-400"}`} />
+          <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border ${SERVER_TYPE_STYLES[manualType].onboarding.bgColor} ${SERVER_TYPE_STYLES[manualType].onboarding.borderColor}`}>
+            <Server className={`h-8 w-8 ${SERVER_TYPE_STYLES[manualType].onboarding.iconColor}`} />
           </div>
-          <h1 className="text-3xl font-bold font-display tracking-tight">Add {typeLabel} Server</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Add {typeLabel} Server</h1>
           <p className="mt-2 text-muted-foreground">
             Enter your server details to connect.
           </p>
@@ -769,19 +770,18 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                     <p className="text-sm text-muted-foreground text-center py-4">No compatible libraries found on this server.</p>
                   )}
                 </div>
-                <Button
+                <LoadingButton
                   onClick={confirmManualLibraries}
-                  disabled={savingLibraries}
+                  loading={savingLibraries}
                   className={`w-full ${colors.btn} ${colors.btnHover} ${colors.btnText}`}
                 >
-                  {savingLibraries && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Confirm & Sync
-                </Button>
+                </LoadingButton>
               </div>
             ) : manualAdded ? (
               /* Success state */
               <div className="text-center py-4">
-                <CheckCircle className={`mx-auto h-12 w-12 ${manualType === "JELLYFIN" ? "text-purple-400" : "text-emerald-400"}`} />
+                <CheckCircle className={`mx-auto h-12 w-12 ${SERVER_TYPE_STYLES[manualType].onboarding.iconColor}`} />
                 <p className="mt-3 font-medium">Server added and syncing!</p>
               </div>
             ) : (

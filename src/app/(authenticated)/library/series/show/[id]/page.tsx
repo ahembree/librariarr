@@ -141,7 +141,7 @@ export default function SeriesDetailPage() {
 
       {seasons.length > 0 && (
         <section className="mt-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <h2 className="eyebrow mb-3">
             Seasons
           </h2>
           <div className="flex flex-wrap gap-3">

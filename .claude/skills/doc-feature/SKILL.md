@@ -63,6 +63,14 @@ New pages must be added to `docs/astro.config.mjs`:
 
 The `slug` must match the file path relative to `docs/src/content/docs/` without the `.mdx` extension.
 
+### MDX is not Markdown
+
+MDX reads `<` followed by a letter as a JSX tag, so a bare placeholder such as `"Discovery OK: <issuer>"` or `<name>` fails the whole site's build (`Expected a closing tag for <issuer>`). Put literal angle brackets in a code span (`` `Discovery OK: <issuer>` ``) or escape them (`&lt;issuer&gt;`); `{` and `}` outside code are JSX expressions too. Lowercase HTML tags (`<details>`, `<summary>`, `<br />`) and imported Starlight components (`<Aside>`, `<Tabs>`) are real elements and must be closed.
+
+### Always build the docs
+
+Whenever a change touches `docs/` — or a source the build reads (`scripts/generate-openapi.ts`, `scripts/validate-rule-set-library.ts`, `scripts/rule-set-library-check.ts`, `src/lib/api-keys/{openapi,scopes,limits}.ts`, `src/lib/conditions/{fields,operators,types}.ts`, `src/lib/lifecycle/action-types.ts`, `package.json`) — run `pnpm docs:build` and see it pass before committing. `.claude/hooks/docs-build-before-commit.sh` (wired in `.claude/settings.json`) does this on every `git commit` Claude runs whose changes touch those paths, and blocks the commit with the build's error when it fails; keep its path list in step with what the build reads.
+
 ## Existing Sidebar Sections
 
 Read `docs/astro.config.mjs` for the current sidebar; add every new page there.
@@ -74,12 +82,12 @@ Read `docs/astro.config.mjs` for the current sidebar; add every new page there.
 2. Add frontmatter with `title`, a specific keyword-bearing `description` (quoted when it contains `: `) and, where the H1 is short, a `seoTitle`
 3. Write content covering: what the feature does, how to configure it, key options
 4. Add sidebar entry in `docs/astro.config.mjs` under the correct section
-5. Verify: `pnpm docs:build` (catches broken links/formatting)
+5. Verify: `pnpm docs:build` (catches broken links/formatting, and an MDX parse error that fails the deploy; the first run needs `pnpm --prefix docs install --frozen-lockfile`). The **Build Docs** check on every pull request runs the same build
 
 ### For updating existing pages:
 1. Find the existing MDX file in `docs/src/content/docs/docs/`
 2. Update content to reflect changes
-3. Verify: `pnpm docs:build`
+3. Verify: `pnpm docs:build` (the same build the **Build Docs** pull-request check runs)
 
 ## Which page to update
 
@@ -125,4 +133,4 @@ pnpm docs:preview  # Preview built docs
 - `docs/src/pages/og/[...slug].png.ts` — a 1200×630 social image per page (satori → `sharp`), in Sora from `@fontsource/sora`'s static files.
 - Fonts are self-hosted (`@fontsource-variable/*`), never Google Fonts.
 - `docs/src/content/docs/docs/guides/` — use-case guides. `rule-set-library.mdx` holds importable rule sets as Export JSON (`RuleSetExport` in `src/components/lifecycle-rule-page.tsx`; every one with `actionEnabled: false`, each folded in a `<details>`). `scripts/rule-set-library-check.ts` (alias-free) validates every json block against `CONDITION_FIELDS`, `CONDITION_OPERATORS` and the action lists in both the docs build (`validate:rulesets`) and `tests/unit/docs/rule-set-library.test.ts` (which also checks `ruleSetCreateSchema` and that every field is described in `lifecycle-rules.mdx`). Renaming a field, operator or action type fails both until the docs follow.
-- `docs/src/content/docs/docs/` — MDX docs at `librariarr.dev/docs/...`; `docs/astro.config.mjs` — sidebar and site config; `.github/workflows/docs-deploy.yml` — deploy (on `docs/**` and the OpenAPI source files).
+- `docs/src/content/docs/docs/` — MDX docs at `librariarr.dev/docs/...`; `docs/astro.config.mjs` — sidebar and site config; `.github/workflows/docs-deploy.yml` — builds the site on every pull request (the **Build Docs** check, no paths filter, deploy skipped) and deploys on a push to main touching `docs/**` or the OpenAPI source files.

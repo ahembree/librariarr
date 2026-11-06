@@ -17,6 +17,21 @@ const SPLIT_MAX_REACH = 10_000;
 /** Upper bound for the cached filter dropdown values (see below). */
 const FILTER_VALUES_TTL_MS = 10 * 60_000;
 
+/**
+ * `streamDecision()` (src/lib/media/stream-decision.ts) as a sort key: 2 for a
+ * transcode (any re-encode — the flag, or a video or audio decision of
+ * "transcode"), 1 for a remux (a "copy" decision), 0 for direct play, NULL
+ * when the play records none of the three — every native row, which the
+ * History page shows without a chip. Sorting on `isTranscode` alone put an
+ * audio-only transcode, labelled Transcode, among the direct plays.
+ */
+const STREAM_DECISION_SORT_SQL = `CASE
+    WHEN wh."isTranscode" IS NULL AND COALESCE(wh."videoDecision", '') = '' AND COALESCE(wh."audioDecision", '') = '' THEN NULL
+    WHEN wh."isTranscode" IS TRUE OR wh."videoDecision" = 'transcode' OR wh."audioDecision" = 'transcode' THEN 2
+    WHEN wh."videoDecision" = 'copy' OR wh."audioDecision" = 'copy' THEN 1
+    ELSE 0
+  END`;
+
 export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const page = parsePage(searchParams);
@@ -210,6 +225,9 @@ export const GET = withSession(async (session, request: NextRequest) => {
     // client, and a transcoded 4K file streamed at 1080p differs on the two.
     percentComplete: 'wh."percentComplete"',
     isTranscode: 'wh."isTranscode"',
+    // The Decision column: the same verdict its chip shows (`streamDecision`),
+    // so a row labelled Transcode never sorts among the direct plays.
+    decision: STREAM_DECISION_SORT_SQL,
     player: 'wh."player"',
     streamResolution: 'wh."resolution"',
   };

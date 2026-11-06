@@ -1,8 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { CirclePause, Loader2, Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CirclePause, Play } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
 import { LoadingButton } from "@/components/loading-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -63,17 +62,18 @@ export function ExecuteNowButton({
 }) {
   return (
     <HeldReason reason={heldReason}>
-      <Button
+      <LoadingButton
         variant="ghost"
         size="icon"
         onClick={onExecute}
-        disabled={!!heldReason || executing || disabled}
+        disabled={!!heldReason || disabled}
+        loading={executing}
+        icon={Play}
+        iconClassName="h-4 w-4"
         // The tooltip says why while held; a native title would stack on it.
         title={heldReason ? undefined : "Execute now"}
         aria-label="Execute now"
-      >
-        {executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-      </Button>
+      />
     </HeldReason>
   );
 }
@@ -90,16 +90,17 @@ export function RetryActionButton({
 }) {
   return (
     <HeldReason reason={heldReason}>
-      <Button
+      <LoadingButton
         variant="ghost"
         size="icon"
         onClick={onRetry}
-        disabled={!!heldReason || retrying}
+        disabled={!!heldReason}
+        loading={retrying}
+        icon={Play}
+        iconClassName="h-4 w-4 text-amber"
         title={heldReason ? undefined : "Force retry"}
         aria-label="Force retry"
-      >
-        {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-yellow-500" />}
-      </Button>
+      />
     </HeldReason>
   );
 }

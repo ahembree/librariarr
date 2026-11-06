@@ -6,6 +6,12 @@ import type { ProgressEmit } from "./types";
 // expensive work indefinitely, even if the client never disconnects cleanly.
 const DEFAULT_MAX_LIFETIME_MS = 10 * 60 * 1000; // 10 minutes
 
+// A run can go a long time without an event (a slow AI model turn, a big query
+// or tool call). Reverse proxies drop a response that stays idle (often
+// 60–100 s), so a `{ type: "heartbeat" }` line is written whenever nothing else
+// has been for this long. Readers ignore event types they don't know.
+export const HEARTBEAT_INTERVAL_MS = 15_000;
+
 /** zlib level, as `jsonResponse` compresses lists (see json-response.ts). */
 const GZIP_LEVEL = 3;
 
@@ -91,13 +97,25 @@ export function progressStreamResponse<T>(
             // Stream may already be closed (client navigated away).
           }
         };
-        const send = (event: unknown) => write(JSON.stringify(event) + "\n");
+        let lastWriteAt = Date.now();
+        const send = (event: unknown) => {
+          lastWriteAt = Date.now();
+          write(JSON.stringify(event) + "\n");
+        };
+        // Runs only while `run` is pending: the result line is written a piece
+        // at a time across event-loop turns, and a heartbeat must not land
+        // inside it.
+        const heartbeat = setInterval(() => {
+          if (Date.now() - lastWriteAt >= HEARTBEAT_INTERVAL_MS) send({ type: "heartbeat" });
+        }, HEARTBEAT_INTERVAL_MS);
+        const stopHeartbeat = () => clearInterval(heartbeat);
 
         // Set once the result line has begun: it is written a piece at a time,
         // so a value that fails to serialize part-way leaves it unterminated.
         let resultLineOpen = false;
         try {
           const result = await run((update) => send(update), abort.signal);
+          stopHeartbeat();
           resultLineOpen = true;
           await writeJsonYielding({ type: "result", result }, (piece) => write(piece, false));
           resultLineOpen = false;
@@ -115,6 +133,7 @@ export function progressStreamResponse<T>(
             });
           }
         } finally {
+          stopHeartbeat();
           clearTimeout(lifetimeTimer);
           // The gzip trailer, after every block written above has been read
           // out of zlib.

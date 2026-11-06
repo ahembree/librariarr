@@ -11,12 +11,14 @@ import {
 } from "recharts";
 import type { AiEvidence } from "@/lib/ai/types";
 
-const GRID = "rgba(255,255,255,0.07)";
-const AXIS = "rgba(255,255,255,0.45)";
+// Chart chrome from the theme tokens (CSS variables work in recharts' SVG
+// attributes and inline styles alike).
+const GRID = "var(--border)";
+const AXIS = "var(--muted-foreground)";
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border bg-card/40 p-3">
+    <div className="rounded-xl border bg-card/40 p-3">
       <div className="mb-2 text-xs font-medium text-muted-foreground">{title}</div>
       {children}
     </div>
@@ -36,7 +38,7 @@ function BarList({ rows }: { rows: { label: string; value: number; sub?: string 
           <div className="relative h-3.5 flex-1 overflow-hidden rounded bg-muted">
             <div
               className="absolute inset-y-0 left-0 rounded"
-              style={{ width: `${(r.value / max) * 100}%`, backgroundColor: "var(--primary)" }}
+              style={{ width: `${(r.value / max) * 100}%`, backgroundColor: "var(--chart-1)" }}
             />
           </div>
           <div className="w-24 shrink-0 text-right tabular-nums text-muted-foreground">
@@ -140,7 +142,7 @@ export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
             rows={rows.slice(0, 15).map((r) => ({
               label: r.title ?? "Unknown",
               value: r.plays,
-              sub: `plays · ${r.users}👤`,
+              sub: `plays · ${r.users} ${r.users === 1 ? "user" : "users"}`,
             }))}
           />
         </Card>
@@ -173,7 +175,7 @@ export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
       }
       return (
         <Card title={evidence.title}>
-          <div style={{ color: "var(--primary)" }}>
+          <div style={{ color: "var(--chart-1)" }}>
             <ResponsiveContainer width="100%" height={180}>
               <AreaChart data={points} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
@@ -181,12 +183,12 @@ export function EvidenceCard({ evidence }: { evidence: AiEvidence }) {
                 <YAxis tick={{ fontSize: 10, fill: AXIS }} width={40} />
                 <Tooltip
                   contentStyle={{
-                    background: "#0c0d10",
-                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "var(--popover)",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
                     fontSize: 12,
                   }}
-                  labelStyle={{ color: "#fff" }}
+                  labelStyle={{ color: "var(--foreground)" }}
                 />
                 <Area type="monotone" dataKey="total" stroke="currentColor" fill="currentColor" fillOpacity={0.18} />
               </AreaChart>

@@ -227,7 +227,7 @@ export function MediaDetailSidePanel({
 
   const matchedCriteriaSection = matchedCriteria && matchedCriteria.length > 0 ? (
     <div className="space-y-2">
-      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Matched Criteria</h4>
+      <h4 className="eyebrow">Matched Criteria</h4>
       <div className="flex flex-wrap gap-1.5">
         {matchedCriteria.map((criterion, i) => {
           const badge = (
@@ -258,7 +258,7 @@ export function MediaDetailSidePanel({
 
   const logicPreviewSection = ruleGroups && builderConfig ? (
     <div className="space-y-2">
-      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Logic Preview</h4>
+      <h4 className="eyebrow">Logic Preview</h4>
       <PseudocodePanel
         groups={ruleGroups}
         config={builderConfig}

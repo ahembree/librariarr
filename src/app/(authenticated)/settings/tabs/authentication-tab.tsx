@@ -1,6 +1,8 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/loading-button";
+import { InlineError } from "@/components/inline-error";
 import { SettingsSection } from "../components";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,7 +21,6 @@ import {
   CheckCircle,
   KeyRound,
   Link2,
-  Loader2,
   Lock,
   Save,
   XCircle,
@@ -97,7 +98,7 @@ export function AuthenticationTab({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-semibold">Authentication</h2>
+        <h2 className="text-xl font-bold font-display">Authentication</h2>
         <p className="text-sm text-muted-foreground">
           Manage how you sign into Librariarr — Plex OAuth, local username/password, or both —
           and the API keys other applications use.
@@ -117,17 +118,14 @@ export function AuthenticationTab({
                 <XCircle className="h-4 w-4" />
                 <span>No Plex account connected</span>
               </div>
-              <Button
+              <LoadingButton
                 variant="outline"
                 size="sm"
-                disabled={plexLinking}
                 onClick={onPlexLink}
+                loading={plexLinking}
               >
-                {plexLinking ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
                 {plexLinking ? "Waiting for Plex..." : "Connect Plex Account"}
-              </Button>
+              </LoadingButton>
             </div>
           )}
 
@@ -156,10 +154,7 @@ export function AuthenticationTab({
                 />
               </div>
               {plexLoginError && (
-                <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{plexLoginError}</span>
-                </div>
+                <InlineError multiline>{plexLoginError}</InlineError>
               )}
             </>
           )}
@@ -211,10 +206,7 @@ export function AuthenticationTab({
             );
           })()}
           {localAuthError && (
-            <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{localAuthError}</span>
-            </div>
+            <InlineError multiline>{localAuthError}</InlineError>
           )}
           {authInfo?.localAuthEnabled && authInfo?.localAuthHiddenBySso && (
             <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
@@ -294,10 +286,7 @@ export function AuthenticationTab({
                   </div>
                 </div>
                 {credentialsError && (
-                  <div role="alert" className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    {credentialsError}
-                  </div>
+                  <InlineError>{credentialsError}</InlineError>
                 )}
                 {credentialsSuccess && (
                   <div role="status" className="flex items-center gap-2 rounded-md bg-green/10 p-3 text-sm text-green">
@@ -305,22 +294,18 @@ export function AuthenticationTab({
                     {credentialsSuccess}
                   </div>
                 )}
-                <Button
+                <LoadingButton
                   size="sm"
                   disabled={
-                    credentialsSaving ||
                     (authInfo.passwordSignInEnabled && !credentialsForm.currentPassword) ||
                     (!credentialsForm.newUsername && !credentialsForm.newPassword)
                   }
                   onClick={onChangeCredentials}
+                  loading={credentialsSaving}
+                  icon={Save}
                 >
-                  {credentialsSaving ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="mr-2 h-4 w-4" />
-                  )}
                   Save Changes
-                </Button>
+                </LoadingButton>
               </div>
             </>
           )}
@@ -375,23 +360,21 @@ export function AuthenticationTab({
               />
             </div>
             {promptError && (
-              <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                {promptError}
-              </div>
+              <InlineError>{promptError}</InlineError>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => onSetShowCredentialPrompt(false)}>
               Cancel
             </Button>
-            <Button
-              disabled={promptSaving || !promptForm.username || !promptForm.password || !promptForm.confirmPassword}
+            <LoadingButton
+              disabled={!promptForm.username || !promptForm.password || !promptForm.confirmPassword}
               onClick={onCreateCredentialsAndEnable}
+              loading={promptSaving}
+              icon={Lock}
             >
-              {promptSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Lock className="mr-2 h-4 w-4" />}
               Create & Enable
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -738,7 +738,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                                <ShieldOff className="h-3.5 w-3.5 text-excluded shrink-0" />
                               </TooltipTrigger>
                               <TooltipContent>Excluded from lifecycle actions</TooltipContent>
                             </Tooltip>

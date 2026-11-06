@@ -1613,8 +1613,8 @@ export default function QueryPage() {
       )}
 
       {/* Query Scope */}
-      <div className="rounded-lg border bg-card/40 p-4">
-        <p className="mb-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+      <div className="rounded-xl border bg-card/40 p-4">
+        <p className="eyebrow mb-3">
           Query Scope
         </p>
         <div className="space-y-3">
@@ -1889,7 +1889,7 @@ export default function QueryPage() {
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
-                    <p className="mb-1 px-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-faint">{groupLabel}</p>
+                    <p className="eyebrow mb-1 px-1">{groupLabel}</p>
                     {groupCols.map((col) => (
                       <label key={col.id} className="flex items-center gap-2 px-1 py-1 cursor-pointer rounded hover:bg-muted/50">
                         <Checkbox
@@ -1916,7 +1916,7 @@ export default function QueryPage() {
       {hasRun && (
         <div className="space-y-3">
           {loading && queryProgress.phases.length > 0 ? (
-            <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+            <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3">
               <QueryProgress state={queryProgress} />
             </div>
           ) : (
@@ -1952,7 +1952,7 @@ export default function QueryPage() {
                 onClear={clearSelection}
               />
               {executingAction && actionProgress.phases.length > 0 && (
-                <div className="rounded-lg border border-border/60 bg-card/40 px-4 py-3">
+                <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3">
                   <QueryProgress state={actionProgress} />
                 </div>
               )}
@@ -1960,8 +1960,8 @@ export default function QueryPage() {
           )}
 
           {viewMode === "table" && results.length > 0 && columnWarnings.length > 0 && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-muted-foreground">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber-dim px-3 py-2 text-sm text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
               <div className="space-y-0.5">
                 {columnWarnings.map((w) => <p key={w}>{w}</p>)}
               </div>

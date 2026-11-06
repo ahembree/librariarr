@@ -27,7 +27,7 @@ function getCardWidthServerSnapshot(): number {
 /** Media card skeleton matching MediaCard layout */
 function MediaCardSkeleton() {
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-hidden rounded-xl border bg-card">
       <Skeleton className="aspect-2/3 w-full" />
       <div className="p-2 space-y-1.5">
         <Skeleton className="h-4 w-3/4" />

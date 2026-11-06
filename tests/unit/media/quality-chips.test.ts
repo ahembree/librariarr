@@ -122,6 +122,21 @@ describe("qualitySegments", () => {
     ]);
   });
 
+  it("draws no segment for SDR, the baseline, while the chip itself stays", () => {
+    const chips = qualityChips({ resolution: "1080", dynamicRange: "SDR", audioProfile: "Dolby Atmos" }, "video");
+    expect(chips.map((c) => c.label)).toContain("SDR");
+    expect(qualitySegments(chips, getHex)).toEqual([
+      { color: "resolution:1080P", weight: 1, label: "1080P" },
+      { color: "audioProfile:Dolby Atmos", weight: 1, label: "Dolby Atmos" },
+    ]);
+    expect(qualitySegments(qualityChips({ dynamicRange: "sdr" }, "video"), getHex)).toEqual([]);
+  });
+
+  it("keeps a segment for every dynamic range above SDR", () => {
+    const chips = qualityChips({ dynamicRange: "HDR10" }, "video");
+    expect(qualitySegments(chips, getHex)).toEqual([{ color: "dynamicRange:HDR10", weight: 1, label: "HDR10" }]);
+  });
+
   it("leaves out a chip the card's display settings hide", () => {
     const chips = qualityChips({ resolution: "1080", dynamicRange: "HDR10" }, "video");
     expect(qualitySegments(chips, getHex, (toggle) => toggle !== "dynamicRange")).toEqual([
