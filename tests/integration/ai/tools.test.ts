@@ -161,6 +161,31 @@ describe("ai/tools", () => {
     expect(data.items[0].title).toBe("Dune");
   });
 
+  it("search_media reports a show on two servers with one copy's size and plays, as the overview does", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const serverA = await createTestServer(user.id, { name: "Plex" });
+    const serverB = await createTestServer(user.id, { name: "Jellyfin" });
+    for (const [server, canonical] of [[serverA, true], [serverB, false]] as const) {
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      for (const n of [1, 2]) {
+        const ep = await createTestMediaItem(lib.id, {
+          type: "SERIES", title: `E${n}`, parentTitle: "Severance", seriesKey: "tvdb:371980",
+          seasonNumber: 1, episodeNumber: n, fileSize: BigInt(2_000_000_000), playCount: 3,
+        });
+        await prisma.mediaItem.update({ where: { id: ep.id }, data: { dedupKey: `series:tvdb:371980:s1e${n}`, dedupCanonical: canonical } });
+      }
+    }
+
+    const search = (await tools.get("search_media")!.execute(user.id, { mediaTypes: ["SERIES"] })).data as any;
+    const overview = (await tools.get("get_library_overview")!.execute(user.id, {})).data as any;
+
+    expect(search.count).toBe(1);
+    // Two 2 GB episodes and three plays each, once — not once per server.
+    expect(search.items[0]).toMatchObject({ title: "Severance", type: "SERIES", sizeGB: 4, playCount: 6 });
+    expect(search.items[0].sizeGB).toBe(overview.storageGB.series);
+  });
+
   it("search_media sorts fileSize numerically, not lexicographically", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

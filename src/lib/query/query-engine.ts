@@ -268,6 +268,7 @@ interface SeriesGroupRow {
 async function groupSeriesEpisodes(
   where: Prisma.MediaItemWhereInput,
   preFilteredIds?: string[],
+  options: ExecuteQueryOptions = {},
 ): Promise<Array<Record<string, unknown>>> {
   let ids: string[];
 
@@ -290,6 +291,12 @@ async function groupSeriesEpisodes(
   }
 
   if (ids.length === 0) return [];
+
+  // One copy of each episode, when asked: the matched copies of one episode
+  // (one `dedupKey`) on several servers reduced to the canonical one, else the
+  // lowest id. Every figure below then counts the episode once, as the
+  // deduplicated stats do; `servers` is still read over every matched copy.
+  const countedIds = options.oneCopyPerEpisode ? await oneCopyOfEachEpisode(ids) : ids;
 
   // Step 2: Group by parentTitle via raw SQL
   const rows = await prisma.$queryRaw<SeriesGroupRow[]>`
@@ -319,10 +326,11 @@ async function groupSeriesEpisodes(
     FROM "MediaItem" mi
     JOIN "Library" l ON mi."libraryId" = l.id
     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-    WHERE mi.id = ANY(${ids})
+    WHERE mi.id = ANY(${countedIds})
       AND mi."seriesKey" IS NOT NULL
     GROUP BY mi."seriesKey"
   `;
+  const allServers = countedIds === ids ? null : await serversBySeries(ids);
 
   return rows.map((r) => ({
     id: r.id,
@@ -365,11 +373,54 @@ async function groupSeriesEpisodes(
     matchedEpisodes: r.matchedEpisodes,
     seasonCount: r.seasonCount,
     // By name, ties by id — the order the library listings use.
-    servers: [...r.servers].sort(
+    servers: [...(allServers?.get(r.group_key) ?? r.servers)].sort(
       (a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId),
     ),
     library: null,
   }));
+}
+
+/**
+ * Of `ids`, one per episode: where several share a `dedupKey` (copies of one
+ * episode on several servers), the canonical copy, else the lowest id. A row
+ * with no key stands for itself.
+ */
+async function oneCopyOfEachEpisode(ids: string[]): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT DISTINCT ON (COALESCE(mi."dedupKey", mi.id)) mi.id
+    FROM "MediaItem" mi
+    WHERE mi.id = ANY(${ids})
+    ORDER BY COALESCE(mi."dedupKey", mi.id), mi."dedupCanonical" DESC, mi.id
+  `;
+  return rows.map((r) => r.id);
+}
+
+/** Every server holding one of `ids`, per show (`seriesKey`). */
+async function serversBySeries(ids: string[]): Promise<Map<string, SeriesGroupRow["servers"]>> {
+  const rows = await prisma.$queryRaw<{ group_key: string; servers: SeriesGroupRow["servers"] }[]>`
+    SELECT mi."seriesKey" as group_key,
+      jsonb_agg(DISTINCT jsonb_build_object('serverId', ms.id, 'serverName', ms.name, 'serverType', ms.type)) as servers
+    FROM "MediaItem" mi
+    JOIN "Library" l ON mi."libraryId" = l.id
+    JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
+    WHERE mi.id = ANY(${ids})
+      AND mi."seriesKey" IS NOT NULL
+    GROUP BY mi."seriesKey"
+  `;
+  return new Map(rows.map((r) => [r.group_key, r.servers]));
+}
+
+/** How `executeQuery` folds what it matched. */
+export interface ExecuteQueryOptions {
+  /**
+   * A grouped show row counts each episode once: of an episode's matched
+   * copies on several servers (one `dedupKey`), only the canonical one (else
+   * the lowest id) feeds the show's size, plays, episode and season counts and
+   * dates. The Query page lists every copy and sums them; the AI assistant's
+   * `search_media`, whose figures must agree with the deduplicated stats
+   * (`computeLibraryStats`' `seriesSize`), asks for this when dedup is on.
+   */
+  oneCopyPerEpisode?: boolean;
 }
 
 /**
@@ -385,6 +436,7 @@ export async function executeQuery(
   page: number = 1,
   limit: number = 50,
   onProgress?: ProgressEmit,
+  options: ExecuteQueryOptions = {},
 ): Promise<QueryResult> {
   // Arr criteria are judged per media type against that type's selected Arr
   // server. A type with none (or a disabled one) has no Arr data, so a rule
@@ -406,12 +458,12 @@ export async function executeQuery(
         };
       }
       const result = await runQueryDefinition(
-        { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress,
+        { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress, options,
       );
       return warnings.length > 0 ? { ...result, warnings: [...(result.warnings ?? []), ...warnings] } : result;
     }
   }
-  return runQueryDefinition(definition, userId, page, limit, onProgress);
+  return runQueryDefinition(definition, userId, page, limit, onProgress, options);
 }
 
 /** The media types of the enabled libraries a query over `serverIds` searches. */
@@ -432,7 +484,8 @@ async function runQueryDefinition(
   userId: string,
   page: number,
   limit: number,
-  onProgress?: ProgressEmit,
+  onProgress: ProgressEmit | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<QueryResult> {
   const { mediaTypes, serverIds: requestedServerIds, groups, sortBy, sortOrder } = definition;
 
@@ -539,11 +592,11 @@ async function runQueryDefinition(
   // For series-aggregate rules: aggregate episodes into series first, then evaluate
   let groupedShowsPromise: Promise<Array<Record<string, unknown>>>;
   if (hasSeriesAggregateRules(groups)) {
-    groupedShowsPromise = aggregateSeriesAndFilter(effectiveServerIds, groups, arrDataByType, seerrDataByType);
+    groupedShowsPromise = aggregateSeriesAndFilter(effectiveServerIds, groups, arrDataByType, seerrDataByType, options);
   } else if (needsFullInMemoryEval) {
-    groupedShowsPromise = filterAndGroupSeriesEpisodes(where, groups, arrDataByType, seerrDataByType);
+    groupedShowsPromise = filterAndGroupSeriesEpisodes(where, groups, arrDataByType, seerrDataByType, options);
   } else {
-    groupedShowsPromise = groupSeriesEpisodes(where);
+    groupedShowsPromise = groupSeriesEpisodes(where, undefined, options);
   }
 
   const [flatItems, groupedShows] = await Promise.all([
@@ -683,15 +736,16 @@ async function computeAggregateSurvivingEpisodeIds(
 async function aggregateSeriesAndFilter(
   effectiveServerIds: string[],
   groups: QueryGroup[],
-  arrDataByType?: Record<string, ArrDataMap>,
-  seerrDataByType?: Record<string, SeerrDataMap>,
+  arrDataByType: Record<string, ArrDataMap> | undefined,
+  seerrDataByType: Record<string, SeerrDataMap> | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<Array<Record<string, unknown>>> {
   const survivingIds = await computeAggregateSurvivingEpisodeIds(
     effectiveServerIds, groups, arrDataByType, seerrDataByType,
   );
   if (survivingIds.length === 0) return [];
   // `where` is ignored when preFilteredIds is supplied (it queries by id).
-  return groupSeriesEpisodes({}, survivingIds);
+  return groupSeriesEpisodes({}, survivingIds, options);
 }
 
 /**
@@ -794,8 +848,9 @@ async function executeEpisodesWithSeriesAggregate(
 async function filterAndGroupSeriesEpisodes(
   where: Prisma.MediaItemWhereInput,
   groups: QueryGroup[],
-  arrDataByType?: Record<string, ArrDataMap>,
-  seerrDataByType?: Record<string, SeerrDataMap>,
+  arrDataByType: Record<string, ArrDataMap> | undefined,
+  seerrDataByType: Record<string, SeerrDataMap> | undefined,
+  options: ExecuteQueryOptions,
 ): Promise<Array<Record<string, unknown>>> {
   const seriesWhere: Prisma.MediaItemWhereInput = {
     ...where,
@@ -828,7 +883,7 @@ async function filterAndGroupSeriesEpisodes(
 
   if (survivingIds.length === 0) return [];
 
-  return groupSeriesEpisodes(where, survivingIds);
+  return groupSeriesEpisodes(where, survivingIds, options);
 }
 
 /** Execute the ungrouped query path */

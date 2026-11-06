@@ -349,10 +349,17 @@ const searchMedia: AiTool = {
     const limit = clampInt(args.limit, 25, 1, 50);
     // When multi-server dedup is enabled, over-fetch and collapse rows that
     // share a dedupKey (the same title held on more than one server) so the
-    // assistant's counts match every other tool — executeQuery never dedups.
-    // Items without a dedupKey (null) are always kept.
+    // assistant's counts match every other tool — executeQuery never dedups
+    // rows. A show row has no dedupKey (it stands for the show on every
+    // server), so its figures are asked of one copy per episode instead
+    // (`oneCopyPerEpisode`): summed over every server's copy, a show on two
+    // servers reported about twice its size and plays, against the overview's
+    // `seriesSize` and the system prompt's "unique titles". Items without a
+    // dedupKey (null) are always kept.
     const fetchLimit = s.dedupEnabled ? Math.min(limit * 3, 150) : limit;
-    const result = await executeQuery(definition, userId, 1, fetchLimit);
+    const result = await executeQuery(definition, userId, 1, fetchLimit, undefined, {
+      oneCopyPerEpisode: s.dedupEnabled,
+    });
 
     let rows = result.items as Record<string, unknown>[];
     let truncated = false;
