@@ -232,22 +232,26 @@ const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggrega
 // Every per-member field is a criterion of one episode or track, which is not
 // allowed at series or artist scope at all (`groupScopeViolation`,
 // group-scope.ts — `GROUP_SCOPE_BLOCKED_FIELDS` holds every field this file
-// does not answer as a group value, the sync keeping none of them alike across
-// a show's episodes or an artist's tracks): saving refuses them, detection
-// skips a rule set holding them, and the group-scope engines match nothing for
-// one. So a rule set the gate admits reads no per-member field, and a group is
-// evaluated once (`readsMemberValues` false); judging through the members
-// stays for the rule sets the gate holds and for Test Media's explanations.
+// answers through any one member, the sync keeping none of them alike across a
+// show's episodes or an artist's tracks): saving refuses them, detection skips
+// a rule set holding them, and the group-scope engines match nothing for one.
+// So a rule set the gate admits reads no per-member field (`readsMemberValues`
+// false); judging through any member stays for the rule sets the gate holds.
 // `MEMBER_VALUE_COLUMNS` still lists every per-item column: a match stores and
 // reports the values of the member it matched through.
+//
+// The cross-system fields are a third kind (`isEveryMemberField`): each
+// episode or track has its own value, and a group answers them through EVERY
+// member — it matches only when the rule holds for each member read with its
+// own values for them — so no one member decides for the group, and the gate
+// allows them at group scope.
 
 /**
  * Fields a group record answers with ONE value for the whole show or artist
  * (series scope, artist scope): its name (`title`, and `parentTitle` through
  * `withGroupParentTitle`), the play total, the latest play, the earliest
  * addition, the summed size, everyone who watched any member, the union of the
- * members' streams (stream fields and stream queries), the cross-system values
- * folded across the members (`foldCrossSystemData`), the group's own external
+ * members' streams (stream fields and stream queries), the group's own external
  * ids (its Arr identity, which the Arr and Seerr lookups key on), the series
  * aggregates and every Arr or Seerr field (one record per group).
  */
@@ -263,19 +267,38 @@ const GROUP_VALUE_FIELDS = new Set([
 ]);
 
 /**
- * Whether a group record answers `field` with one value for the whole group;
- * every other field is answered per member (`memberValuesOf`).
+ * Whether a group record answers `field` with one value for the whole group.
+ * Every other field is answered per member: through every member for the
+ * cross-system fields (`isEveryMemberField`), through any one member
+ * (`memberValuesOf`) for the rest.
  */
 export function isGroupValueField(field: string): boolean {
   return (
     GROUP_VALUE_FIELDS.has(field) ||
     isStreamField(field) ||
     isStreamQueryField(field) ||
-    isCrossSystemField(field) ||
     isSeriesAggregateField(field) ||
     isArrField(field) ||
     isSeerrField(field)
   );
+}
+
+/**
+ * Whether a group answers `field` through EVERY member: the cross-system fields
+ * — Matched By Rule Set, Has Pending Action, Server Count. Each episode or
+ * track has its own (a rule set matched it, an action is pending on it, it is
+ * on so many servers). Folded into one value for the group — matched if any
+ * member was, pending if any was, the highest count — they let one episode
+ * decide for the whole show: "Matched By Rule Set = X" with Delete from Sonarr
+ * deleted a show one episode of which X matched. A group matches only when the
+ * rule holds for every member, each read with its own values for these fields
+ * and the group's values for everything else (`matchGroupThroughMembers`). The
+ * protective forms read as they did folded: "NOT Matched By Rule Set = Keep"
+ * still leaves out a show any episode of which Keep matched, and "Has Pending
+ * Action = false" one with any pending episode.
+ */
+export function isEveryMemberField(field: string): boolean {
+  return isCrossSystemField(field);
 }
 
 /** The record key a condition field reads where it differs from the field's name. */
@@ -283,10 +306,12 @@ const FIELD_COLUMN: Record<string, string> = { genre: "genres", country: "countr
 
 /**
  * The columns of a member a group record takes from that member: those of every
- * condition field the group does not answer as a whole (`isGroupValueField`).
+ * condition field the group answers through any one member — neither as a
+ * whole (`isGroupValueField`) nor through every member (`isEveryMemberField`,
+ * whose values are not columns of the member's row).
  */
 export const MEMBER_VALUE_COLUMNS: readonly string[] = CONDITION_FIELDS
-  .filter((f) => !isGroupValueField(f.value))
+  .filter((f) => !isGroupValueField(f.value) && !isEveryMemberField(f.value))
   .map((f) => FIELD_COLUMN[f.value] ?? f.value);
 
 /** A member's own values for the per-member fields (`MEMBER_VALUE_COLUMNS`). */
@@ -300,11 +325,14 @@ export function memberValuesOf(member: object): Record<string, unknown> {
 }
 
 /**
- * Whether any enabled rule reads a field a group answers per member. When none
- * does, every member sees the same record, and a group is evaluated once.
+ * Whether any enabled rule reads a field a group answers through any one of
+ * its members (`MEMBER_VALUE_COLUMNS`). When none does, every member sees the
+ * same values for those, and a group is evaluated once — or, for a rule
+ * reading a cross-system field, once for each member's own values of those
+ * (`isEveryMemberField`).
  */
 export function readsMemberValues(groups: ConditionGroup[]): boolean {
-  return anyEnabled(groups, (rule) => !isGroupValueField(rule.field));
+  return anyEnabled(groups, (rule) => !isGroupValueField(rule.field) && !isEveryMemberField(rule.field));
 }
 
 /** What `matchGroupThroughMembers` selected a group on. */
@@ -313,17 +341,34 @@ export interface GroupSelection {
   record: Record<string, unknown>;
   /** That member's per-member values (empty when the group was evaluated once). */
   memberValues: Record<string, unknown>;
+  /**
+   * When the group was judged through every member (`everyMember`): each
+   * member's own values for those fields, lowest id first. Also attached to
+   * `record` (`withEveryMemberValues`), which the matched criteria and values
+   * are reported from; a caller that copies the record attaches them again.
+   */
+  everyMemberValues?: ReadonlyArray<Record<string, unknown>>;
 }
 
 /**
- * Whether a group matches, and through which member: the first member, lowest
- * id first (`compareIds`), for which the group record carrying that member's
- * own per-member values (`memberValuesOf`) satisfies the rule, or `null` when
- * none does. Shared by the series- and artist-scope engines and Test Media.
+ * Whether a group matches, and through which member. Shared by the series-
+ * and artist-scope engines and Test Media.
  *
- * With `perMember` false (`readsMemberValues`: no rule reads a per-member
- * field) every member would see the same record, so the group record is
- * evaluated once, as it is.
+ * - With `everyMember` — each member's own values for the fields a group
+ *   answers through every member (`isEveryMemberField`, the cross-system
+ *   fields), which the caller passes when a rule reads one: the group matches
+ *   only when the rule holds for EVERY member, each seen as the group record
+ *   carrying that member's own values for those fields. With `perMember` too
+ *   (a rule set the gate holds), each member carries its per-member values as
+ *   well — the stricter reading. A group with no member matches nothing. The
+ *   selection is the group record (with the first member's per-member values
+ *   when `perMember`), carrying every member's values (`everyMemberValues`).
+ * - Otherwise: the first member, lowest id first (`compareIds`), for which the
+ *   group record carrying that member's own per-member values
+ *   (`memberValuesOf`) satisfies the rule, or `null` when none does. With
+ *   `perMember` false (`readsMemberValues`: no rule reads a per-member field)
+ *   every member would see the same record, so the group record is evaluated
+ *   once, as it is.
  *
  * The caller stores and reports the selection — the group carrying the
  * selected member's values — so the match shows the values it was selected
@@ -334,7 +379,9 @@ export function matchGroupThroughMembers<M extends { id: string }>(
   members: readonly M[],
   matches: (record: Record<string, unknown>) => boolean,
   perMember: boolean,
+  everyMember?: (member: M) => Record<string, unknown>,
 ): GroupSelection | null {
+  if (everyMember) return matchGroupThroughEveryMember(group, members, matches, perMember, everyMember);
   if (!perMember) return matches(group) ? { record: group, memberValues: {} } : null;
   for (const member of [...members].sort((a, b) => compareIds(a.id, b.id))) {
     const memberValues = memberValuesOf(member);
@@ -342,6 +389,43 @@ export function matchGroupThroughMembers<M extends { id: string }>(
     if (matches(record)) return { record, memberValues };
   }
   return null;
+}
+
+/** `matchGroupThroughMembers` with `everyMember`: the rule must hold for every member. */
+function matchGroupThroughEveryMember<M extends { id: string }>(
+  group: Record<string, unknown>,
+  members: readonly M[],
+  matches: (record: Record<string, unknown>) => boolean,
+  perMember: boolean,
+  everyMember: (member: M) => Record<string, unknown>,
+): GroupSelection | null {
+  const ordered = [...members].sort((a, b) => compareIds(a.id, b.id));
+  if (ordered.length === 0) return null;
+  const everyMemberValues = ordered.map(everyMember);
+  // Without per-member values, members with the same cross-system values see
+  // the same record, so each distinct set is evaluated once: most episodes of
+  // a show share theirs.
+  const verdicts = new Map<string, boolean>();
+  for (const [i, member] of ordered.entries()) {
+    const values = everyMemberValues[i];
+    if (perMember) {
+      if (!matches({ ...group, ...memberValuesOf(member), ...values })) return null;
+      continue;
+    }
+    const key = JSON.stringify(values);
+    let passes = verdicts.get(key);
+    if (passes === undefined) {
+      passes = matches({ ...group, ...values });
+      verdicts.set(key, passes);
+    }
+    if (!passes) return null;
+  }
+  const memberValues = perMember ? memberValuesOf(ordered[0]) : {};
+  return {
+    record: withEveryMemberValues({ ...group, ...memberValues }, everyMemberValues),
+    memberValues,
+    everyMemberValues,
+  };
 }
 
 /**
@@ -427,6 +511,31 @@ export function withEvaluatedRecord<T extends object>(record: T, evaluated: Reco
 /** The record attached by `withEvaluatedRecord`, if any. */
 export function evaluatedRecordOf(record: object): Record<string, unknown> | undefined {
   return (record as { [EVALUATED_AS]?: Record<string, unknown> })[EVALUATED_AS];
+}
+
+// From the global symbol registry, as `EVALUATED_AS`.
+const EVERY_MEMBER_VALUES = Symbol.for("librariarr.conditions.everyMemberValues");
+
+/**
+ * Attach to a group's record its members' own values for the fields it is
+ * judged on through every member (`isEveryMemberField`, the cross-system
+ * fields): the group has no one value for them, so the matched criteria and
+ * actual values (`getMatchedCriteriaForItems`, `getActualValuesForAllRules`)
+ * report such a criterion as matched only when it holds for every member, and
+ * its value as the members' values. Non-enumerable, as `withEvaluatedRecord`:
+ * never stored or sent. Absent `values` leave the record as it is.
+ */
+export function withEveryMemberValues<T extends object>(
+  record: T,
+  values: ReadonlyArray<Record<string, unknown>> | undefined,
+): T {
+  if (values) Object.defineProperty(record, EVERY_MEMBER_VALUES, { value: values, enumerable: false, configurable: true });
+  return record;
+}
+
+/** The values attached by `withEveryMemberValues`, if any. */
+export function everyMemberValuesOf(record: object): ReadonlyArray<Record<string, unknown>> | undefined {
+  return (record as { [EVERY_MEMBER_VALUES]?: ReadonlyArray<Record<string, unknown>> })[EVERY_MEMBER_VALUES];
 }
 
 /**

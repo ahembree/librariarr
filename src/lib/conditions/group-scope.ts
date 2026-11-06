@@ -14,8 +14,10 @@
  *    or track without guaranteeing the show's or artist's members agree
  *    (`GROUP_SCOPE_BLOCKED_FIELDS`). What stays is what the group answers as a
  *    whole — its name, play total, latest play, earliest addition, summed size,
- *    watchers, the folded cross-system values, the series aggregates, every
- *    Arr and Seerr field — and, for a show, its external ids.
+ *    watchers, the series aggregates, every Arr and Seerr field, and, for a
+ *    show, its external ids — and the cross-system fields, which the group
+ *    answers through EVERY member (`isEveryMemberField`): it matches only when
+ *    the rule holds for each member's own value, so none decides for the rest.
  *  - **Member judgement** — the scope off, so each episode or track is judged
  *    on its own, with an armed action that nevertheless acts on the whole Arr
  *    record (`WHOLE_RECORD_ACTION_TYPES`, Arr tags, a Lidarr file delete's

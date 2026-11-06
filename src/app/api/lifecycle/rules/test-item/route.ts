@@ -17,7 +17,7 @@ import {
   hasCustomFormatScoreRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
-import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData, crossSystemValuesOf } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrRecordForPreview } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -27,7 +27,7 @@ import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
-import { withGroupParentTitle } from "@/lib/conditions/series-aggregates";
+import { withEveryMemberValues, withGroupParentTitle } from "@/lib/conditions/series-aggregates";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
@@ -154,6 +154,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
   let group: Record<string, unknown> | null = null;
   // The show's episodes or the artist's tracks, which a group is judged through.
   let groupMembers: Array<{ id: string }> = [];
+  // Each member's own cross-system values, when a rule reads one: a group is
+  // judged through every member's (`isEveryMemberField`), as detection does.
+  let everyMember: ((member: { id: string }) => Record<string, unknown>) | undefined;
 
   // Series/music scope: aggregate all episodes/tracks of this series/artist
   if (groupScope) {
@@ -248,11 +251,16 @@ export const POST = withSession(async (session, request: NextRequest) => {
       )
     );
 
+    // A forced-aggregate run reads the tested episode's own cross-system
+    // values (`single`); a group, each member's.
+    const memberCross = aggregateForced ? undefined : await crossSystemFor(allItems.map((ep) => ep.id));
+    if (memberCross) everyMember = (member) => ({ ...crossSystemValuesOf(memberCross, member.id) });
+
     // The show or artist, named by `title`; "Artist / Series" reads that name
-    // too (withGroupParentTitle), as detection evaluates a group.
+    // too (withGroupParentTitle), as detection evaluates a group. It carries
+    // no cross-system values of its own: those are each member's.
     group = withGroupParentTitle({
       ...item,
-      ...foldCrossSystemData(allItems.map((ep) => ep.id), await crossSystemFor(allItems.map((ep) => ep.id))),
       title: groupField,
       ...(type === "SERIES"
         ? { summary: item.parentSummary ?? item.summary }
@@ -318,13 +326,17 @@ export const POST = withSession(async (session, request: NextRequest) => {
   if (group && !aggregateForced) {
     // Group scope: the show or artist matches when one member, seen as the
     // group carrying its own per-member values, satisfies the rules — the
-    // first such member (lowest id) reported, as detection stores it. When
-    // none does, the tested item's own values are reported.
+    // first such member (lowest id) reported, as detection stores it — and,
+    // for a cross-system criterion, only when every member does with its own
+    // cross-system values, which are reported per member either way. When it
+    // does not match, the group's own values are reported.
     const selection = evaluateGroupThroughMembers(
-      typedRules, group, groupMembers, hasMemberValueRules(typedRules), arrMeta, seerrMeta,
+      typedRules, group, groupMembers, hasMemberValueRules(typedRules), arrMeta, seerrMeta, everyMember,
     );
     matches = selection !== null;
-    if (selection) serialized = selection.record;
+    serialized = selection
+      ? selection.record
+      : withEveryMemberValues({ ...group }, everyMember ? groupMembers.map(everyMember) : undefined);
   } else {
     // A single item, or — forced aggregate — this episode on its own with the
     // series aggregates injected: the check detection makes per episode

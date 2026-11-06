@@ -20,7 +20,7 @@ vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
 }));
 
-import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { crossSystemValuesOf, fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 
 describe("fetchCrossSystemData", () => {
   beforeEach(() => {
@@ -347,5 +347,19 @@ describe("foldCrossSystemData", () => {
 
   it("is undefined when no cross-system data was fetched", () => {
     expect(foldCrossSystemData(["e1"], undefined)).toBeUndefined();
+  });
+});
+
+describe("crossSystemValuesOf", () => {
+  const data = new Map([
+    ["e1", { serverCount: 2, matchedRuleSets: ["Keep"], hasPendingAction: true }],
+  ]);
+
+  it("reads one member's own values, which a show or artist is judged through", () => {
+    expect(crossSystemValuesOf(data, "e1")).toEqual({ serverCount: 2, matchedRuleSets: ["Keep"], hasPendingAction: true });
+  });
+
+  it("reads an id never fetched with fetchCrossSystemData's defaults", () => {
+    expect(crossSystemValuesOf(data, "missing")).toEqual({ serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
   });
 });

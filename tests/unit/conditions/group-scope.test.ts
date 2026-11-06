@@ -18,7 +18,7 @@
  * show or artist or on the matched members only.
  */
 import { describe, it, expect } from "vitest";
-import { CONDITION_FIELDS, STREAM_QUERY_FIELDS, isGroupValueField } from "@/lib/conditions";
+import { CONDITION_FIELDS, STREAM_QUERY_FIELDS, isEveryMemberField, isGroupValueField } from "@/lib/conditions";
 import {
   GROUP_SCOPE_BLOCKED_FIELDS,
   WHOLE_RECORD_ACTION_TYPES,
@@ -47,6 +47,7 @@ const ITS_OWN_ITEM = "the episode's or track's own, never copied from the show o
 const ARR = "read from the show's or artist's one Arr record";
 const SEERR = "read from the show's one Seerr request record";
 const AGGREGATE = "computed for the whole show from all its episodes";
+const EVERY_MEMBER = "each member's own, and the group matches only when the rule holds for every member's";
 
 /** Every condition field at series and artist scope. */
 const AT_GROUP_SCOPE: Record<string, Row> = {
@@ -96,10 +97,10 @@ const AT_GROUP_SCOPE: Record<string, Row> = {
   fileSize: both("allowed", "the group's summed size"),
   container: both("blocked", ITS_OWN_FILE),
   duration: both("blocked", ITS_OWN_FILE),
-  // Cross-system
-  serverCount: both("allowed", "folded across the members"),
-  matchedByRuleSet: both("allowed", "folded across the members"),
-  hasPendingAction: both("allowed", "folded across the members"),
+  // Cross-system: each member's own, but the group must hold for every member
+  serverCount: both("allowed", EVERY_MEMBER),
+  matchedByRuleSet: both("allowed", EVERY_MEMBER),
+  hasPendingAction: both("allowed", EVERY_MEMBER),
   // External ids
   hasExternalId: {
     SERIES: "allowed",
@@ -202,13 +203,18 @@ describe("the group-scope field classification", () => {
     expect(isBlockedAtGroupScope("hasExternalId", "MUSIC")).toBe(true);
   });
 
-  it("blocks every field a group answers per member, so nothing admitted varies between members", () => {
-    // `matchGroupThroughMembers` reads each member's own values only for the
-    // fields a group does not answer as a whole; with all of them blocked, a
-    // rule set the gate admits is evaluated once per show or artist.
+  it("blocks every field a group answers through any one member, so no one member decides", () => {
+    // `matchGroupThroughMembers` matches a group through ANY member for the
+    // fields it answers neither as a whole nor through every member; with all
+    // of them blocked, a rule set the gate admits never lets one member decide.
+    // The cross-system fields it admits are answered through EVERY member.
     for (const type of ["SERIES", "MUSIC"] as const) {
       for (const f of CONDITION_FIELDS) {
-        if (!isGroupValueField(f.value)) expect(isBlockedAtGroupScope(f.value, type), `${type} ${f.value}`).toBe(true);
+        if (isEveryMemberField(f.value)) {
+          expect(isBlockedAtGroupScope(f.value, type), `${type} ${f.value}`).toBe(false);
+        } else if (!isGroupValueField(f.value)) {
+          expect(isBlockedAtGroupScope(f.value, type), `${type} ${f.value}`).toBe(true);
+        }
       }
     }
   });

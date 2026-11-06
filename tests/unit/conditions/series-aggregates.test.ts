@@ -13,6 +13,9 @@ import {
   matchGroupThroughMembers,
   withEvaluatedRecord,
   evaluatedRecordOf,
+  isEveryMemberField,
+  withEveryMemberValues,
+  everyMemberValuesOf,
   type AggregableEpisode,
 } from "@/lib/conditions/series-aggregates";
 import { CONDITION_FIELDS } from "@/lib/conditions/fields";
@@ -347,7 +350,7 @@ describe("group values and member values", () => {
   // show only when its lowest-id episode was 4K. A new condition field has to
   // be placed on one side or the other here.
   it("answers every per-item field per member and the group's own values once", () => {
-    const perMember = CONDITION_FIELDS.map((f) => f.value).filter((f) => !isGroupValueField(f));
+    const perMember = CONDITION_FIELDS.map((f) => f.value).filter((f) => !isGroupValueField(f) && !isEveryMemberField(f));
     expect(perMember.sort()).toEqual([
       "albumTitle", "aspectRatio", "audienceRating", "audioBitrate", "audioChannels", "audioCodec",
       "audioProfile", "audioSamplingRate", "container", "contentRating", "country", "duration",
@@ -358,11 +361,27 @@ describe("group values and member values", () => {
     for (const field of [
       "title", "parentTitle", "playCount", "lastPlayedAt", "addedAt", "fileSize", "watchedByUser",
       "audioLanguage", "subtitleLanguage", "streamAudioCodec", "audioStreamCount", "subtitleStreamCount",
-      "serverCount", "matchedByRuleSet", "hasPendingAction", "hasExternalId",
+      "hasExternalId",
       "availableEpisodeCount", "seriesLastPlayedAt", "arrTag", "arrMonitored", "seerrRequested", "sqCodec",
     ]) {
       expect(isGroupValueField(field), field).toBe(true);
+      expect(isEveryMemberField(field), field).toBe(false);
     }
+  });
+
+  it("answers the cross-system fields through every member, never as one folded value for the group", () => {
+    // Folded — matched if any episode was, pending if any was, the highest
+    // count — one episode decided for the whole show.
+    expect(CONDITION_FIELDS.map((f) => f.value).filter(isEveryMemberField).sort()).toEqual([
+      "hasPendingAction", "matchedByRuleSet", "serverCount",
+    ]);
+    for (const field of ["serverCount", "matchedByRuleSet", "hasPendingAction"]) {
+      expect(isGroupValueField(field), field).toBe(false);
+    }
+    // Not member columns: the values come from fetchCrossSystemData, per member.
+    expect(MEMBER_VALUE_COLUMNS).not.toContain("serverCount");
+    expect(MEMBER_VALUE_COLUMNS).not.toContain("matchedByRuleSet");
+    expect(MEMBER_VALUE_COLUMNS).not.toContain("hasPendingAction");
   });
 
   it("takes each per-member field from a column a media item has", () => {
@@ -438,6 +457,84 @@ describe("matchGroupThroughMembers", () => {
     expect(matchGroupThroughMembers(group, members, matches, false)).toEqual({ record: group, memberValues: {} });
     expect(matches).toHaveBeenCalledTimes(1);
     expect(matches).toHaveBeenCalledWith(group);
+  });
+});
+
+describe("matchGroupThroughMembers through every member (cross-system fields)", () => {
+  const group = { id: "e1", title: "Show", parentTitle: "Show", playCount: 0 };
+  const members = [{ id: "e3" }, { id: "e1" }, { id: "e2" }];
+  const cross: Record<string, Record<string, unknown>> = {
+    e1: { serverCount: 2, matchedRuleSets: ["Keep"], hasPendingAction: false },
+    e2: { serverCount: 1, matchedRuleSets: [], hasPendingAction: false },
+    e3: { serverCount: 2, matchedRuleSets: ["Keep"], hasPendingAction: true },
+  };
+  const everyMember = (m: { id: string }) => cross[m.id];
+  const keptBy = (record: Record<string, unknown>) => (record.matchedRuleSets as string[]).includes("Keep");
+
+  it("matches only when the rule holds for every member's own values: one member never decides", () => {
+    // Folded, e1 and e3 made the show "matched by Keep" and "on 2 servers".
+    expect(matchGroupThroughMembers(group, members, keptBy, false, everyMember)).toBeNull();
+    expect(matchGroupThroughMembers(group, members, (r) => (r.serverCount as number) >= 2, false, everyMember)).toBeNull();
+    expect(matchGroupThroughMembers(group, members, (r) => r.hasPendingAction === true, false, everyMember)).toBeNull();
+    expect(matchGroupThroughMembers(group, [{ id: "e1" }, { id: "e3" }], keptBy, false, everyMember)).not.toBeNull();
+  });
+
+  it("keeps the protective forms: excluded when any member is", () => {
+    const notKept = (record: Record<string, unknown>) => !keptBy(record);
+    const notPending = (record: Record<string, unknown>) => record.hasPendingAction === false;
+    expect(matchGroupThroughMembers(group, members, notKept, false, everyMember)).toBeNull();
+    expect(matchGroupThroughMembers(group, members, notPending, false, everyMember)).toBeNull();
+    expect(matchGroupThroughMembers(group, [{ id: "e2" }], notKept, false, everyMember)).not.toBeNull();
+    expect(matchGroupThroughMembers(group, [{ id: "e1" }, { id: "e2" }], notPending, false, everyMember)).not.toBeNull();
+  });
+
+  it("reads each member's own values over the group's, and the group's for everything else", () => {
+    const seen: Array<Record<string, unknown>> = [];
+    matchGroupThroughMembers({ ...group, serverCount: 9 }, members, (record) => { seen.push(record); return true; }, false, everyMember);
+    expect(seen.map((r) => [r.title, r.playCount, r.serverCount, r.hasPendingAction])).toEqual([
+      ["Show", 0, 2, false], ["Show", 0, 1, false], ["Show", 0, 2, true],
+    ]);
+  });
+
+  it("evaluates each distinct set of member values once", () => {
+    const matches = vi.fn(() => true);
+    const same = () => ({ serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
+    matchGroupThroughMembers(group, members, matches, false, same);
+    expect(matches).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the group carrying every member's values, lowest id first, for reporting", () => {
+    const selection = matchGroupThroughMembers(group, members, () => true, false, everyMember)!;
+    expect(selection.record).toEqual(group);
+    expect(selection.memberValues).toEqual({});
+    expect(selection.everyMemberValues).toEqual([cross.e1, cross.e2, cross.e3]);
+    expect(everyMemberValuesOf(selection.record)).toEqual([cross.e1, cross.e2, cross.e3]);
+  });
+
+  it("matches no group without members", () => {
+    expect(matchGroupThroughMembers(group, [], () => true, false, everyMember)).toBeNull();
+  });
+
+  it("with per-member values too (a rule set the gate holds), requires every member to pass with all of its own", () => {
+    const withRes = [{ id: "e1", resolution: "4k" }, { id: "e2", resolution: "1080" }];
+    const fourKOnAServer = (r: Record<string, unknown>) => r.resolution === "4k" && ((r.serverCount as number | undefined) ?? 1) >= 1;
+    // e1 alone passes; e2 does not, so the group does not match — the stricter reading.
+    expect(matchGroupThroughMembers(group, withRes, fourKOnAServer, true)).not.toBeNull();
+    expect(matchGroupThroughMembers(group, withRes, fourKOnAServer, true, everyMember)).toBeNull();
+    const selection = matchGroupThroughMembers(group, withRes, (r) => r.resolution !== "720", true, everyMember)!;
+    expect(selection.memberValues).toEqual({ resolution: "4k" });
+  });
+});
+
+describe("withEveryMemberValues", () => {
+  it("carries the members' values without a spread or JSON ever copying them", () => {
+    const values = [{ serverCount: 1 }];
+    const record = withEveryMemberValues({ id: "e1", title: "Show" }, values);
+    expect(everyMemberValuesOf(record)).toBe(values);
+    expect(Object.keys(record)).toEqual(["id", "title"]);
+    expect(everyMemberValuesOf({ ...record })).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(record))).toEqual({ id: "e1", title: "Show" });
+    expect(everyMemberValuesOf(withEveryMemberValues({ id: "x" }, undefined))).toBeUndefined();
   });
 });
 
