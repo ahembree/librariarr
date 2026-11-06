@@ -27,6 +27,8 @@ Series are grouped by show identity, not just by title. Drill down into:
 - **Seasons** — View seasons within a series with episode counts
 - **Episodes** — Individual episodes with per-episode metadata and quality info
 
+Episodes with no season number are listed under season 0 (**Specials**), together with any episodes numbered season 0, and the Specials page and its watch history include them.
+
 Anywhere an episode is shown on its own, outside its show's pages, it is named by its show and its season and episode number, for example *Breaking Bad S01E01*. This applies on the All Episodes grid, the History page, [Query](/docs/features/query/) results, hover cards and detail panels. The episode's own title appears as extra detail. An episode that has no season or episode number is shown as its show followed by its own title. The All Episodes list is ordered the same way by default: by show, then season and episode.
 
 Each of these pages also carries a [watch history section](#watch-history-on-detail-pages) listing the individual plays for whatever you are looking at.
@@ -36,6 +38,8 @@ Two different shows that happen to share a title — *The Office* (UK) and *The 
 ### Music
 
 Music is organized by artist. Browse artists, albums, and individual tracks with audio format, quality, and duration details.
+
+Albums are grouped by artist and album title ignoring letter case and spaces at either end, so *Moon Safari* and *moon safari* are one album. Tracks with no album title (or a blank one) are gathered on an **Unknown Album** card for their artist, and tracks with no artist under **Unknown Artist**. An artist's album count, the album cards on the artist page and the **Albums** tab all use this grouping, and an album page lists exactly the tracks its card counts.
 
 <Aside type="note" title="Collections are not library items">
 Plex collections, Jellyfin/Emby box sets, and playlists are *containers* — they group media but have no file, resolution, or size of their own. Librariarr's sync skips them, so they never show up in your movie, series, or music listings, and a [lifecycle rule](/docs/features/lifecycle-rules/) can never match one. This includes the collections Librariarr creates itself for [collection sync](/docs/features/lifecycle-rules/#plex-collections).
