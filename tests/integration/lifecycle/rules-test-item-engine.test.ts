@@ -203,3 +203,62 @@ describe("POST /api/lifecycle/rules/test-item — real engine", () => {
     ).toBe(true);
   });
 });
+
+describe("POST /api/lifecycle/rules/test-item — season and episode criteria", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+  });
+
+  async function seedShow() {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps: Record<number, string> = {};
+    for (let s = 1; s <= 3; s++) {
+      const ep = await createTestMediaItem(library.id, {
+        title: `S${s}E1`, parentTitle: "Show", type: "SERIES", seasonNumber: s, episodeNumber: 1, playCount: 1,
+      });
+      eps[s] = ep.id;
+    }
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    return { serverId: server.id, eps };
+  }
+
+  it("measures an episode's season against the show's newest season", async () => {
+    const { serverId, eps } = await seedShow();
+    const base = { type: "SERIES", seriesScope: false, serverIds: [serverId] };
+    const rules = group("seasonsBehindLatest", "greaterThanOrEqual", 2);
+    expect(await testItem({ ...base, mediaItemId: eps[1], rules })).toBe(true);
+    expect(await testItem({ ...base, mediaItemId: eps[2], rules })).toBe(false);
+  });
+
+  it("judges the episode, not the show, when a series aggregate is in the rule", async () => {
+    const { serverId, eps } = await seedShow();
+    const rules = [{
+      id: "g1",
+      condition: "AND",
+      rules: [
+        { id: "r1", field: "watchedEpisodePercentage", operator: "greaterThan", value: 50, condition: "AND" },
+        { id: "r2", field: "seasonNumber", operator: "equals", value: 3, condition: "AND" },
+      ],
+      groups: [],
+    }];
+    const base = { type: "SERIES", seriesScope: false, serverIds: [serverId], rules };
+    expect(await testItem({ ...base, mediaItemId: eps[3] })).toBe(true);
+    expect(await testItem({ ...base, mediaItemId: eps[1] })).toBe(false);
+  });
+
+  it("refuses them in series scope", async () => {
+    const { serverId, eps } = await seedShow();
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/test-item",
+      method: "POST",
+      body: {
+        type: "SERIES", seriesScope: true, serverIds: [serverId], mediaItemId: eps[1],
+        rules: group("seasonNumber", "equals", 1),
+      },
+    });
+    expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(/turn off series scope/i);
+  });
+});

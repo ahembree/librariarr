@@ -334,6 +334,7 @@ export async function processLifecycleRules(userId?: string) {
         rules,
         ruleSet.serverIds,
         ruleSet.arrInstanceId,
+        ruleSet.seriesScope,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);

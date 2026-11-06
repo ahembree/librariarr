@@ -1,5 +1,6 @@
 import type { z } from "zod/v4";
 import type { ConditionGroup, LibraryType } from "@/lib/conditions";
+import { findEpisodeLevelFields } from "@/lib/conditions/library-type-guard";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
 import {
@@ -73,9 +74,11 @@ export function convertQueryToRuleSetBody(
     enabled: true,
     actionEnabled: false,
     // `includeEpisodes: true` in the query means "match individual episodes",
-    // which corresponds to `seriesScope: false` on the rule set side.
+    // which corresponds to `seriesScope: false` on the rule set side. So do
+    // season/episode criteria, which a rule set judges only per episode (the
+    // grouped query view matches episodes too, then groups them by show).
     ...(opts.targetLibraryType === "SERIES"
-      ? { seriesScope: !query.includeEpisodes }
+      ? { seriesScope: !query.includeEpisodes && findEpisodeLevelFields(cleaned).length === 0 }
       : {}),
     ...(arrInstanceId ? { arrInstanceId } : {}),
   };

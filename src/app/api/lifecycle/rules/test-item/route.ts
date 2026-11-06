@@ -13,8 +13,11 @@ import {
   hasWatchedByUserRules,
   hasCrossSystemFieldRules,
   hasCustomFormatScoreRules,
+  hasSeasonsBehindLatestRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
+import { EPISODE_LEVEL_FIELDS } from "@/lib/conditions/helpers";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -92,6 +95,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
     arrInstanceId,
+    seriesScope,
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
@@ -135,6 +139,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
     originallyAvailableAt: item.originallyAvailableAt?.toISOString() ?? null,
     streams: item.streams ?? [],
   };
+  // Seasons Behind Latest, measured against the show's newest season in the
+  // episode's library, as the engines attach it.
+  if (hasSeasonsBehindLatestRules(typedRules)) await attachSeasonsBehindLatest([single]);
 
   // A SERIES rule reading a series-aggregate field is evaluated at the series
   // level even with seriesScope off, exactly as detection routes it
@@ -301,9 +308,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
 
   const matches =
     // Forced aggregate: the series must match, then this episode with the
-    // series aggregates injected — the two checks detection makes.
+    // series aggregates injected — the two checks detection makes. The series
+    // has no season or episode of its own, so per-episode rules are left to
+    // the episode check, as `evaluateSeriesScope` leaves them.
     (!(group && aggregateForced) ||
-      evaluateAllRulesInMemory(typedRules, group, arrMeta, seerrMeta)) &&
+      evaluateAllRulesInMemory(typedRules, group, arrMeta, seerrMeta, { relaxedFields: EPISODE_LEVEL_FIELDS })) &&
     evaluateAllRulesInMemory(typedRules, serialized, arrMeta, seerrMeta);
 
   // Get matched criteria and actual values

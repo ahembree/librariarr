@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { compareIds } from "@/lib/conditions/compare-ids";
 import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, hasEpisodeLevelRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
@@ -292,6 +292,7 @@ export async function detectAndSaveMatches(
     rules,
     ruleSet.serverIds,
     ruleSet.arrInstanceId,
+    ruleSet.seriesScope,
   );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
@@ -343,7 +344,7 @@ export async function detectAndSaveMatches(
   } else {
     const rawItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData, crossSystemOptions);
     if (ruleSet.type === "SERIES") {
-      const grouped = groupSeriesResults(rawItems);
+      const grouped = groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(rules) });
       // Build episode ID map: grouped item id → individual episode ids
       for (const g of grouped) {
         episodeIdMap.set(g.id as string, (g as unknown as { memberIds: string[] }).memberIds);
@@ -924,7 +925,7 @@ export async function runDetection(
       // manual "Re-evaluate All" path refuse rule sets the scheduled path
       // happily evaluates — the same rule set, a different answer depending on
       // how it was triggered.
-      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId, rs.seriesScope);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {
