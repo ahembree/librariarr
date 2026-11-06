@@ -110,6 +110,15 @@ describe("GET/PUT /api/settings/ai", () => {
     expect(raw?.aiApiKey).toBeNull();
   });
 
+  it("saves a model name with dots and a tag unchanged", async () => {
+    await login();
+    const body = await expectJson<any>(
+      await callRoute(PUT, { method: "PUT", body: { enabled: true, provider: "openai-compatible", model: "qwen3.5:8b" } }),
+    );
+    expect(body.model).toBe("qwen3.5:8b");
+    expect((await expectJson<any>(await callRoute(GET))).model).toBe("qwen3.5:8b");
+  });
+
   it("rejects enabling without a model", async () => {
     const user = await login();
     const body = await expectJson<any>(await callRoute(PUT, { method: "PUT", body: { enabled: true } }), 400);

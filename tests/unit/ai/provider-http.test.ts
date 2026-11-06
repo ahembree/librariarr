@@ -22,7 +22,15 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { AxiosError } from "axios";
-import { createProvider } from "@/lib/ai/provider";
+import { logger } from "@/lib/logger";
+import {
+  createProvider,
+  TEST_TIMEOUT_MS,
+  MAX_TOKENS,
+  FALLBACK_MAX_TOKENS,
+  MODEL_ERROR_RETRIES,
+  MODEL_OUTPUT_PARSE_HINT,
+} from "@/lib/ai/provider";
 import { IntegrationError } from "@/lib/integration-error";
 import type { AiConfig } from "@/lib/ai/types";
 
@@ -84,7 +92,7 @@ describe("provider HTTP setup", () => {
 
     const result = await client.testConnection();
     expect(result).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/chat/completions)" });
-    expect(lastRequest().config.timeout).toBe(30_000);
+    expect(lastRequest().config.timeout).toBe(TEST_TIMEOUT_MS);
 
     const anthropic = await createProvider(ANTHROPIC).testConnection();
     expect(anthropic).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/v1/messages)" });
@@ -124,8 +132,9 @@ describe("provider HTTP setup", () => {
   });
 
   it("reports the model on a successful Anthropic test", async () => {
-    respond({ content: [] });
+    respond({ content: [{ type: "text", text: "OK" }] });
     expect(await createProvider(ANTHROPIC).testConnection()).toEqual({ ok: true, model: "claude-sonnet-4-5" });
+    expect(lastRequest().body.tools).toHaveLength(1);
     expect(lastRequest().url).toBe("/v1/messages");
   });
 });
@@ -240,5 +249,85 @@ describe("Anthropic message mapping and parsing", () => {
       content: "",
       toolCalls: [],
     });
+  });
+});
+
+describe("output cap fallback", () => {
+  const refuse = (data: unknown) =>
+    adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError("Request failed with status code 400", "ERR_BAD_REQUEST", config, null, {
+        data, status: 400, statusText: "Bad Request", headers: {}, config,
+      });
+    });
+  const sentCaps = () =>
+    adapter.mock.calls.map((c) => JSON.parse(String((c[0] as InternalAxiosRequestConfig).data)).max_tokens);
+
+  // Claude 3 Haiku/Opus and GPT-4-Turbo cap output at 4096 and refuse more.
+  it("retries a refused output size at the fallback cap and keeps it for the run", async () => {
+    refuse({ type: "error", error: { type: "invalid_request_error", message: "max_tokens: 8192 > 4096, which is the maximum allowed number of output tokens for claude-3-haiku-20240307" } });
+    respond({ content: [{ type: "text", text: "a" }] });
+    respond({ content: [{ type: "text", text: "b" }] });
+    const client = createProvider({ ...ANTHROPIC, model: "claude-3-haiku-20240307" });
+    expect((await client.chat([{ role: "user", content: "q" }], [])).content).toBe("a");
+    expect((await client.chat([{ role: "user", content: "q" }], [])).content).toBe("b");
+    expect(sentCaps()).toEqual([MAX_TOKENS, FALLBACK_MAX_TOKENS, FALLBACK_MAX_TOKENS]);
+  });
+
+  it("does the same for an OpenAI-compatible refusal", async () => {
+    refuse({ error: { message: "max_tokens is too large: 8192. This model supports at most 4096 completion tokens.", type: "invalid_request_error" } });
+    respond({ choices: [{ message: { content: "ok" } }] });
+    expect((await createProvider(OPENAI).chat([{ role: "user", content: "q" }], [])).content).toBe("ok");
+    expect(sentCaps()).toEqual([MAX_TOKENS, FALLBACK_MAX_TOKENS]);
+  });
+
+  it("does not retry any other 400", async () => {
+    refuse({ error: { message: "model 'nope' not found" } });
+    await expect(createProvider(OPENAI).chat([{ role: "user", content: "q" }], [])).rejects.toThrow("not found");
+    expect(sentCaps()).toEqual([MAX_TOKENS]);
+  });
+});
+
+// Ollama answers 500 with a Go JSON error when it can't parse the model's own
+// tool call (seen with qwen3.5:9b); the output is sampled, so a retry usually works.
+describe("model server errors", () => {
+  const fail500 = (data: unknown) =>
+    adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError("Request failed with status code 500", "ERR_BAD_RESPONSE", config, null, {
+        data, status: 500, statusText: "Internal Server Error", headers: {}, config,
+      });
+    });
+  const PARSE_ERROR = { error: { message: "invalid character '\x00' looking for beginning of value", type: "api_error" } };
+  const QWEN: AiConfig = { ...OPENAI, model: "qwen3.5:9b" };
+
+  it("retries a 5xx and returns the answer that follows", async () => {
+    fail500(PARSE_ERROR);
+    respond({ choices: [{ message: { content: "ok" } }] });
+    expect((await createProvider(QWEN).chat([{ role: "user", content: "q" }], [])).content).toBe("ok");
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(lastRequest().body.model).toBe("qwen3.5:9b");
+    // The retry log carries status and code, never the provider's error text.
+    const retryLog = vi.mocked(logger.debug).mock.calls.find((c) => String(c[1]).includes("retrying"));
+    expect(retryLog?.[2]).toEqual({ status: 500, code: "ERR_BAD_RESPONSE" });
+    expect(JSON.stringify(vi.mocked(logger.debug).mock.calls)).not.toContain("invalid character");
+  });
+
+  it("gives up after MODEL_ERROR_RETRIES and explains a parse failure", async () => {
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500(PARSE_ERROR);
+    const failure = createProvider(QWEN).chat([{ role: "user", content: "q" }], []);
+    await expect(failure).rejects.toThrow(MODEL_OUTPUT_PARSE_HINT);
+    expect(adapter).toHaveBeenCalledTimes(MODEL_ERROR_RETRIES + 1);
+
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500(PARSE_ERROR);
+    const result = await createProvider(QWEN).testConnection();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("invalid character");
+    expect(result.error).toContain(MODEL_OUTPUT_PARSE_HINT);
+  });
+
+  it("does not add the hint to an unrelated 5xx", async () => {
+    for (let i = 0; i <= MODEL_ERROR_RETRIES; i++) fail500({ error: { message: "out of memory" } });
+    const failure = createProvider(OPENAI).chat([{ role: "user", content: "q" }], []);
+    await expect(failure).rejects.toThrow("AI HTTP 500: out of memory (/chat/completions)");
+    await expect(failure).rejects.not.toThrow(MODEL_OUTPUT_PARSE_HINT);
   });
 });

@@ -16,7 +16,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { createProvider } from "@/lib/ai/provider";
+import { createProvider, MAX_TOKENS, TEST_TIMEOUT_MS, stripThinking } from "@/lib/ai/provider";
 import type { AiConfig, AiMessage } from "@/lib/ai/types";
 
 const OPENAI: AiConfig = {
@@ -66,7 +66,7 @@ describe("ai/provider — OpenAI-compatible", () => {
     expect(body).toEqual({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: "q" }],
-      max_tokens: 1500,
+      max_tokens: MAX_TOKENS,
       tools: [
         {
           type: "function",
@@ -85,11 +85,29 @@ describe("ai/provider — OpenAI-compatible", () => {
     expect(result.toolCalls).toEqual([{ id: "c1", name: "x", arguments: {} }]);
   });
 
-  it("testConnection returns ok on success and error on failure", async () => {
-    mockPost.mockResolvedValueOnce({ data: {} });
+  it("testConnection returns ok on an answer and error on failure", async () => {
+    mockPost.mockResolvedValueOnce({ data: { choices: [{ message: { content: "OK" } }] } });
     expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-4o-mini" });
     mockPost.mockRejectedValueOnce(new Error("refused"));
     expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: false, error: "refused" });
+  });
+
+  // A thinking model that spends the whole budget reasoning (or a server that
+  // drops the answer) passed the old 5-token test and then failed every chat.
+  it("testConnection fails an empty answer, and sends a tool so missing tool support fails too", async () => {
+    mockPost.mockResolvedValueOnce({ data: { choices: [{ message: { content: "<think>hmm" } }] } });
+    const result = await createProvider(OPENAI).testConnection();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/empty answer/);
+    const [, body, options] = mockPost.mock.calls[0];
+    expect(body.tools).toHaveLength(1);
+    expect(body.max_tokens).toBe(MAX_TOKENS);
+    expect(options.timeout).toBe(TEST_TIMEOUT_MS);
+
+    mockPost.mockResolvedValueOnce({
+      data: { choices: [{ message: { content: "", tool_calls: [{ id: "1", function: { name: "ping", arguments: "{}" } }] } }] },
+    });
+    expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-4o-mini" });
   });
 });
 
@@ -118,7 +136,7 @@ describe("ai/provider — Anthropic", () => {
     expect(url).toBe("/v1/messages");
     expect(body).toEqual({
       model: "claude-sonnet-4-5",
-      max_tokens: 1500,
+      max_tokens: MAX_TOKENS,
       messages: [{ role: "user", content: [{ type: "text", text: "q" }] }],
       tools: [{ name: "get_cross_tab", description: "d", input_schema: { type: "object" } }],
     });
@@ -150,5 +168,29 @@ describe("ai/provider — Anthropic", () => {
       { type: "tool_result", tool_use_id: "tc1", content: "res1" },
       { type: "tool_result", tool_use_id: "tc2", content: "res2" },
     ]);
+  });
+});
+
+describe("ai/provider — model names and thinking output", () => {
+  it("sends a model name with dots and a tag verbatim", async () => {
+    mockPost.mockResolvedValue({ data: { choices: [{ message: { content: "ok" } }] } });
+    await createProvider({ ...OPENAI, model: "qwen3.5:8b" }).chat([{ role: "user", content: "q" }], []);
+    expect(mockPost.mock.calls[0][1].model).toBe("qwen3.5:8b");
+  });
+
+  it("drops inlined <think> reasoning from the answer", async () => {
+    mockPost.mockResolvedValue({
+      data: { choices: [{ message: { content: "<think>Let me count.\nMany.</think>\n\nYou have 12 movies." } }] },
+    });
+    const result = await createProvider(OPENAI).chat([{ role: "user", content: "q" }], []);
+    expect(result.content).toBe("You have 12 movies.");
+  });
+
+  it("stripThinking leaves plain answers alone and empties a cut-off thought", () => {
+    expect(stripThinking("Plain answer")).toBe("Plain answer");
+    expect(stripThinking("<THINK>a</THINK>b<think>c</think>d")).toBe("bd");
+    expect(stripThinking("<think>ran out of tokens")).toBe("");
+    // Opening tag in the prompt (Qwen3 / DeepSeek-R1 templates): only the close is generated.
+    expect(stripThinking("Let me count.\nMany.\n</think>\n\nYou have 12 movies.")).toBe("You have 12 movies.");
   });
 });
