@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   RULE_SET_VERSION_SELECT,
   lockRuleSetAtVersion,
+  releasesStoredMatches,
   rulesChanged,
   ruleSetVersion,
   serverIdsChanged,
@@ -61,6 +62,30 @@ describe("serverIdsChanged", () => {
     expect(serverIdsChanged(["a"], ["a", "b"])).toBe(true);
     expect(serverIdsChanged(["a", "b"], ["a"])).toBe(true);
     expect(serverIdsChanged(["a"], ["b"])).toBe(true);
+  });
+});
+
+describe("releasesStoredMatches", () => {
+  const sticky = { stickyMatches: true, enabled: true };
+  const disabled = { stickyMatches: false, enabled: false };
+
+  it("sees sticky matches turned off: what only stickiness kept would run before detection drops it", () => {
+    expect(releasesStoredMatches(sticky, { stickyMatches: false })).toBe(true);
+    expect(releasesStoredMatches(sticky, { stickyMatches: false, enabled: true })).toBe(true);
+  });
+
+  it("sees a disabled rule set enabled again: its matches are as old as the day it was turned off", () => {
+    expect(releasesStoredMatches(disabled, { enabled: true })).toBe(true);
+    expect(releasesStoredMatches(disabled, { stickyMatches: false, enabled: true })).toBe(true);
+  });
+
+  it("ignores turning sticky matches on, disabling, and fields that are not changing", () => {
+    expect(releasesStoredMatches(disabled, { stickyMatches: true })).toBe(false);
+    expect(releasesStoredMatches(sticky, { stickyMatches: true, enabled: true })).toBe(false);
+    expect(releasesStoredMatches(sticky, { enabled: false })).toBe(false);
+    expect(releasesStoredMatches(disabled, { stickyMatches: false, enabled: false })).toBe(false);
+    expect(releasesStoredMatches(sticky, {})).toBe(false);
+    expect(releasesStoredMatches({ stickyMatches: false, enabled: true }, { stickyMatches: false, enabled: true })).toBe(false);
   });
 });
 

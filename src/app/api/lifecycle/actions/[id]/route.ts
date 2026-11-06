@@ -158,7 +158,7 @@ async function retryAction(
       {
         error: hold.kind === "groupScope"
           ? hold.reason
-          : "This rule set's rules or servers changed since its matches were detected — re-run detection before retrying",
+          : "This rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected — re-run detection before retrying",
       },
       { status: 409 }
     );

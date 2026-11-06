@@ -151,7 +151,7 @@ export function heldActionCount(group: {
 /** Why an edited rule set's actions don't run (`actionsHeldSince`). */
 export function heldActionsReason(since: string): string {
   return (
-    `Held since ${formatDateTime(since)}: this rule set's rules or servers were edited, so its actions ` +
+    `Held since ${formatDateTime(since)}: this rule set was edited (its rules, servers or sticky matches) or enabled again, so its actions ` +
     `wait for the next detection run to re-check its matches. Re-evaluate it on the Matches page to run one now.`
   );
 }

@@ -51,7 +51,8 @@ describe("the hold's wording", () => {
   it("says since when, why, and what releases it", () => {
     const reason = heldActionsReason(SINCE);
     expect(reason).toContain(`Held since ${formatDateTime(SINCE)}`);
-    expect(reason).toMatch(/rules or servers were edited/);
+    // Turning sticky matches off, or enabling it again, holds it too.
+    expect(reason).toMatch(/this rule set was edited \(its rules, servers or sticky matches\) or enabled again/);
     expect(reason).toMatch(/wait for the next detection run to re-check its matches/);
     expect(reason).toMatch(/Re-evaluate it on the Matches page/);
   });

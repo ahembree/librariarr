@@ -8,7 +8,7 @@ import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 import { hasArrRules } from "@/lib/rules/lifecycle-engine";
-import { rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
+import { releasesStoredMatches, rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 export const PUT = withSession(async (
@@ -199,6 +199,18 @@ export const PUT = withSession(async (
       ((rules !== undefined && rulesChanged(current.rules, rules)) ||
         (serverIds !== undefined && serverIdsChanged(current.serverIds, serverIds)));
   }
+  // The same rules can still let stored matches run that detection has not
+  // re-checked (`releasesStoredMatches`): sticky matches turned off — the
+  // matches the rules no longer select were kept only by stickiness — or a
+  // disabled rule set enabled again, whose matches detection left frozen
+  // while it was off. Held the same way until detection re-checks them.
+  if (!matchesChanged && (stickyMatches === false || enabled === true)) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { stickyMatches: true, enabled: true },
+    });
+    matchesChanged = current !== null && releasesStoredMatches(current, { stickyMatches, enabled });
+  }
 
   // A referenced collection must exist, belong to the user, and target the same
   // library type as this rule set.
@@ -251,6 +263,7 @@ export const PUT = withSession(async (
   // detection that evaluates the rule set under these rules releases it
   // (`releaseHeldActions` in detect-matches.ts), keeping each still-matching
   // action's date; the ones no longer matching are cancelled as usual.
+  // Turning sticky matches off and re-enabling the rule set count (above).
   if (matchesChanged) updateData.actionsHeldSince = new Date();
 
   // clearMatches=false preserves existing matches and pending actions (e.g. when user
@@ -258,7 +271,8 @@ export const PUT = withSession(async (
   // backwards compatibility and safety. A change of the instance the Arr
   // criteria are read from, or of series scope, always clears (see
   // `arrScopeChanged`, `seriesScopeChanged`). Kept across a change of the
-  // rules or servers, the pending actions are held (`actionsHeldSince` above).
+  // rules or servers, sticky matches turned off or the rule set enabled again,
+  // the pending actions are held (`actionsHeldSince` above).
   const clearMatches =
     request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged || seriesScopeChanged;
 

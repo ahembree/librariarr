@@ -300,7 +300,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     summary: "Actions by status",
     description:
       `Grouped by rule set. A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. ` +
-      `Each group's \`ruleSet.actionsHeldSince\` is the time its rules or servers were changed, while its actions wait for the next detection run ` +
+      `Each group's \`ruleSet.actionsHeldSince\` is the time its rules, servers or sticky matches were changed, or it was enabled again, while its actions wait for the next detection run ` +
       `to re-check its matches (executing or retrying one answers 409 until then), and null otherwise. ` +
       `Its \`ruleSet.scopeHoldReason\` is set, a sentence, while its actions are held because it uses per-episode or per-track criteria ` +
       `with series or artist scope on, or follows them with an action on the whole show or artist (Delete from Sonarr or Lidarr, ` +
@@ -384,7 +384,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
       `Listed items that are not current matches, or are protected by an exception, are skipped and the rest run — compare ` +
       `\`executed\` + \`failed\` with what you sent (400 when nothing is left). Refused whole — nothing runs — when an item changed ` +
-      `identity since it matched, or the rule set's rules or servers changed since its matches were detected (409: run ` +
+      `identity since it matched, or the rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected (409: run ` +
       `detection again), or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows ` +
       `them with an action on the whole show or artist with the scope off (409: edit the rule set), or when a limit would be ` +
       `exceeded. A call naming an item that ` +
@@ -403,7 +403,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     responses: {
       "200": "`{ executed, failed, errors, stopped? }` — `stopped`, a sentence, when the rule set was edited or held while the items ran: the items not yet reached were left untouched",
       "404": "No such rule set",
-      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set's rules or servers changed since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off, or the rule set was edited before the first item ran; nothing was executed",
+      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off, or the rule set was edited before the first item ran; nothing was executed",
       "429": BUDGET_429,
     },
   },

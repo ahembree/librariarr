@@ -43,6 +43,24 @@ export function serverIdsChanged(stored: readonly string[], next: readonly strin
   return a.length !== b.length || a.some((id, i) => id !== b[i]);
 }
 
+/**
+ * Whether a save lets stored matches run that detection has not re-checked,
+ * though the rules stay the same: turning sticky matches off (the matches the
+ * rules no longer select were kept only because the rule set was sticky, and
+ * their pending actions would run before detection drops them), or enabling a
+ * disabled rule set (detection skipped it while disabled, so its matches are
+ * as old as the day it was turned off, and Execute acts on stored matches).
+ * Such a save holds the rule set's actions as a change of rules does — the
+ * PUT stamps `actionsHeldSince` — and the editor offers "Save and re-detect"
+ * for it. Fields left out of `next` are not changing.
+ */
+export function releasesStoredMatches(
+  stored: { stickyMatches: boolean; enabled: boolean },
+  next: { stickyMatches?: boolean; enabled?: boolean },
+): boolean {
+  return (stored.stickyMatches && next.stickyMatches === false) || (!stored.enabled && next.enabled === true);
+}
+
 // ─── The rule set a run read ─────────────────────────────────────────────
 
 /**

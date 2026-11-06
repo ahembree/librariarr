@@ -39,6 +39,7 @@ import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { releasesStoredMatches } from "@/lib/lifecycle/rule-set-matching";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -553,16 +554,20 @@ export function LifecycleRulePage({
   // Whether rule logic (rules/scope/servers) changed vs only config fields.
   // With Arr criteria the Arr instance is rule logic too: the criteria are read
   // from it, so the matches judged on the old one must not be kept (the PUT
-  // clears them in that case whatever this sends).
+  // clears them in that case whatever this sends). Turning sticky matches off
+  // or enabling the rule set again counts too (`releasesStoredMatches`): the
+  // PUT holds the actions until detection re-checks the stored matches, so the
+  // save offers "Save and re-detect" and says what "Save only" holds.
   const rulesChanged = useMemo(() => {
     if (!snapshot) return true;
     return (
       snapshot.groups !== JSON.stringify(groups) ||
       snapshot.seriesScope !== seriesScope ||
       snapshot.serverIds !== JSON.stringify([...serverIds].sort()) ||
-      (ruleUsesArr && snapshot.arrInstanceId !== arrInstanceId)
+      (ruleUsesArr && snapshot.arrInstanceId !== arrInstanceId) ||
+      releasesStoredMatches(snapshot, { stickyMatches, enabled })
     );
-  }, [snapshot, groups, seriesScope, serverIds, ruleUsesArr, arrInstanceId]);
+  }, [snapshot, groups, seriesScope, serverIds, ruleUsesArr, arrInstanceId, stickyMatches, enabled]);
 
   // The saved targetQualityProfileId no longer exists on the selected Arr
   // instance (e.g. the user deleted the profile from Sonarr/Radarr/Lidarr,
@@ -2502,7 +2507,7 @@ export function LifecycleRulePage({
             <AlertDialogTitle>Save Rule Set</AlertDialogTitle>
             <AlertDialogDescription>
               How should existing matches be handled? <strong>Save only</strong> keeps the current
-              matches until the next detection run re-checks them against the new rules — until
+              matches until the next detection run re-checks them against what you saved — until
               then this rule set&rsquo;s pending actions are held and won&rsquo;t run, even from the
               Pending page.
             </AlertDialogDescription>

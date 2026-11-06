@@ -633,7 +633,7 @@ Both can be run manually via the **Run Now** button at any time.
 
 Scheduled detection is **incremental**: it adds new matches, refreshes the ones it keeps, and removes matches whose items no longer satisfy the rules — cancelling their pending actions. **Re-evaluate** (per rule set) and **Re-evaluate All** on the Matches page run a **full re-evaluation** instead, replacing each rule set's matches with exactly what its rules select now.
 
-Turn on **Sticky matches** in a rule set to keep items matched after they stop meeting the rules: incremental runs then only add matches, and only a manual re-evaluation removes them.
+Turn on **Sticky matches** in a rule set to keep items matched after they stop meeting the rules: incremental runs then only add matches, and only a manual re-evaluation removes them. Turning it off holds the rule set's pending actions until the next detection run drops what the rules no longer select (see [Editing a rule set](#editing-a-rule-set)).
 
 ### Action delay
 
@@ -641,7 +641,12 @@ When a match is found and the rule set's action is enabled, an action is schedul
 
 ### Editing a rule set
 
-Changing the rules prompts **Save and re-detect** (shows a **Match Changes Preview** — new, retained and removed — and **Confirm and Save** runs detection for the rule set at once) or **Save only** (the matches stay as they are until the next detection run re-checks them against the new rules). Until that run, the rule set's pending actions are held: they don't run on schedule, from **Execute** on the Pending page or through the API, even when due. The run that re-checks them keeps each action whose item still matches, with its date, and cancels the rest. Changing the rule set's servers holds them the same way. Action-only changes save directly and are copied onto the pending actions. Turning off **Enabled** or **Enable lifecycle action** cancels the pending actions.
+Changing the rules prompts **Save and re-detect** (shows a **Match Changes Preview** — new, retained and removed — and **Confirm and Save** runs detection for the rule set at once) or **Save only** (the matches stay as they are until the next detection run re-checks them against the new rules). Until that run, the rule set's pending actions are held: they don't run on schedule, from **Execute** on the Pending page or through the API, even when due. The run that re-checks them keeps each action whose item still matches, with its date, and cancels the rest. Changing the rule set's servers holds them the same way, and so do two saves that leave the rules as they are:
+
+- **Turning Sticky matches off.** The matches the rules no longer select were kept only because the rule set was sticky; their pending actions wait for the next run, which removes those matches and cancels the actions.
+- **Enabling a disabled rule set again** — in the editor or with its switch in the rule set list. Detection skips a disabled rule set, so its matches are as old as the day it was turned off; **Execute All** would act on them as they are.
+
+In the editor both prompt **Save and re-detect** or **Save only**, as a change to the rules does. Action-only changes save directly and are copied onto the pending actions. Turning off **Enabled** or **Enable lifecycle action** cancels the pending actions.
 
 A save also reaches whatever is already running for the rule set. A detection run that read the rule set before you saved — the scheduled one, say, still evaluating when **Save and re-detect** has finished — writes nothing and schedules nothing: its matches and actions are of the old rules, and it leaves them to the next run (System Logs says so; a **Re-evaluate** that lost its result that way lists the rule set as skipped). An execution under way — the scheduled one, or **Execute All** — acts on each item only while the rule set is still as it was when the execution read it, so a save mid-run stops it before the next item: the scheduled run leaves the rest pending for its next pass, and **Execute All** reports how many it executed and why it stopped (nothing at all ran: the request is refused). One item already with the *arr app when you save finishes.
 

@@ -146,8 +146,9 @@ describe("OpenAPI document", () => {
     // A save that changes what a rule set matches holds its actions until
     // detection re-checks them (`RuleSet.actionsHeldSince`); the route answers 409.
     const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
-    expect(execute.description).toMatch(/rules or servers changed since its matches were detected \(409: run detection again\)/);
-    expect(execute.responses?.["409"]).toMatch(/rules or servers changed since its matches were detected/);
+    // Turning sticky matches off or enabling the rule set again holds them too.
+    expect(execute.description).toMatch(/edited \(its rules, servers or sticky matches\) or enabled again since its matches were detected \(409: run detection again\)/);
+    expect(execute.responses?.["409"]).toMatch(/edited \(its rules, servers or sticky matches\) or enabled again since its matches were detected/);
   });
 
   it("tells a client an execute stops when the rule set is edited while it runs", () => {
@@ -173,7 +174,7 @@ describe("OpenAPI document", () => {
     // The listing returns the hold per rule set group, so a client can tell
     // before it executes that the request would be refused.
     const listing = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/lifecycle/actions")!;
-    expect(listing.description).toMatch(/`ruleSet\.actionsHeldSince` is the time its rules or servers were changed/);
+    expect(listing.description).toMatch(/`ruleSet\.actionsHeldSince` is the time its rules, servers or sticky matches were changed, or it was enabled again/);
     expect(listing.description).toMatch(/answers 409 until then\), and null otherwise/);
   });
 

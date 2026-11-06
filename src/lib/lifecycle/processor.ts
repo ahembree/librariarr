@@ -613,8 +613,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     },
   });
   // Nor one whose rule set is held (`actionHoldFor`): its rules or servers
-  // changed since its matches were detected (`actionsHeldSince`) — they are
-  // the old rules' until a detection run re-checks them — or a per-episode or
+  // changed since its matches were detected, its sticky matches were turned
+  // off or it was enabled again (`actionsHeldSince`) — the matches are not
+  // the saved rule set's until a detection run re-checks them — or a per-episode or
   // per-track criterion could make a whole show or artist the target of its
   // action (judged at series or artist scope, or followed by an action on the
   // whole show or artist with the scope off — the rule set's, or this
@@ -630,7 +631,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       a.ruleSet!.name,
       hold.kind === "groupScope"
         ? hold.reason
-        : "its rules or servers changed since its matches were detected; the next detection run re-checks them",
+        : "it was edited (its rules, servers or sticky matches) or enabled again since its matches were detected; the next detection run re-checks them",
     );
     return false;
   });

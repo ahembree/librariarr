@@ -258,6 +258,88 @@ describe("Save only after a change to what a rule set matches", () => {
     expect(actedOn()).toEqual([]);
   });
 
+  it("holds the actions when sticky matches are turned off, until detection drops what the rules no longer select", async () => {
+    const { user, target, other, ruleSet, editorBody } = await armed();
+    // Sticky: a match the rules stopped selecting stays, and so does its
+    // pending action — "Other" (2010), matched when the rules said 2010.
+    await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { stickyMatches: true } });
+    await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: other.id, itemData: { id: other.id, title: "Other", year: 2010 } } });
+    const otherAction = await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, ruleSetId: ruleSet.id, mediaItemId: other.id, actionType: "DELETE_RADARR", status: "PENDING",
+        scheduledFor: new Date(), arrInstanceId: editorBody.arrInstanceId, mediaItemTitle: "Other", mediaItemYear: 2010,
+      },
+    });
+
+    // Turned off with "Save only": the rules are unchanged, the matches kept.
+    await expectJson(await saveOnly(ruleSet.id, { ...editorBody, stickyMatches: false }), 200);
+    expect(await storedHold(ruleSet.id)).not.toBeNull();
+
+    // Nothing runs — "Other" least of all, which only stickiness kept.
+    await executeLifecycleActions(user.id);
+    expect(actedOn()).toEqual([]);
+    expect((await expectJson<{ error: string }>(await callRoute(executeRoute, { method: "POST", body: { ruleSetId: ruleSet.id } }), 409)).error)
+      .toMatch(/edited \(its rules, servers or sticky matches\) or enabled again/);
+    expect(groupOf(await listing(), ruleSet.id).ruleSet.actionsHeldSince).not.toBeNull();
+
+    // Detection drops "Other" and cancels its action, and releases the rest.
+    await processLifecycleRules(user.id);
+    expect(await storedHold(ruleSet.id)).toBeNull();
+    expect(await prisma.lifecycleAction.findUnique({ where: { id: otherAction.id } })).toBeNull();
+    await executeLifecycleActions(user.id);
+    expect(actedOn()).toEqual([target.id]);
+  });
+
+  it("holds the actions when a disabled rule set is enabled again, until detection re-checks its frozen matches", async () => {
+    const { user, target, other, ruleSet, editorBody } = await armed();
+    // Turned off while keeping its matches ("Save only"): its pending action is
+    // cancelled, its match frozen — detection skips a disabled rule set.
+    await expectJson(await saveOnly(ruleSet.id, { ...editorBody, enabled: false }), 200);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
+    // Meanwhile the item stops matching: re-identified as a 2010 film.
+    await prisma.mediaItem.update({ where: { id: target.id }, data: { year: 2010 } });
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id, mediaItemId: target.id } })).toBe(1);
+
+    // Turned back on with "Save only".
+    await expectJson(await saveOnly(ruleSet.id, { ...editorBody, enabled: true }), 200);
+    expect(await storedHold(ruleSet.id)).not.toBeNull();
+
+    // Execute All acts on stored matches: the frozen one must wait for detection.
+    const refused = await expectJson<{ error: string }>(
+      await callRoute(executeRoute, { method: "POST", body: { ruleSetId: ruleSet.id } }),
+      409,
+    );
+    expect(refused.error).toMatch(/or enabled again since its matches were detected/);
+    expect(actedOn()).toEqual([]);
+
+    // Detection re-checks it: the frozen match is gone, the hold released.
+    await processLifecycleRules(user.id);
+    expect(await storedHold(ruleSet.id)).toBeNull();
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id, mediaItemId: target.id } })).toBe(0);
+    expect(other.id).not.toBe(target.id);
+  });
+
+  it("holds the actions when the rule set list's switch enables it again", async () => {
+    const { ruleSet } = await armed();
+    await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { enabled: false } });
+
+    // The list's switch sends only `enabled` (and clears the matches).
+    await expectJson(
+      await callRouteWithParams(PUT, { id: ruleSet.id }, { url: `/api/lifecycle/rules/${ruleSet.id}`, method: "PUT", body: { enabled: true } }),
+      200,
+    );
+
+    expect(await storedHold(ruleSet.id)).not.toBeNull();
+  });
+
+  it("does not hold for turning sticky matches on, or disabling", async () => {
+    const { ruleSet, editorBody } = await armed();
+    await expectJson(await saveOnly(ruleSet.id, { ...editorBody, stickyMatches: true }), 200);
+    expect(await storedHold(ruleSet.id)).toBeNull();
+    await expectJson(await saveOnly(ruleSet.id, { ...editorBody, stickyMatches: true, enabled: false }), 200);
+    expect(await storedHold(ruleSet.id)).toBeNull();
+  });
+
   it("does not hold anything when a save leaves what the rule set matches unchanged", async () => {
     const { user, target, ruleSet, editorBody } = await armed();
 

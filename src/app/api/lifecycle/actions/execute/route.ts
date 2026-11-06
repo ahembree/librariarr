@@ -174,7 +174,7 @@ async function executeRuleSet(
       {
         error: hold.kind === "groupScope"
           ? hold.reason
-          : "This rule set's rules or servers changed since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing",
+          : "This rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected — re-run detection for it (Re-evaluate on the Matches page) before executing",
       },
       { status: 409 }
     );
