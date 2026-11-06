@@ -215,3 +215,24 @@ describe("Arr tag operations", () => {
     expect(ruleSetUpdateSchema.safeParse({ removeArrTags: ["a"] }).success).toBe(true);
   });
 });
+
+describe("queryActionSchema tag lists", () => {
+  const base = {
+    query: { mediaTypes: ["MOVIE"], serverIds: [], groups: [], sortBy: "title", sortOrder: "asc" },
+    mediaItemIds: ["m1"],
+    actionType: "UNMONITOR_RADARR",
+  };
+
+  it("accepts disjoint add and remove lists", async () => {
+    const { queryActionSchema } = await import("@/lib/validation");
+    const parsed = queryActionSchema.safeParse({ ...base, addArrTags: ["a"], removeArrTags: ["b"] });
+    expect(parsed.error?.issues).toBeUndefined();
+  });
+
+  it("refuses a tag in both lists", async () => {
+    const { queryActionSchema } = await import("@/lib/validation");
+    const parsed = queryActionSchema.safeParse({ ...base, addArrTags: ["A"], removeArrTags: ["a"] });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error!.issues.some((i) => i.path[0] === "removeArrTags")).toBe(true);
+  });
+});

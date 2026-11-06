@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
 import { NextResponse } from "next/server";
 import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
 import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
@@ -451,12 +452,7 @@ const actionTypeEnum = z.enum([
 // Shared sort modes for a Plex collection's item ordering.
 const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 
-// A rule set may add some Arr tags and remove others in the same action, but
-// one tag in both lists would be added and then removed again.
-function tagListsDisjoint(value: { addArrTags?: string[]; removeArrTags?: string[] }): boolean {
-  const added = new Set((value.addArrTags ?? []).map((t) => t.trim().toLowerCase()));
-  return !(value.removeArrTags ?? []).some((t) => added.has(t.trim().toLowerCase()));
-}
+// One action may add some Arr tags and remove others, but never the same tag.
 const TAG_LISTS_OVERLAP = {
   message: "A tag cannot be both added and removed",
   path: ["removeArrTags"],
@@ -1029,7 +1025,7 @@ export const queryActionSchema = z.object({
   searchAfterAction: z.boolean().optional().default(false),
   addArrTags: z.array(z.string()).optional().default([]),
   removeArrTags: z.array(z.string()).optional().default([]),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 export const savedQueryCreateSchema = z.object({
   name: z.string().min(1).max(100),

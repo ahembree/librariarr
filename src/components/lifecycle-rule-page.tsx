@@ -29,6 +29,8 @@ import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import { ArrTagPicker } from "@/components/arr-tag-picker";
+import { withoutTags } from "@/lib/lifecycle/arr-tag-lists";
+import { responseErrorMessage } from "@/lib/api/error-message";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -279,12 +281,6 @@ function DiffSection({
       )}
     </div>
   );
-}
-
-/** Drops from `tags` every label (case-insensitive) present in `picked`. */
-function withoutTags(tags: string[], picked: string[]): string[] {
-  const lower = new Set(picked.map((t) => t.toLowerCase()));
-  return tags.filter((t) => !lower.has(t.toLowerCase()));
 }
 
 export function LifecycleRulePage({
@@ -866,8 +862,8 @@ export function LifecycleRulePage({
       }
 
       if (!response.ok) {
-        const data = await response.json();
-        setSaveError(data.error || "Failed to save rule set");
+        const data = await response.json().catch(() => null);
+        setSaveError(responseErrorMessage(data, "Failed to save rule set"));
         return;
       }
       const data = await response.json();
