@@ -965,8 +965,8 @@ model TrashManagedResource {
   radarrInstance   RadarrInstance? @relation(fields: [radarrInstanceId], references: [id], onDelete: Cascade)
   resourceType     String // "CUSTOM_FORMAT" | "QUALITY_PROFILE" | "QUALITY_DEFINITION" | "NAMING"
   trashId          String // TRaSH trash_id (or a synthetic key for singleton resources like NAMING)
-  name             String // display name captured at assignment time
-  arrId            Int? // id of the resource inside the Arr once synced (null for bulk/config resources)
+  name             String // name at assignment; for a CF / profile / PROFILE_CF, rewritten by each applied sync to the app resource's name — with arrId, what identifies it (findManagedArrResource)
+  arrId            Int? // id of the resource inside the Arr once synced (null for bulk/config resources); cleared when the instance's URL changes
   selection        Json? // extra choices for the resource (e.g. chosen naming variants)
   lastSyncedAt     DateTime?
   lastSyncHash     String? // hash of the last-synced TRaSH definition, used to flag upstream guide changes

@@ -30,7 +30,7 @@ Navigate to **Tools → TRaSH Sync** and pick a Sonarr or Radarr instance. Libra
 | **Exists — unmanaged** | The item already exists in the app, but Librariarr does not manage it. Assigning it requires explicit confirmation because the next sync will overwrite it. |
 | **Managed** | Librariarr manages this item and it is in sync with the guide. |
 | **Update available** | Librariarr manages this item, but the guide changed upstream since the last sync — or the last sync could not apply everything (a quality profile whose referenced custom formats are not in the app yet). |
-| **Missing in app** | You manage this item, but it was deleted from the app externally. The next sync re-creates it. |
+| **Missing in app** | You manage this item, but it is no longer in the app — it was deleted there, or Librariarr cannot tell which item in the app is yours (see [Renamed items](#renamed-items)). The next sync re-creates it. |
 
 ## The consent gate
 
@@ -96,7 +96,7 @@ Quality profiles are rebuilt against the app's live quality schema: quality orde
 
 A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
 
-Managed custom formats and quality profiles are tracked by the app id recorded at their last sync as well as by name. When TRaSH renames one upstream (the guide keeps its id stable), or you rename it in the app, the next sync updates that same item — renaming it to the guide's name — instead of creating a second copy beside it.
+Managed custom formats and quality profiles that are renamed — upstream by TRaSH or by you in the app — are updated in place rather than duplicated; see [Renamed items](#renamed-items).
 
 If a guide profile names a language the app doesn't know, the sync warns and keeps the profile's current language.
 
@@ -127,6 +127,8 @@ Profiles you already manage are **always listed** as quick-select chips, so you 
 
 This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. **Stop managing** removes the assignment; it does not reset any scores already written.
 
+If you rename the profile in the app, the overlay follows it while the profile still carries the overlay's scores (or after a sync has recorded the new name). Otherwise the sync skips the overlay with *"Quality profile … was not found on this instance"* rather than scoring whichever profile now has the old id.
+
 A custom format only scores if it **actually exists in the app**. An assigned format that isn't in the app yet is flagged **not in app** in the list, and both **Preview diff** and the sync report explain it (*"…is not present in this instance — add & sync it to apply its score"*) rather than silently showing no change. To fix it in one step, click **Add** on the flagged row (or **Add all & apply** in the banner): Librariarr creates the missing custom format in the app and then applies the profile's scores — no need to visit the Custom Formats tab first. **Add** is unavailable while you have unsaved changes (save or discard them first), so it never applies edits you haven't saved. Format names are compared case-insensitively, so a format already in the app under a differently-cased name is not "not in app" — take it over from the Custom Formats tab, which asks for confirmation. A format left at score **0** is flagged **no effect**, since a zero score does nothing.
 
 ### Quality definitions (sizes)
@@ -141,6 +143,14 @@ Naming schemes let you choose recommended file and folder formats:
 - **Sonarr** — series folder, season folder, and standard / daily / anime episode formats.
 
 Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later. Because every app already has a naming configuration, managing it asks for the same overwrite confirmation as any other existing item. Only variants the guide offers for that app are accepted.
+
+## Renamed items
+
+Managed custom formats and quality profiles are tracked by the app id and name recorded at their last sync as well as by the guide's name. When TRaSH renames one upstream (the guide keeps its id stable), or you rename it in the app, the next sync updates that same item — renaming it to the guide's name — instead of creating a second copy beside it.
+
+An app id on its own is never trusted: the item at that id is only treated as yours while it still has the name Librariarr last gave it, or, if you renamed it in the app, while its contents are still what the sync would write. This matters when the id now belongs to something else — after you point the instance at a different Sonarr/Radarr, or restore the app from an older backup — where trusting the id alone would overwrite and rename one of your own custom formats or profiles. Such an item shows as **Missing in app**, and the next sync creates the guide's copy instead. Changing an instance's URL in **Settings → Integrations** also forgets the recorded ids, so until the next sync each managed item is found by its guide name only.
+
+The trade-off: an item you renamed in the app **and** changed (or whose guide definition changed since the last sync) is no longer recognised, and the sync creates the guide's copy beside it. Rename it back to the guide's name to keep managing the original.
 
 ## Refreshing the catalog
 

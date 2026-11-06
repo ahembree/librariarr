@@ -146,10 +146,24 @@ describe("custom format translation", () => {
       { id: 1, name: "Renamed", specifications: [] },
       { id: 2, name: "amzn", specifications: [] },
     ];
-    expect(findManagedArrResource(arr, "New Name", 1)?.id).toBe(1);
-    expect(findManagedArrResource(arr, "AMZN", 1)?.id).toBe(2);
-    expect(findManagedArrResource(arr, "New Name", null)).toBeUndefined();
-    expect(findManagedArrResource(arr, "New Name", 99)).toBeUndefined();
+    // The resource at the recorded id still carries the name the row last
+    // synced it under: the guide renamed it upstream.
+    const recorded = { arrId: 1, name: "Renamed" };
+    expect(findManagedArrResource(arr, "New Name", recorded)?.id).toBe(1);
+    expect(findManagedArrResource(arr, "AMZN", recorded)?.id).toBe(2);
+    expect(findManagedArrResource(arr, "New Name", { ...recorded, arrId: null })).toBeUndefined();
+    expect(findManagedArrResource(arr, "New Name", { ...recorded, arrId: 99 })).toBeUndefined();
+  });
+
+  it("findManagedArrResource never takes the resource at the recorded id on the id alone", () => {
+    // The instance now reaches another app (or a restored one): id 1 is the
+    // user's own format there.
+    const arr: ArrCustomFormat[] = [{ id: 1, name: "My Release Group", specifications: [] }];
+    expect(findManagedArrResource(arr, "BR-DISK", { arrId: 1 })).toBeUndefined();
+    expect(findManagedArrResource(arr, "BR-DISK", { arrId: 1, name: "BR-DISK" })).toBeUndefined();
+    expect(findManagedArrResource(arr, "BR-DISK", { arrId: 1, name: "BR-DISK" }, () => false)).toBeUndefined();
+    // Its content can prove it (renamed in the app, otherwise untouched).
+    expect(findManagedArrResource(arr, "BR-DISK", { arrId: 1, name: "BR-DISK" }, () => true)?.id).toBe(1);
   });
 });
 

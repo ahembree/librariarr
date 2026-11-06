@@ -180,6 +180,70 @@ describe("integration instance routes", () => {
     });
   });
 
+  // TRaSH Guide Sync records the app id of each resource it manages. A new URL
+  // may reach another app, where those ids name the user's own formats and
+  // profiles — the edit forgets them, so the next sync finds each by name.
+  describe.each([
+    { label: "Sonarr", create: createTestSonarrInstance, put: sonarrItem.PUT, serviceType: "SONARR", key: "sonarrInstanceId" },
+    { label: "Radarr", create: createTestRadarrInstance, put: radarrItem.PUT, serviceType: "RADARR", key: "radarrInstanceId" },
+  ] as const)("$label: TRaSH Guide Sync's recorded app ids", ({ create, put, serviceType, key }) => {
+    async function managedRows() {
+      const instance = await create(userId, { url: "http://arr.test:8080" });
+      const other = await create(userId, { url: "http://other.test:8080" });
+      const row = (instanceId: string, trashId: string, arrId: number | null) => ({
+        userId, serviceType, [key]: instanceId, resourceType: "CUSTOM_FORMAT", trashId, name: `CF ${trashId}`, arrId,
+      });
+      await prisma.trashManagedResource.createMany({
+        data: [row(instance.id, "a", 1), row(instance.id, "b", 2), row(instance.id, "c", null), row(other.id, "a", 1)],
+      });
+      return { instance, other };
+    }
+    const arrIds = async (instanceId: string) =>
+      (await prisma.trashManagedResource.findMany({ where: { [key]: instanceId }, orderBy: { trashId: "asc" } })).map(
+        (r) => [r.trashId, r.arrId, r.name],
+      );
+
+    it("forgets them when the URL changes, for that instance only", async () => {
+      setMockSession({ userId, isLoggedIn: true, authenticatedAt: Date.now() });
+      const { instance, other } = await managedRows();
+      await expectJson(
+        await callRouteWithParams(put, { id: instance.id }, { method: "PUT", body: { url: "http://new-arr.test:8080/" } }),
+        200,
+      );
+      expect(await arrIds(instance.id)).toEqual([["a", null, "CF a"], ["b", null, "CF b"], ["c", null, "CF c"]]);
+      expect(await arrIds(other.id)).toEqual([["a", 1, "CF a"]]);
+    });
+
+    it("forgets them for an instance turned off in the same save (no connection test)", async () => {
+      setMockSession({ userId, isLoggedIn: true, authenticatedAt: Date.now() });
+      const { instance } = await managedRows();
+      await expectJson(
+        await callRouteWithParams(put, { id: instance.id }, { method: "PUT", body: { url: "http://new-arr.test:8080", enabled: false } }),
+        200,
+      );
+      expect((await arrIds(instance.id)).map(([, arrId]) => arrId)).toEqual([null, null, null]);
+    });
+
+    it("keeps them for an edit that leaves the URL alone (trailing slashes aside)", async () => {
+      const { instance } = await managedRows();
+      for (const body of [{ url: "http://arr.test:8080///" }, { name: "Renamed" }, { apiKey: "new-key" }, { enabled: false }]) {
+        await expectJson(await callRouteWithParams(put, { id: instance.id }, { method: "PUT", body }), 200);
+      }
+      expect((await arrIds(instance.id)).map(([, arrId]) => arrId)).toEqual([1, 2, null]);
+    });
+
+    it("keeps them when the edit is refused", async () => {
+      setMockSession({ userId, isLoggedIn: true, authenticatedAt: Date.now() });
+      const { instance } = await managedRows();
+      testResult.current = { ok: false, error: "down" };
+      await expectJson(
+        await callRouteWithParams(put, { id: instance.id }, { method: "PUT", body: { url: "http://new-arr.test:8080" } }),
+        400,
+      );
+      expect((await arrIds(instance.id)).map(([, arrId]) => arrId)).toEqual([1, 2, null]);
+    });
+  });
+
   describe("GET /api/integrations/instances", () => {
     it("answers every type's list exactly as its own route does", async () => {
       await createTestRadarrInstance(userId);

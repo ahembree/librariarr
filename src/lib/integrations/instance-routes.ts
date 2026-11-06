@@ -15,6 +15,7 @@ import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import { forgetRecordedArrIds } from "@/lib/trash/status";
 import {
   validateRequest,
   arrInstanceCreateSchema,
@@ -129,6 +130,12 @@ export interface IntegrationConfig<C extends ConnectionClient = ConnectionClient
   detachOnDelete: boolean;
   /** After a create, edit or delete — Seerr drops its request caches. */
   afterChange?: () => void;
+  /**
+   * Sonarr and Radarr: run in the edit's transaction when the instance's URL
+   * changes (trailing slashes aside). The new URL may reach another app, where
+   * the ids TRaSH Guide Sync recorded on the old one name other resources.
+   */
+  onUrlChange?: (tx: Prisma.TransactionClient, instanceId: string) => Promise<unknown>;
 }
 
 export const RADARR: IntegrationConfig<RadarrClient> = {
@@ -140,6 +147,7 @@ export const RADARR: IntegrationConfig<RadarrClient> = {
   updateSchema: arrInstanceUpdateSchema,
   hasExternalUrl: true,
   detachOnDelete: true,
+  onUrlChange: (tx, id) => forgetRecordedArrIds(tx, "RADARR", id),
 };
 
 export const SONARR: IntegrationConfig<SonarrClient> = {
@@ -151,6 +159,7 @@ export const SONARR: IntegrationConfig<SonarrClient> = {
   updateSchema: arrInstanceUpdateSchema,
   hasExternalUrl: true,
   detachOnDelete: true,
+  onUrlChange: (tx, id) => forgetRecordedArrIds(tx, "SONARR", id),
 };
 
 export const LIDARR: IntegrationConfig<LidarrClient> = {
@@ -299,17 +308,26 @@ export function instanceItemRoutes(config: IntegrationConfig) {
       if (!result.ok) return failedToConnect(config, result);
     }
 
-    const instance = await delegateOf(config).update({
-      where: { id },
-      data: {
-        ...(name && { name }),
-        ...(url && { url: stripTrailingSlashes(url) }),
-        ...(apiKey && { apiKey }),
-        ...(config.hasExternalUrl &&
-          externalUrl !== undefined && { externalUrl: externalUrl ? stripTrailingSlashes(externalUrl) : null }),
-        ...(enabled !== undefined && { enabled }),
-      },
-    });
+    const update = (db: Prisma.TransactionClient = prisma) =>
+      delegateOf(config, db).update({
+        where: { id },
+        data: {
+          ...(name && { name }),
+          ...(url && { url: stripTrailingSlashes(url) }),
+          ...(apiKey && { apiKey }),
+          ...(config.hasExternalUrl &&
+            externalUrl !== undefined && { externalUrl: externalUrl ? stripTrailingSlashes(externalUrl) : null }),
+          ...(enabled !== undefined && { enabled }),
+        },
+      });
+    const onUrlChange = urlChanged ? config.onUrlChange : undefined;
+    const instance = onUrlChange
+      ? await prisma.$transaction(async (tx) => {
+          const updated = await update(tx);
+          await onUrlChange(tx, id);
+          return updated;
+        })
+      : await update();
     instanceChanged(config, id);
 
     return NextResponse.json({ instance: sanitize(instance) });
