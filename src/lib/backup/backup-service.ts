@@ -9,6 +9,7 @@ import {
   invalidateServersWithoutWatchHistory,
   restartTracearrBackfillWithoutPlays,
 } from "@/lib/media/watch-evidence";
+import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
 import { compareSemver } from "@/lib/version/semver";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
@@ -400,6 +401,14 @@ export async function restoreBackup(
         `the restore left without Tracearr plays — the next walk starts from the newest play`,
     );
   }
+
+  // A full backup from an earlier version brings its media rows back with the
+  // keys of that version — a track's dedupKey without the album, say — and
+  // the startup repair has already run in this process, so nothing else would
+  // re-key them before the next restart. The same repair, now. It never
+  // throws: whatever it cannot finish is resumed at the next start.
+  onProgress?.({ phase: "restore", message: "Updating media keys..." });
+  await runBackfillIfNeeded();
 
   // Restore TRUNCATEs every table in `TABLE_ORDER` — `MediaItem` and
   // `WatchHistory` included — and then re-inserts only what the file actually

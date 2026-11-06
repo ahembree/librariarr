@@ -66,6 +66,13 @@ vi.mock("fs/promises", () => ({
   ...mockFs,
 }));
 
+// The key repair a restore ends with has its own integration tests
+// (`tests/integration/backup/restore-legacy-track-keys.test.ts`).
+const { mockRunBackfillIfNeeded } = vi.hoisted(() => ({
+  mockRunBackfillIfNeeded: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/lib/dedup/recompute-canonical", () => ({ runBackfillIfNeeded: mockRunBackfillIfNeeded }));
+
 import {
   createBackup,
   listBackups,
@@ -359,9 +366,17 @@ describe("restoreBackup", () => {
 
     await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz", undefined, onProgress);
 
-    // decrypt, truncate, then the one table's start and its single batch, then complete
+    // decrypt, truncate, then the one table's start and its single batch, the
+    // key repair, then complete
     const phases = onProgress.mock.calls.map((c) => c[0].phase);
-    expect(phases).toEqual(["decrypt", "truncate", "restore", "restore", "complete"]);
+    expect(phases).toEqual(["decrypt", "truncate", "restore", "restore", "restore", "complete"]);
+    expect(onProgress.mock.calls[4][0]).toEqual({ phase: "restore", message: "Updating media keys..." });
+    // After the restore's transaction, so it repairs the restored rows.
+    expect(mockRunBackfillIfNeeded).toHaveBeenCalledOnce();
+    const { $transaction } = (await import("@/lib/db")).prisma as unknown as { $transaction: ReturnType<typeof vi.fn> };
+    expect(mockRunBackfillIfNeeded.mock.invocationCallOrder[0]).toBeGreaterThan(
+      $transaction.mock.invocationCallOrder.at(-1)!,
+    );
     expect(onProgress.mock.calls[3][0]).toMatchObject({
       table: "user",
       rowsInserted: 1,
