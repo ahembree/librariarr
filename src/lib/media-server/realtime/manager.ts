@@ -126,9 +126,27 @@ export class RealtimeManager {
   }
 
   private async runReconcile(): Promise<void> {
+    // What the DB wants. A read that fails says nothing about it, so this pass
+    // changes nothing: tearing down on an unreadable setting stopped every
+    // connection and disposed every debouncer with its pending work —
+    // including library changes just handed back after a refused enqueue — so
+    // a database outage longer than one 60 s tick lost them for good. Only an
+    // explicit `realtimeSync: false`, or a server the list no longer holds
+    // enabled, tears anything down. The next pass reads again.
+    let servers: RealtimeServerConfig[];
     try {
-      const enabled = await this.isRealtimeEnabled();
-      const servers = enabled ? await this.loadServers() : [];
+      servers = (await this.isRealtimeEnabled()) ? await this.loadServers() : [];
+    } catch (error) {
+      logger.warn(
+        "Realtime",
+        `Could not read the realtime setting or the server list — keeping ${this.connections.size} ` +
+          `connection(s) and their pending work as they are; the next reconcile tries again`,
+        { error: String(error) },
+      );
+      return;
+    }
+
+    try {
       const wanted = new Map(servers.map((s) => [s.id, s]));
 
       // Drop connections that are gone, disabled, or whose config changed.
@@ -515,17 +533,11 @@ export class RealtimeManager {
     this.suppressedSelfWrites.delete(serverId);
   }
 
+  /** Throws when the setting cannot be read — never "disabled" (see `runReconcile`). */
   private async isRealtimeEnabled(): Promise<boolean> {
-    try {
-      const settings = await prisma.appSettings.findFirst({ select: { realtimeSync: true } });
-      // Default on when no settings row exists yet (pre-setup: no servers anyway).
-      return settings?.realtimeSync ?? true;
-    } catch (error) {
-      logger.debug("Realtime", "Could not read realtime setting; treating as disabled", {
-        error: String(error),
-      });
-      return false;
-    }
+    const settings = await prisma.appSettings.findFirst({ select: { realtimeSync: true } });
+    // Default on when no settings row exists yet (pre-setup: no servers anyway).
+    return settings?.realtimeSync ?? true;
   }
 
   private async loadServers(): Promise<RealtimeServerConfig[]> {
