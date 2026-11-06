@@ -121,6 +121,12 @@ async function seedLargeRequestedShow() {
       { mediaItemId: "ep-4", mediaServerId: server.id, serverUsername: "bob" },
     ],
   });
+  // Refresh the planner statistics the way autovacuum's analyze would after a
+  // bulk load. Without it, column statistics an earlier test file left behind
+  // (gathered while these tables held a handful of rows) describe 33k fresh
+  // rows, and the planner picks plans that take minutes: this file passed
+  // alone and timed out only late in the full suite.
+  await prisma.$executeRawUnsafe(`ANALYZE "MediaItem", "MediaItemExternalId", "WatchHistory"`);
   await createTestSeerrInstance(user.id);
   mockGetRequests.mockResolvedValue({
     pageInfo: { page: 1, pages: 1, results: 1 },
