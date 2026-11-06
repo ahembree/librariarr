@@ -26,7 +26,9 @@ import {
   ActionTypeSelect,
   BlockedReason,
   EvaluationScopeCard,
+  PreviewRuleSetButton,
   SaveRuleSetButton,
+  TestMediaButton,
   actionTypeOptionStates,
   groupScopeBlockedReason,
   wholeRecordSwitchReason,
@@ -64,7 +66,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, FileText, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -1006,11 +1008,14 @@ export function LifecycleRulePage({
     resetPreviewProgress();
     try {
       // arrInstanceId: Arr criteria are read from the rule set's own instance.
+      // The action as a save would send it: the routes refuse per-episode
+      // criteria under an action on the whole show, as the save does.
       const previewBody: Record<string, unknown> = {
         rules: groups,
         type: mediaType,
         serverIds,
         arrInstanceId: arrInstanceId || null,
+        ...savedAction,
         ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
       };
       if (scopeConfig) {
@@ -1030,7 +1035,7 @@ export function LifecycleRulePage({
         ? fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...previewBody, actionEnabled, actionType }),
+            body: JSON.stringify(previewBody),
           }).catch(() => null)
         : null;
 
@@ -2331,27 +2336,17 @@ export function LifecycleRulePage({
           )}
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <BlockedReason reason={scopeBlockedReason}>
-              <LoadingButton
-                onClick={handlePreview}
-                loading={previewing}
-                icon={Eye}
-                disabled={!!scopeBlockedReason || groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-                variant="secondary"
-              >
-                Preview
-              </LoadingButton>
-            </BlockedReason>
-            <BlockedReason reason={scopeBlockedReason}>
-              <Button
-                onClick={() => setShowTestMediaDialog(true)}
-                disabled={!!scopeBlockedReason || groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-                variant="secondary"
-              >
-                <FlaskConical className="mr-2 h-4 w-4" />
-                Test Media
-              </Button>
-            </BlockedReason>
+            <PreviewRuleSetButton
+              blockedReason={scopeBlockedReason}
+              onPreview={handlePreview}
+              loading={previewing}
+              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
+            />
+            <TestMediaButton
+              blockedReason={scopeBlockedReason}
+              onTest={() => setShowTestMediaDialog(true)}
+              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
+            />
             <SaveRuleSetButton
               blockedReason={scopeBlockedReason}
               loading={loading}
@@ -2428,6 +2423,7 @@ export function LifecycleRulePage({
         serverIds={serverIds}
         arrInstanceId={arrInstanceId}
         ruleSetId={activeRuleSetId}
+        action={savedAction}
       />
 
       {/* Unsaved edits: confirm before switching rule sets */}
@@ -2525,7 +2521,7 @@ export function LifecycleRulePage({
                 if (!activeRuleSetId) return;
                 setLoadingDiff(true);
                 try {
-                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType, arrInstanceId: arrInstanceId || null };
+                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, ...savedAction, arrInstanceId: arrInstanceId || null };
                   if (scopeConfig) diffBody.seriesScope = seriesScope;
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
                     method: "POST",

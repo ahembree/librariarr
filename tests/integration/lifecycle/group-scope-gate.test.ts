@@ -26,6 +26,7 @@ import {
   callRoute,
   callRouteWithParams,
   expectJson,
+  expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -109,7 +110,7 @@ const INVALID = groups([SHOW, { field: "resolution", operator: "equals", value: 
 /** The legacy rule set's action: Delete from Sonarr, on the whole show. */
 const DELETE_SERIES = { actionEnabled: true, actionType: "DELETE_SONARR" };
 const REASON = groupScopeHoldReason(groupScopeViolation("SERIES", true, INVALID, DELETE_SERIES)!);
-/** What Preview, Test Media and the diff answer: they judge the rules and scope they are sent. */
+/** What Preview, Test Media and the diff answer for the same rules and scope with no action armed. */
 const SCOPE_REASON = groupScopeHoldReason(groupScopeViolation("SERIES", true, INVALID)!);
 
 /** Which items reached Sonarr. */
@@ -360,17 +361,19 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
       expect(run.ruleMatches).toEqual([]);
       expect(run.skipped).toEqual([{ ruleSetId: ruleSet.id, name: ruleSet.name, reason: REASON }]);
 
+      // Sent without an action, each judges the stored rule set's: the reason
+      // detection gives.
       const body = { rules: INVALID, type: "SERIES", seriesScope: true, serverIds: [server.id], ruleSetId: ruleSet.id };
       const preview = await expectJson<{ error: string }>(
         await callRoute(previewRoute, { url: "/api/lifecycle/rules/preview", method: "POST", body }),
         400,
       );
-      expect(preview.error).toBe(SCOPE_REASON);
+      expect(preview.error).toBe(REASON);
       const tested = await expectJson<{ error: string }>(
         await callRoute(testItemRoute, { url: "/api/lifecycle/rules/test-item", method: "POST", body: { ...body, mediaItemId: episodes[0].id } }),
         400,
       );
-      expect(tested.error).toBe(SCOPE_REASON);
+      expect(tested.error).toBe(REASON);
       // The Match Changes Preview of "Save and re-detect" too.
       const diff = await expectJson<{ error: string }>(
         await callRouteWithParams(diffRoute, { id: ruleSet.id }, {
@@ -378,15 +381,30 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
         }),
         400,
       );
-      expect(diff.error).toBe(SCOPE_REASON);
+      expect(diff.error).toBe(REASON);
+      // With the editor's action turned off, the scope alone.
+      const unarmed = await expectJson<{ error: string }>(
+        await callRoute(previewRoute, { url: "/api/lifecycle/rules/preview", method: "POST", body: { ...body, actionEnabled: false } }),
+        400,
+      );
+      expect(unarmed.error).toBe(SCOPE_REASON);
 
-      // With series scope off the same rules are checked per episode.
+      // With series scope off the same rules are checked per episode — under
+      // an action on the matched episodes (Delete from Sonarr, the stored
+      // one, can't follow them there either).
+      await expectJson(
+        await callRoute(testItemRoute, {
+          url: "/api/lifecycle/rules/test-item", method: "POST",
+          body: { ...body, seriesScope: false, actionType: "DELETE_FILES_SONARR", mediaItemId: episodes[0].id },
+        }),
+        200,
+      );
       await expectJson(
         await callRoute(testItemRoute, {
           url: "/api/lifecycle/rules/test-item", method: "POST",
           body: { ...body, seriesScope: false, mediaItemId: episodes[0].id },
         }),
-        200,
+        400,
       );
     });
 
@@ -712,6 +730,71 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
       )).error).toBe(reason);
       expect(actedOn()).toEqual([]);
       expect(await holdOf(ruleSet.id, "FAILED")).toMatchObject({ scopeHoldReason: reason });
+    });
+
+    it("is refused by Preview, Test Media and the Match Changes Preview, with the reason detection gives", async () => {
+      const { user, server, episodes, sonarr } = await mixedShow();
+      // Saved acting on the matched episodes; the editor has just switched it to a whole-show action, unsaved.
+      const ruleSet = await createTestRuleSet(user.id, {
+        type: "SERIES", seriesScope: false, rules: FOURK_EPISODE, serverIds: [server.id],
+        actionEnabled: true, actionType: "DELETE_FILES_SONARR", arrInstanceId: sonarr.id,
+      });
+      const editor = { rules: FOURK_EPISODE, type: "SERIES", seriesScope: false, serverIds: [server.id], arrInstanceId: sonarr.id };
+      const preview = (body: Record<string, unknown>) =>
+        callRoute(previewRoute, { url: "/api/lifecycle/rules/preview", method: "POST", body: { ...editor, ruleSetId: ruleSet.id, ...body } });
+      const testItem = (body: Record<string, unknown>) =>
+        callRoute(testItemRoute, {
+          url: "/api/lifecycle/rules/test-item", method: "POST",
+          body: { ...editor, ruleSetId: ruleSet.id, mediaItemId: episodes[2].id, ...body },
+        });
+      const diff = (body: Record<string, unknown>) =>
+        callRouteWithParams(diffRoute, { id: ruleSet.id }, { url: `/api/lifecycle/rules/${ruleSet.id}/diff`, method: "POST", body: { ...editor, ...body } });
+      const refusedBy = async (body: Record<string, unknown>) => [
+        (await expectJson<{ error: string }>(await preview(body), 400)).error,
+        (await expectJson<{ error: string }>(await testItem(body), 400)).error,
+        (await expectJson<{ error: string }>(await diff(body), 400)).error,
+      ];
+      const action = { actionEnabled: true, addArrTags: [], removeArrTags: [], searchAfterAction: false };
+
+      // Delete from Sonarr on a show with one 4K episode; a file delete with Arr tags.
+      for (const whole of [
+        { ...action, actionType: "DELETE_SONARR" },
+        { ...action, actionType: "CHANGE_QUALITY_PROFILE_SONARR" },
+        { ...action, actionType: "DELETE_FILES_SONARR", addArrTags: ["seen"] },
+      ]) {
+        const reason = reasonFor(FOURK_EPISODE, whole);
+        expect(await refusedBy(whole), JSON.stringify(whole)).toEqual([reason, reason, reason]);
+      }
+
+      // The action on the matched episodes, or switched off: evaluated.
+      for (const allowed of [{ ...action, actionType: "DELETE_FILES_SONARR" }, { ...action, actionType: "DELETE_SONARR", actionEnabled: false }]) {
+        await expectStreamResult(await preview(allowed));
+        await expectJson(await testItem(allowed), 200);
+        await expectJson(await diff(allowed), 200);
+      }
+
+      // Sent without one, the stored action is judged: a rule set saved
+      // before the rule with Delete from Sonarr is refused.
+      await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { actionType: "DELETE_SONARR" } });
+      const stored = reasonFor(FOURK_EPISODE, { actionType: "DELETE_SONARR" });
+      expect(await refusedBy({})).toEqual([stored, stored, stored]);
+    });
+
+    it("is refused by Preview for a Lidarr file delete with Search after on per-track criteria", async () => {
+      const { server } = await setup();
+      const perTrack = groups([{ field: "audioCodec", operator: "equals", value: "mp3" }]);
+      const body = {
+        rules: perTrack, type: "MUSIC", seriesScope: false, serverIds: [server.id],
+        actionEnabled: true, actionType: "DELETE_FILES_LIDARR", searchAfterAction: true,
+      };
+      const refused = await expectJson<{ error: string }>(
+        await callRoute(previewRoute, { url: "/api/lifecycle/rules/preview", method: "POST", body }),
+        400,
+      );
+      expect(refused.error).toBe(groupScopeHoldReason(groupScopeViolation("MUSIC", false, perTrack, body)!));
+      await expectStreamResult(await callRoute(previewRoute, {
+        url: "/api/lifecycle/rules/preview", method: "POST", body: { ...body, searchAfterAction: false },
+      }));
     });
 
     it("holds a pending action whose own snapshot acts on the whole show, though the rule set's action does not", async () => {

@@ -15,7 +15,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import {
   ActionTypeSelect,
   EvaluationScopeCard,
+  PreviewRuleSetButton,
   SaveRuleSetButton,
+  TestMediaButton,
   actionTypeOptionStates,
   groupScopeBlockedReason,
   wholeRecordSwitchReason,
@@ -92,6 +94,17 @@ function Editor({
       loading: false,
       justSaved: false,
       onSave,
+    }),
+    createElement(PreviewRuleSetButton, {
+      blockedReason: violation ? groupScopeBlockedReason(violation) : null,
+      disabled: false,
+      loading: false,
+      onPreview: vi.fn(),
+    }),
+    createElement(TestMediaButton, {
+      blockedReason: violation ? groupScopeBlockedReason(violation) : null,
+      disabled: false,
+      onTest: vi.fn(),
     }),
   );
 }
@@ -198,6 +211,29 @@ describe("a whole-show action following per-episode criteria", () => {
     expect(await reasonOn(saveButton())).toBe(
       `Resolution can't decide "Delete from Sonarr", which acts on the whole show — remove them or pick an action that acts only on the matched episodes.`,
     );
+  });
+
+  it("keeps Preview and Test Media off with the same reason, as their routes refuse it", async () => {
+    render(createElement(Editor, {
+      type: "SERIES", config: SERIES_SCOPE, rules: groups(["resolution"]), initialScope: false, initialAction: DELETE_SERIES, onSave: vi.fn(),
+    }));
+    const reason = `Resolution can't decide "Delete from Sonarr", which acts on the whole show — remove them or pick an action that acts only on the matched episodes.`;
+    for (const name of ["Preview", "Test Media"]) {
+      const button = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button.disabled, name).toBe(true);
+    }
+    expect(await reasonOn(screen.getByRole("button", { name: "Preview" }))).toBe(reason);
+  });
+
+  it("turns Preview and Test Media on again once the action acts on the matched episodes", async () => {
+    render(createElement(Editor, {
+      type: "SERIES", config: SERIES_SCOPE, rules: groups(["resolution"]), initialScope: false, initialAction: DELETE_SERIES, onSave: vi.fn(),
+    }));
+    await pickerOptions();
+    await act(async () => fireEvent.click(screen.getByRole("option", { name: "Delete Files Only" })));
+    for (const name of ["Preview", "Test Media"]) {
+      expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled, name).toBe(false);
+    }
   });
 
   it("is resolved by switching to a per-episode action, which the picker offers while whole-show ones are off", async () => {

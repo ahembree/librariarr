@@ -5,7 +5,7 @@
  * way once merged with the stored rule set.
  */
 import { describe, it, expect } from "vitest";
-import { ruleSetCreateSchema, ruleSetScopeError } from "@/lib/validation";
+import { ruleDiffSchema, rulePreviewSchema, ruleSetCreateSchema, ruleSetScopeError, ruleTestItemSchema } from "@/lib/validation";
 
 function rules(...fields: string[]) {
   return [{
@@ -96,5 +96,26 @@ describe("ruleSetScopeError", () => {
     const legacy = { type: "SERIES", seriesScope: true, rules: rules("year"), actionEnabled: true, actionType: "DELETE_SONARR" };
     expect(ruleSetScopeError(legacy, "actionType", { actionCausedOnly: true })).toBeNull();
     expect(ruleSetScopeError(legacy, "rules")).not.toBeNull();
+  });
+});
+
+describe("the editor's action on Preview, Test Media and the rule diff", () => {
+  // Kept, so the routes judge the rules with it as a save would.
+  const action = {
+    actionEnabled: true, actionType: "DELETE_SONARR", addArrTags: ["seen"], removeArrTags: ["keep"], searchAfterAction: true,
+  };
+  const evaluated = { rules: rules("resolution"), type: "SERIES", seriesScope: false, serverIds: ["s1"] };
+
+  it("is kept by each schema", () => {
+    expect(rulePreviewSchema.parse({ ...evaluated, ...action })).toMatchObject(action);
+    expect(ruleTestItemSchema.parse({ ...evaluated, mediaItemId: "m1", ...action })).toMatchObject(action);
+    expect(ruleDiffSchema.parse({ ...evaluated, ...action })).toMatchObject(action);
+  });
+
+  it("is optional, and bounded", () => {
+    expect(rulePreviewSchema.safeParse(evaluated).success).toBe(true);
+    expect(rulePreviewSchema.safeParse({ ...evaluated, actionType: null }).success).toBe(true);
+    expect(rulePreviewSchema.safeParse({ ...evaluated, addArrTags: Array.from({ length: 101 }, (_, i) => `t${i}`) }).success).toBe(false);
+    expect(ruleDiffSchema.safeParse({ ...evaluated, actionType: "x".repeat(101) }).success).toBe(false);
   });
 });

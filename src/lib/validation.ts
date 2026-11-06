@@ -565,6 +565,21 @@ export const collectionUpdateSchema = z.object({
   sort: collectionSortEnum.optional(),
 });
 
+/**
+ * The editor's (unsaved) action, which Preview, Test Media and the match diff
+ * judge the rules with as saving would (`groupScopeViolation`: with the scope
+ * off, an action on the whole show or artist may not follow per-episode
+ * criteria). A field left out reads as the stored rule set's
+ * (`editorScopeAction`, src/lib/lifecycle/editor-action.ts).
+ */
+const editorActionFields = {
+  actionEnabled: z.boolean().optional(),
+  actionType: z.string().max(100).nullable().optional(),
+  addArrTags: z.array(z.string().max(200)).max(100).optional(),
+  removeArrTags: z.array(z.string().max(200)).max(100).optional(),
+  searchAfterAction: z.boolean().optional(),
+};
+
 export const rulePreviewSchema = z.object({
   rules: rulesSchema,
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -577,6 +592,7 @@ export const rulePreviewSchema = z.object({
   arrInstanceId: z.string().max(200).nullable().optional(),
   /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
   ruleSetId: z.string().max(200).optional(),
+  ...editorActionFields,
 });
 
 export const ruleTestItemSchema = z.object({
@@ -592,6 +608,7 @@ export const ruleTestItemSchema = z.object({
   arrInstanceId: z.string().max(200).nullable().optional(),
   /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
   ruleSetId: z.string().max(200).optional(),
+  ...editorActionFields,
 });
 
 export const actionExecuteSchema = z.object({
@@ -612,8 +629,7 @@ export const ruleDiffSchema = z.object({
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
   /** The editor's unsaved action config; the stored one when absent. */
-  actionEnabled: z.boolean().optional(),
-  actionType: z.string().nullable().optional(),
+  ...editorActionFields,
   /** The editor's unsaved Arr instance; the stored one when absent. */
   arrInstanceId: z.string().max(200).nullable().optional(),
 });

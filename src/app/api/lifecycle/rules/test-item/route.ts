@@ -23,6 +23,7 @@ import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrRecordForPreview } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadataForPreview } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { loadEditorScopeAction } from "@/lib/lifecycle/editor-action";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
@@ -95,9 +96,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
     arrInstanceId,
-    // As the group scope below reads it: per-episode criteria at series or
-    // artist scope are refused with the reason, not answered.
+    // As the group scope below reads it, with the editor's action: per-episode
+    // criteria at series or artist scope, or under an action on the whole
+    // show or artist with it off, are refused with the reason, not answered.
     !!seriesScope,
+    await loadEditorScopeAction(session.userId, data, ruleSetId),
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });

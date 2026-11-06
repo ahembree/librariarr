@@ -5,6 +5,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { loadPreviewMetadata, previewMetadataPhase } from "@/lib/lifecycle/preview-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { loadEditorScopeAction } from "@/lib/lifecycle/editor-action";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase } from "@/lib/progress/types";
@@ -34,9 +35,12 @@ export const POST = withSession(async (session, request: NextRequest) => {
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
   // Series/artist scope read as the evaluation below routes it (on unless
-  // turned off): per-episode criteria at that scope are refused, not previewed.
+  // turned off), with the editor's action: per-episode criteria at that scope,
+  // or under an action on the whole show or artist with it off, are refused
+  // with detection's reason, not previewed.
+  const action = await loadEditorScopeAction(session.userId, data, ruleSetId);
   const evaluability = await checkLifecycleRuleEvaluability(
-    session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false,
+    session.userId, type, typedRules, serverIds, arrInstanceId, seriesScope !== false, action,
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Save } from "lucide-react";
+import { AlertTriangle, Check, Eye, FlaskConical, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { LoadingButton } from "@/components/loading-button";
@@ -299,6 +299,58 @@ export function BlockedReason({ reason, children }: { reason: string | null; chi
         <TooltipContent className="max-w-xs">{reason}</TooltipContent>
       </Tooltip>
     </TooltipProvider>
+  );
+}
+
+/**
+ * The editor's Preview. `blockedReason` (the scope gate: the scope, the rules
+ * and the action as a save would send them) disables it and says why — the
+ * route refuses the same, with detection's reason; `disabled` covers every
+ * other unmet requirement.
+ */
+export function PreviewRuleSetButton({
+  blockedReason,
+  disabled,
+  loading,
+  onPreview,
+}: {
+  blockedReason: string | null;
+  disabled: boolean;
+  loading: boolean;
+  onPreview: () => void;
+}) {
+  return (
+    <BlockedReason reason={blockedReason}>
+      <LoadingButton
+        onClick={onPreview}
+        loading={loading}
+        icon={Eye}
+        disabled={!!blockedReason || disabled}
+        variant="secondary"
+      >
+        Preview
+      </LoadingButton>
+    </BlockedReason>
+  );
+}
+
+/** The editor's Test Media, gated as Preview is (`PreviewRuleSetButton`). */
+export function TestMediaButton({
+  blockedReason,
+  disabled,
+  onTest,
+}: {
+  blockedReason: string | null;
+  disabled: boolean;
+  onTest: () => void;
+}) {
+  return (
+    <BlockedReason reason={blockedReason}>
+      <Button onClick={onTest} disabled={!!blockedReason || disabled} variant="secondary">
+        <FlaskConical className="mr-2 h-4 w-4" />
+        Test Media
+      </Button>
+    </BlockedReason>
   );
 }
 
