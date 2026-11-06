@@ -179,6 +179,41 @@ describe("POST /api/query/column-values", () => {
     expect(body.values[ids[1]]).toEqual({ audioStreamCount: 2, audioLanguage: ["English"] });
   });
 
+  it("shows season and episode numbers on episode rows only", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    const eps: Record<string, string> = {};
+    for (const [season, episode] of [[1, 1], [2, 1], [3, 4], [0, 1]]) {
+      const ep = await createTestMediaItem(lib.id, {
+        type: "SERIES", title: `S${season}E${episode}`, parentTitle: "Show", seasonNumber: season, episodeNumber: episode,
+      });
+      eps[`S${season}E${episode}`] = ep.id;
+    }
+    // A track keeps its disc and track number in the same columns.
+    const track = await createTestMediaItem(music.id, { type: "MUSIC", title: "T", parentTitle: "A", seasonNumber: 1, episodeNumber: 2 });
+
+    const fields = ["seasonNumber", "episodeNumber", "seasonsBehindLatest"];
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: {
+        items: [
+          { id: eps.S1E1 }, { id: eps.S3E4 }, { id: eps.S0E1 }, { id: eps.S2E1, grouped: true }, { id: track.id },
+        ],
+        fields,
+      },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body.values[eps.S1E1]).toEqual({ seasonNumber: 1, episodeNumber: 1, seasonsBehindLatest: 2 });
+    expect(body.values[eps.S3E4]).toEqual({ seasonNumber: 3, episodeNumber: 4, seasonsBehindLatest: 0 });
+    expect(body.values[eps.S0E1]).toEqual({ seasonNumber: 0, episodeNumber: 1, seasonsBehindLatest: null });
+    expect(body.values[eps.S2E1]).toEqual({ seasonNumber: null, episodeNumber: null, seasonsBehindLatest: null });
+    expect(body.values[track.id]).toEqual({ seasonNumber: null, episodeNumber: null, seasonsBehindLatest: null });
+  });
+
   it("does not read Seerr for music rows, which Seerr never holds", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

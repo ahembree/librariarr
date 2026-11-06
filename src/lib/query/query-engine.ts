@@ -25,7 +25,11 @@ import {
   readsEpisodeValues,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules } from "@/lib/conditions/helpers";
+import {
+  isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules,
+  hasSeasonsBehindLatestRules, isEpisodeLevelField, episodeLevelValue,
+} from "@/lib/conditions/helpers";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
@@ -496,7 +500,7 @@ async function runQueryDefinition(
   const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
     hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
     hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
-    hasArrayFieldRules(groups) || hasStreamCountRules(groups);
+    hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
   const phases: ProgressPhase[] = [
     { key: "servers", label: "Resolving servers" },
     ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
@@ -548,7 +552,7 @@ async function runQueryDefinition(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
 
   // Build base WHERE (includes type filter + conditions). Built AFTER the
   // in-memory decision so pre-filter (superset) composition applies when
@@ -704,6 +708,9 @@ async function computeAggregateSurvivingEpisodeIds(
     ? await fetchCrossSystemData(episodes.map((ep) => ep.id))
     : undefined;
 
+  // Seasons Behind Latest has no column: measured per episode before the
+  // per-episode pass below, as the lifecycle engine measures it.
+  if (hasSeasonsBehindLatestRules(groups)) await attachSeasonsBehindLatest(episodes);
   const episodeById = new Map(
     (episodes as unknown as Array<Record<string, unknown> & { id: string }>).map((ep) => [ep.id, ep]),
   );
@@ -865,6 +872,7 @@ async function filterAndGroupSeriesEpisodes(
   });
 
   if (episodes.length === 0) return [];
+  if (hasSeasonsBehindLatestRules(groups)) await attachSeasonsBehindLatest(episodes);
 
   // Each episode carries its own cross-system values, as on the ungrouped path
   // — never enriched here, every episode read "matched by no rule set".
@@ -900,7 +908,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull(groups)
@@ -931,6 +939,8 @@ async function executeUngrouped(
 
   onProgress?.({ type: "phase", key: "query" });
   const items = await prisma.mediaItem.findMany(findArgs);
+  // Seasons Behind Latest has no column: measured per episode before Phase 2.
+  if (hasSeasonsBehindLatestRules(groups)) await attachSeasonsBehindLatest(items as Array<Record<string, unknown>>);
 
   let filteredItems = items;
 
@@ -1383,9 +1393,13 @@ function evaluateQueryRuleInMemory(
     "rating", "audienceRating", "ratingCount",
     // Series-aggregate numeric fields (attached by serializeSeriesAggregateForEval).
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
+    // Per-episode fields: NULL on anything but an episode (episodeLevelValue);
+    // seasonsBehindLatest is attached before Phase 2 (episode-fields.ts).
+    "seasonNumber", "episodeNumber", "seasonsBehindLatest",
   ]);
   if (numericFields.has(field)) {
-    const itemVal = item[field] != null ? Number(item[field]) : null;
+    const raw = isEpisodeLevelField(field) ? episodeLevelValue(item, field) : item[field];
+    const itemVal = raw != null ? Number(raw) : null;
     const numVal = Number(value);
     let result: boolean;
     if (operator === "isNull") { result = itemVal === null; }

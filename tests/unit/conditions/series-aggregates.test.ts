@@ -354,9 +354,9 @@ describe("group values and member values", () => {
     expect(perMember.sort()).toEqual([
       "albumTitle", "aspectRatio", "audienceRating", "audioBitrate", "audioChannels", "audioCodec",
       "audioProfile", "audioSamplingRate", "container", "contentRating", "country", "duration",
-      "dynamicRange", "genre", "isWatchlisted", "labels", "originallyAvailableAt", "rating",
-      "ratingCount", "resolution", "scanType", "studio", "videoBitDepth", "videoBitrate",
-      "videoCodec", "videoFrameRate", "videoProfile", "year",
+      "dynamicRange", "episodeNumber", "genre", "isWatchlisted", "labels", "originallyAvailableAt", "rating",
+      "ratingCount", "resolution", "scanType", "seasonNumber", "seasonsBehindLatest", "studio", "videoBitDepth",
+      "videoBitrate", "videoCodec", "videoFrameRate", "videoProfile", "year",
     ]);
     for (const field of [
       "title", "parentTitle", "playCount", "lastPlayedAt", "addedAt", "fileSize", "watchedByUser",
@@ -386,7 +386,9 @@ describe("group values and member values", () => {
 
   it("takes each per-member field from a column a media item has", () => {
     const columns = new Set<string>(Object.values(Prisma.MediaItemScalarFieldEnum));
-    expect(MEMBER_VALUE_COLUMNS.filter((c) => !columns.has(c))).toEqual([]);
+    // Seasons Behind Latest is no column: the engines attach it to each
+    // episode before Phase 2 (`attachSeasonsBehindLatest`).
+    expect(MEMBER_VALUE_COLUMNS.filter((c) => !columns.has(c))).toEqual(["seasonsBehindLatest"]);
     expect(MEMBER_VALUE_COLUMNS).toContain("genres");
     expect(MEMBER_VALUE_COLUMNS).toContain("countries");
   });

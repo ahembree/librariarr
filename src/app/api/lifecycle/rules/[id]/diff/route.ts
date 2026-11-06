@@ -4,9 +4,10 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, hasEpisodeLevelRules, hasSeasonsBehindLatestRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { editorScopeAction } from "@/lib/lifecycle/editor-action";
@@ -171,7 +172,9 @@ export const POST = withSession(async (
     items = await evaluateMusicScope(typedRules, serverIds, arrData, crossSystemOptions);
   } else {
     const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData, crossSystemOptions);
-    items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
+    items = type === "SERIES"
+      ? groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(typedRules) })
+      : rawItems;
   }
 
   // Filter out excluded items — an exception on another server's copy of an
@@ -303,6 +306,9 @@ export const POST = withSession(async (
       },
     });
     const removedRecords = fullRemovedItems.map((item) => item as unknown as Record<string, unknown>);
+    // Seasons Behind Latest has no column: measured as the engines measure it,
+    // or a removed episode would report no value for it.
+    if (hasSeasonsBehindLatestRules(typedRules)) await attachSeasonsBehindLatest(removedRecords);
     const removedCriteriaMap = getMatchedCriteriaForItems(removedRecords, typedRules, type, arrData, seerrData);
     const removedActualMap = getActualValuesForAllRules(removedRecords, typedRules, type, arrData, seerrData);
     removedItems = await applyGroupShape(

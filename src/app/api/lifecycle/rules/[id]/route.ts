@@ -9,6 +9,7 @@ import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 import { hasArrRules } from "@/lib/rules/lifecycle-engine";
 import { releasesStoredMatches, rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
+import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 export const PUT = withSession(async (
@@ -44,6 +45,32 @@ export const PUT = withSession(async (
       return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
     }
     currentType = current.type;
+  }
+
+  // The schema checks the two tag lists against each other only when both are
+  // sent; a body carrying one is checked against the stored other.
+  if ((addArrTags === undefined) !== (removeArrTags === undefined)) {
+    const stored = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { addArrTags: true, removeArrTags: true },
+    });
+    if (!stored) {
+      return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
+    }
+    const lists = {
+      addArrTags: addArrTags ?? stored.addArrTags,
+      removeArrTags: removeArrTags ?? stored.removeArrTags,
+    };
+    if (!tagListsDisjoint(lists)) {
+      const field = addArrTags !== undefined ? "addArrTags" : "removeArrTags";
+      return NextResponse.json(
+        {
+          error: "Validation failed",
+          details: [`${field}: A tag cannot be both added and removed`],
+        },
+        { status: 400 }
+      );
+    }
   }
 
   if (name !== undefined) {

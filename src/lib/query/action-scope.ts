@@ -10,8 +10,9 @@
  * Sonarr series or Lidarr artist (Delete from Sonarr or Lidarr, Change Quality
  * Profile, Unmonitor & Delete Files, Monitor & Delete Files, Lidarr's
  * Unmonitor Only and Search for New Copy, tags, a Lidarr file delete's search
- * after — and, in the grouped series view, Sonarr's Unmonitor Only and Search
- * for New Copy, which act on the whole series there) may then follow only the
+ * after — and, in the grouped series view of a query without a per-episode
+ * criterion, Sonarr's Unmonitor Only and Search for New Copy, which act on the
+ * whole series there) may then follow only the
  * criteria every member of a show or artist answers alike. "Resolution = 4K"
  * and Delete from Sonarr deleted every show with a single 4K episode.
  *
@@ -19,11 +20,14 @@
  * action: `POST /api/query/actions` refuses such a run (400, the reason from
  * `queryActionScopeError`) and the Query page's action bar offers the actions
  * disabled with that reason. Actions on the matched members only — the file
- * deletes, and Sonarr's Unmonitor and Search in episode view — stay allowed.
+ * deletes, and Sonarr's Unmonitor and Search in episode view or on a query
+ * with a per-episode criterion (`queryActionEpisodeScope`) — stay allowed.
  *
  * Client-safe.
  */
 import { actionCanScopeToEpisodes } from "@/lib/lifecycle/action-types";
+import { hasEpisodeLevelRules } from "@/lib/conditions/helpers";
+import type { ConditionGroup } from "@/lib/conditions/types";
 import {
   GROUP_SCOPE_TERMS,
   groupScopeBlockedLabels,
@@ -43,10 +47,23 @@ export interface QueryActionScopeConfig {
 /**
  * Whether the action runs on the matched episodes rather than the whole
  * series: Sonarr's Unmonitor Only and Search for New Copy in the episode view
- * (`includeEpisodes`), as `POST /api/query/actions` runs them.
+ * (`includeEpisodes`), as `POST /api/query/actions` runs them — and in the
+ * grouped view of a query with a per-episode criterion (Season Number,
+ * Episode Number, Seasons Behind Latest), whose show row stands for the
+ * episodes it matched, as the rule set it converts to (series scope off) runs
+ * them: "Unmonitor seasons 1–3" must not unmonitor the show.
  */
-export function queryActionEpisodeScope(type: string, includeEpisodes: boolean | null | undefined, actionType: string): boolean {
-  return type === "SERIES" && !!includeEpisodes && actionCanScopeToEpisodes(actionType);
+export function queryActionEpisodeScope(
+  type: string,
+  includeEpisodes: boolean | null | undefined,
+  actionType: string,
+  criteria: unknown,
+): boolean {
+  return (
+    type === "SERIES" &&
+    (!!includeEpisodes || (Array.isArray(criteria) && hasEpisodeLevelRules(criteria as ConditionGroup[]))) &&
+    actionCanScopeToEpisodes(actionType)
+  );
 }
 
 /**
@@ -67,13 +84,13 @@ export function queryActionScopeViolation(
     addArrTags: config.addArrTags ?? [],
     removeArrTags: config.removeArrTags ?? [],
     searchAfterAction: config.searchAfterAction ?? false,
-    episodeScope: queryActionEpisodeScope(type, includeEpisodes, config.actionType),
+    episodeScope: queryActionEpisodeScope(type, includeEpisodes, config.actionType, criteria),
   });
 }
 
 /** The Query page's actions that act only on the matched episodes or tracks. */
 const QUERY_MEMBER_ACTIONS: Record<GroupScopeType, string> = {
-  SERIES: 'Delete Files Only, or Unmonitor Only or Search for New Copy with "Include individual episodes" on — without tags',
+  SERIES: 'Delete Files Only, or Unmonitor Only or Search for New Copy with "Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — without tags',
   MUSIC: "Delete Files Only, without Search after or tags",
 };
 

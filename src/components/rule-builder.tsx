@@ -180,7 +180,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
   isSectionHidden: (sectionKey, ctx) => {
     if (sectionKey.startsWith("arr") && !ctx.arrConnected) return true;
     if (sectionKey === "seerr" && ctx.seerrConnected === undefined) return true;
-    if (sectionKey === "series" && ctx.libraryType !== "SERIES") return true;
+    if ((sectionKey === "series" || sectionKey === "episode") && ctx.libraryType !== "SERIES") return true;
     return false;
   },
 

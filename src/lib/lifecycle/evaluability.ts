@@ -29,7 +29,9 @@ import { groupScopeHoldReason, groupScopeViolation, type GroupScopeAction } from
  * shows or artists on one, or its scope is off and its action acts on the
  * whole show or artist) is the one configuration skipped for its own rules
  * rather than an outside dependency: it can be evaluated, but not faithfully —
- * one episode would decide for the whole show. It is transient (an edit
+ * one episode would decide for the whole show. The per-episode criteria
+ * (Season Number, Episode Number, Seasons Behind Latest) are such criteria: a
+ * whole show has no season or episode number. It is transient (an edit
  * resolves it), so its matches and actions are left in place; its actions are
  * held meanwhile by `actionHoldOf` (held-actions.ts), which reads the same
  * predicate.

@@ -116,6 +116,15 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "seerrApprovalDate", label: "Approval Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
   { value: "seerrDeclineDate", label: "Decline Date", type: "date", section: "seerr", requiresSeerr: true, invalidForLibraryType: ["MUSIC"] },
 
+  // ─── Episode (per-episode fields, judged on each episode) ──────────────
+  // Season 0 holds specials. "Seasons Behind Latest" counts season numbers back
+  // from the newest numbered season of the show in the episode's library (0 =
+  // the newest); specials and unnumbered episodes have no value. See
+  // src/lib/conditions/episode-fields.ts.
+  { value: "seasonNumber", label: "Season Number", type: "number", section: "episode", episodeLevel: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "episodeNumber", label: "Episode Number", type: "number", section: "episode", episodeLevel: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+  { value: "seasonsBehindLatest", label: "Seasons Behind Latest", type: "number", section: "episode", episodeLevel: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
+
   // ─── Series (aggregate fields, computed by aggregating across episodes) ─
   { value: "latestEpisodeViewDate", label: "Latest Episode View Date", type: "date", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },
   { value: "seriesLastPlayedAt", label: "Series Last Played", type: "date", section: "series", isSeriesAggregate: true, readsPlayActivity: true, invalidForLibraryType: ["MOVIE", "MUSIC"] },

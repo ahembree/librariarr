@@ -131,7 +131,8 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
         `"Delete from Sonarr" acts on the whole show, so it can't follow query criteria that describe one episode or ` +
           `file: Resolution — one matching episode would decide for the whole show. Remove them from the query, or pick ` +
           `an action that acts only on the matched episodes (Delete Files Only, or Unmonitor Only or Search for New Copy ` +
-          `with "Include individual episodes" on — without tags).`,
+          `with "Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — ` +
+          `without tags).`,
       );
     }
     expect(mockedExecuteAction).not.toHaveBeenCalled();
@@ -223,6 +224,64 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
     const { result } = await expectStreamResult<{ executed: number }>(response);
     expect(result.executed).toBe(1);
     expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  describe("per-episode criteria (Season Number, Episode Number, Seasons Behind Latest)", () => {
+    // Where one episode sits in its show: "Seasons Behind Latest ≥ 2" with
+    // Delete from Sonarr deleted every show with three seasons or more, and
+    // with Unmonitor & Delete Files (which unmonitors the series) the newest
+    // seasons it exists to keep stopped downloading.
+    const SEASON_1 = { field: "seasonNumber", operator: "equals", value: "1" };
+    const BEHIND = { field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: "0" };
+    const EPISODE_1 = { field: "episodeNumber", operator: "equals", value: "1" };
+
+    it("refuses every whole-series action on a query using one, in either view", async () => {
+      const { serverId, sonarrId, episodes } = await seed();
+      const whole: Array<Record<string, unknown>> = [
+        { actionType: "DELETE_SONARR" },
+        { actionType: "UNMONITOR_DELETE_FILES_SONARR" },
+        { actionType: "MONITOR_DELETE_FILES_SONARR" },
+        { actionType: "CHANGE_QUALITY_PROFILE_SONARR" },
+        // Tags act on the whole series, added and removed together or alone.
+        { actionType: "UNMONITOR_SONARR", addArrTags: ["old"], removeArrTags: ["keep"] },
+        { actionType: "DO_NOTHING", removeArrTags: ["keep"] },
+      ];
+      for (const criterion of [SEASON_1, BEHIND, EPISODE_1]) {
+        for (const includeEpisodes of [false, true]) {
+          for (const action of whole) {
+            const refused = await expectJson<{ error: string }>(await run({
+              query: query(serverId, "SERIES", [criterion], includeEpisodes),
+              mediaItemIds: [episodes[0]],
+              arrInstanceId: sonarrId,
+              ...action,
+            }), 400);
+            expect(refused.error, `${criterion.field} ${includeEpisodes} ${JSON.stringify(action)}`)
+              .toMatch(/^".*" acts on the whole show, so it can't follow query criteria that describe one episode or file: (Season Number|Seasons Behind Latest|Episode Number)/);
+          }
+        }
+      }
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("runs Unmonitor Only grouped by show on the matched episodes, and the file delete on them", async () => {
+      const { serverId, sonarrId, episodes } = await seed();
+      for (const action of [{ actionType: "UNMONITOR_SONARR" }, { actionType: "SEARCH_SONARR" }, { actionType: "DELETE_FILES_SONARR" }]) {
+        mockedExecuteAction.mockClear();
+        const response = await run({
+          query: query(serverId, "SERIES", [MIXED_SHOW, EPISODE_1]),
+          mediaItemIds: [episodes[0]],
+          arrInstanceId: sonarrId,
+          ...action,
+        });
+        const { result } = await expectStreamResult<{ executed: number }>(response);
+        expect(result.executed, JSON.stringify(action)).toBe(1);
+        const record = mockedExecuteAction.mock.calls[0][0];
+        // Episode 1 alone, never the whole series.
+        const ep1 = (await getTestPrisma().mediaItem.findFirstOrThrow({ where: { parentTitle: "Mixed Show", episodeNumber: 1 } })).id;
+        expect(record.matchedMediaItemIds, JSON.stringify(action)).toEqual([ep1]);
+        if (action.actionType !== "DELETE_FILES_SONARR") expect(record.episodeScope, JSON.stringify(action)).toBe(true);
+      }
+    });
   });
 
   it("leaves a movie action alone: a movie is its own record", async () => {

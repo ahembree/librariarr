@@ -485,6 +485,61 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.name).toBe("Updated Name");
     });
 
+    describe("Arr tag lists", () => {
+      async function seed() {
+        const user = await createTestUser();
+        const ruleSet = await createTestRuleSet(user.id, { name: "Tags" });
+        await getTestPrisma().ruleSet.update({
+          where: { id: ruleSet.id },
+          data: { addArrTags: ["Archived"], removeArrTags: ["new"] },
+        });
+        setMockSession({ isLoggedIn: true, userId: user.id });
+        return ruleSet;
+      }
+
+      function put(id: string, body: Record<string, unknown>) {
+        return callRouteWithParams(PUT, { id }, { url: `/api/lifecycle/rules/${id}`, method: "PUT", body });
+      }
+
+      it("saves both lists together", async () => {
+        const ruleSet = await seed();
+        await expectJson(await put(ruleSet.id, { addArrTags: ["keep"], removeArrTags: ["new", "watching"] }), 200);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.addArrTags).toEqual(["keep"]);
+        expect(row.removeArrTags).toEqual(["new", "watching"]);
+      });
+
+      it("refuses a removeArrTags-only body naming a stored added tag", async () => {
+        const ruleSet = await seed();
+        const body = await expectJson<{ error: string; details: string[] }>(
+          await put(ruleSet.id, { removeArrTags: ["archived"] }),
+          400,
+        );
+        expect(body.details).toEqual(["removeArrTags: A tag cannot be both added and removed"]);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.removeArrTags).toEqual(["new"]);
+      });
+
+      it("refuses an addArrTags-only body naming a stored removed tag", async () => {
+        const ruleSet = await seed();
+        const body = await expectJson<{ details: string[] }>(await put(ruleSet.id, { addArrTags: ["NEW"] }), 400);
+        expect(body.details).toEqual(["addArrTags: A tag cannot be both added and removed"]);
+      });
+
+      it("accepts one list that does not overlap the stored other", async () => {
+        const ruleSet = await seed();
+        await expectJson(await put(ruleSet.id, { addArrTags: ["Archived", "keep"] }), 200);
+        const row = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+        expect(row.addArrTags).toEqual(["Archived", "keep"]);
+      });
+
+      it("answers 404 for a one-list body on a rule set that does not exist", async () => {
+        const user = await createTestUser();
+        setMockSession({ isLoggedIn: true, userId: user.id });
+        await expectJson(await put("missing", { addArrTags: ["a"] }), 404);
+      });
+    });
+
     it("rejects a rules update carrying fields invalid for the rule set's type", async () => {
       const user = await createTestUser();
       // Default type is MOVIE.
@@ -1093,5 +1148,137 @@ describe("action configuration validation", () => {
     expect(json.error).toMatch(/not valid for movie/i);
     const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: created.ruleSet.id } });
     expect(stored.actionType).toBe("DELETE_RADARR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Season and episode criteria need series scope off
+// ---------------------------------------------------------------------------
+
+describe("season and episode criteria", () => {
+  const seasonRule = { id: "r1", field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: 2, condition: "AND" };
+  const body = (serverId: string, seriesScope?: boolean) => ({
+    name: "Old Seasons",
+    type: "SERIES" as const,
+    rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }],
+    serverIds: [serverId],
+    ...(seriesScope !== undefined ? { seriesScope } : {}),
+  });
+
+  // Criteria of one episode under the group-scope gate: refused with the
+  // gate's validation detail, as Resolution is.
+  const SCOPE_REFUSAL = /"Match against entire series" on.*Seasons Behind Latest.*Turn "Match against entire series" off/;
+
+  it("refuses them in series scope, the default", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    for (const seriesScope of [undefined, true]) {
+      const response = await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, seriesScope) });
+      const json = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(json.error).toBe("Validation failed");
+      expect(json.details[0]).toMatch(SCOPE_REFUSAL);
+    }
+    expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it.each(["DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR"])(
+    "refuses them with series scope off under %s, which acts on the whole series",
+    async (actionType) => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(POST, {
+        method: "POST",
+        url: "/api/lifecycle/rules",
+        body: { ...body(server.id, false), actionEnabled: true, actionType },
+      });
+      const json = await expectJson<{ details: string[] }>(response, 400);
+      expect(json.details[0]).toMatch(/^actionType: ".*" acts on the whole show.*Seasons Behind Latest/);
+      expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
+    },
+  );
+
+  it("refuses an action that adds and removes Arr tags over them, and accepts one on the matched episodes", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const tagged = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...body(server.id, false), actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["old"], removeArrTags: ["keep"] },
+    });
+    expect((await expectJson<{ details: string[] }>(tagged, 400)).details[0]).toMatch(/"Arr tags" acts on the whole show/);
+
+    const files = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...body(server.id, false), actionEnabled: true, actionType: "DELETE_FILES_SONARR" },
+    });
+    const { ruleSet } = await expectJson<{ ruleSet: { id: string } }>(files, 201);
+
+    // Tags added to it later — both lists in one save, or one — are refused too.
+    for (const tags of [{ addArrTags: ["old"], removeArrTags: ["keep"] }, { removeArrTags: ["keep"] }]) {
+      const put = await callRouteWithParams(PUT, { id: ruleSet.id }, {
+        method: "PUT", url: `/api/lifecycle/rules/${ruleSet.id}`, body: tags,
+      });
+      expect((await expectJson<{ details: string[] }>(put, 400)).details[0]).toMatch(/"Arr tags" acts on the whole show/);
+    }
+    const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+    expect(stored.addArrTags).toEqual([]);
+    expect(stored.removeArrTags).toEqual([]);
+  });
+
+  it("accepts them with series scope off", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, false) });
+    const json = await expectJson<{ ruleSet: { seriesScope: boolean } }>(response, 201);
+    expect(json.ruleSet.seriesScope).toBe(false);
+  });
+
+  it("refuses an update that turns series scope on, or adds them in series scope", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const created = await expectJson<{ ruleSet: { id: string } }>(
+      await callRoute(POST, { method: "POST", url: "/api/lifecycle/rules", body: body(server.id, false) }),
+      201,
+    );
+    const id = created.ruleSet.id;
+
+    const scopeOn = await callRouteWithParams(PUT, { id }, { method: "PUT", url: `/api/lifecycle/rules/${id}`, body: { seriesScope: true } });
+    expect((await expectJson<{ details: string[] }>(scopeOn, 400)).details[0]).toMatch(SCOPE_REFUSAL);
+
+    const scoped = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true, rules: [dummyRule] });
+    const addRule = await callRouteWithParams(PUT, { id: scoped.id }, {
+      method: "PUT",
+      url: `/api/lifecycle/rules/${scoped.id}`,
+      body: { rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }] },
+    });
+    expect((await expectJson<{ details: string[] }>(addRule, 400)).details[0]).toMatch(SCOPE_REFUSAL);
+
+    // Turning scope off together with the new rules is accepted.
+    const both = await callRouteWithParams(PUT, { id: scoped.id }, {
+      method: "PUT",
+      url: `/api/lifecycle/rules/${scoped.id}`,
+      body: { seriesScope: false, rules: [{ id: "g1", condition: "AND", rules: [seasonRule], groups: [] }] },
+    });
+    await expectJson(both, 200);
+    const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id } });
+    expect(stored.seriesScope).toBe(false);
+  });
+
+  it("refuses them on a movie rule set", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(POST, {
+      method: "POST",
+      url: "/api/lifecycle/rules",
+      body: { ...body(server.id), type: "MOVIE" },
+    });
+    expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(/not valid for movie rules: seasonsBehindLatest/);
   });
 });

@@ -42,6 +42,8 @@ import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import { releasesStoredMatches } from "@/lib/lifecycle/rule-set-matching";
+import { ArrTagPicker } from "@/components/arr-tag-picker";
+import { withoutTags } from "@/lib/lifecycle/arr-tag-lists";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -367,7 +369,6 @@ export function LifecycleRulePage({
   const [addArrTags, setAddArrTags] = useState<string[]>([]);
   const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
   const [manageTagsEnabled, setManageTagsEnabled] = useState(false);
-  const [tagMode, setTagMode] = useState<"add" | "remove">("add");
   const arrType = arrTypeForMediaType(mediaType);
   const arrInstances = editorData.integrations?.[arrType] ?? [];
   // Seerr data is never read for music (its fields are invalid there).
@@ -1177,7 +1178,6 @@ export function LifecycleRulePage({
     setAddArrTags(ruleSet.addArrTags ?? []);
     setRemoveArrTags(ruleSet.removeArrTags ?? []);
     setManageTagsEnabled((ruleSet.addArrTags ?? []).length > 0 || (ruleSet.removeArrTags ?? []).length > 0);
-    setTagMode((ruleSet.addArrTags ?? []).length > 0 ? "add" : (ruleSet.removeArrTags ?? []).length > 0 ? "remove" : "add");
     setPreview([]);
 
     // Collection: settings come from the linked collection definition (the
@@ -1353,7 +1353,6 @@ export function LifecycleRulePage({
     setAddArrTags([]);
     setRemoveArrTags([]);
     setManageTagsEnabled(false);
-    setTagMode("add");
     setCollectionEnabled(false);
     setSelectedCollectionId("");
     setCollectionName("");
@@ -1438,7 +1437,6 @@ export function LifecycleRulePage({
       setAddArrTags(data.addArrTags ?? []);
       setRemoveArrTags(data.removeArrTags ?? []);
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
-      setTagMode((data.addArrTags ?? []).length > 0 ? "add" : (data.removeArrTags ?? []).length > 0 ? "remove" : "add");
       // Imported collection settings populate a fresh collection definition;
       // saving creates a collection of that name, and the create route
       // answers 409 when one exists (the user then picks it in the dropdown).
@@ -1965,104 +1963,29 @@ export function LifecycleRulePage({
 
                   {manageTagsEnabled && !deletesArrRecord(actionType) && arrInstanceId && (
                     <div className="ml-7 space-y-3">
-                      <Select value={tagMode} onValueChange={(v) => setTagMode(v as "add" | "remove")}>
-                        <SelectTrigger className="w-full sm:w-56">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="add">Add Arr Tag(s)</SelectItem>
-                          <SelectItem value="remove">Remove Arr Tag(s)</SelectItem>
-                        </SelectContent>
-                      </Select>
-
-                      {/* Tag multi-select dropdown */}
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
-                            <span className="truncate text-muted-foreground">
-                              {(tagMode === "add" ? addArrTags : removeArrTags).length === 0
-                                ? "Select tags..."
-                                : `${(tagMode === "add" ? addArrTags : removeArrTags).length} tag${(tagMode === "add" ? addArrTags : removeArrTags).length === 1 ? "" : "s"} selected`}
-                            </span>
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                          <Command>
-                            <CommandInput placeholder="Search or type new tag..." />
-                            <CommandList>
-                              <CommandEmpty>
-                                <button
-                                  className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded-sm"
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    const input = (e.currentTarget.closest("[cmdk-root]")?.querySelector("[cmdk-input]") as HTMLInputElement)?.value?.trim();
-                                    if (!input) return;
-                                    if (tagMode === "add") {
-                                      if (!addArrTags.includes(input)) setAddArrTags([...addArrTags, input]);
-                                    } else {
-                                      if (!removeArrTags.includes(input)) setRemoveArrTags([...removeArrTags, input]);
-                                    }
-                                  }}
-                                >
-                                  Add new tag
-                                </button>
-                              </CommandEmpty>
-                              <CommandGroup>
-                                {(distinctValues.arrTag ?? []).map((tag) => {
-                                  const selected = (tagMode === "add" ? addArrTags : removeArrTags).includes(tag);
-                                  return (
-                                    <CommandItem
-                                      key={tag}
-                                      value={tag}
-                                      onSelect={() => {
-                                        if (tagMode === "add") {
-                                          setAddArrTags(selected ? addArrTags.filter((t) => t !== tag) : [...addArrTags, tag]);
-                                        } else {
-                                          setRemoveArrTags(selected ? removeArrTags.filter((t) => t !== tag) : [...removeArrTags, tag]);
-                                        }
-                                      }}
-                                    >
-                                      <Check className={`mr-2 h-4 w-4 ${selected ? "opacity-100" : "opacity-0"}`} />
-                                      {tag}
-                                    </CommandItem>
-                                  );
-                                })}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-
-                      {/* Selected tag badges */}
-                      {(tagMode === "add" ? addArrTags : removeArrTags).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {(tagMode === "add" ? addArrTags : removeArrTags).map((tag) => (
-                            <ColorChip
-                              key={tag}
-                              className={`gap-1 ${
-                                tagMode === "add"
-                                  ? "border-green/30 bg-green-dim text-green"
-                                  : "border-red/30 bg-red-dim text-red"
-                              }`}
-                            >
-                              {tagMode === "add" ? "+" : "-"}{tag}
-                              <button
-                                onClick={() => {
-                                  if (tagMode === "add") {
-                                    setAddArrTags(addArrTags.filter((t) => t !== tag));
-                                  } else {
-                                    setRemoveArrTags(removeArrTags.filter((t) => t !== tag));
-                                  }
-                                }}
-                                className={tagMode === "add" ? "hover:text-green" : "hover:text-red"}
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </ColorChip>
-                          ))}
-                        </div>
-                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Tags can be added and removed in the same action. A tag picked in one list is taken out of the other.
+                      </p>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <ArrTagPicker
+                          mode="add"
+                          options={distinctValues.arrTag ?? []}
+                          selected={addArrTags}
+                          onChange={(tags) => {
+                            setAddArrTags(tags);
+                            setRemoveArrTags((prev) => withoutTags(prev, tags));
+                          }}
+                        />
+                        <ArrTagPicker
+                          mode="remove"
+                          options={distinctValues.arrTag ?? []}
+                          selected={removeArrTags}
+                          onChange={(tags) => {
+                            setRemoveArrTags(tags);
+                            setAddArrTags((prev) => withoutTags(prev, tags));
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>

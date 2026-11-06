@@ -11,8 +11,9 @@
  *    action covers all of it. "Resolution = 4K" then matches a show with a
  *    single 4K episode, and a whole-series delete takes every 1080p episode
  *    with it. Not allowed: every field whose value the sync stores per episode
- *    or track without guaranteeing the show's or artist's members agree
- *    (`GROUP_SCOPE_BLOCKED_FIELDS`). What stays is what the group answers as a
+ *    or track without guaranteeing the show's or artist's members agree, and
+ *    the per-episode criteria (Season Number, Episode Number, Seasons Behind
+ *    Latest), which a whole show has none of (`GROUP_SCOPE_BLOCKED_FIELDS`). What stays is what the group answers as a
  *    whole — its name, play total, latest play, earliest addition, summed size,
  *    watchers, the series aggregates, every Arr and Seerr field, and, for a
  *    show, its external ids — and the cross-system fields, which the group
@@ -52,7 +53,7 @@
  * Client-safe, and free of path aliases: the docs build's rule-set library
  * check (scripts/rule-set-library-check.ts) imports it.
  */
-import { getConditionField } from "./fields";
+import { CONDITION_FIELDS, getConditionField } from "./fields";
 import { isStreamQueryField } from "./stream-query";
 import { MUSIC_ACTION_TYPES, SERIES_ACTION_TYPES, actionCanScopeToEpisodes } from "../lifecycle/action-types";
 
@@ -130,6 +131,18 @@ const PER_FILE_OR_ITEM_FIELDS = [
 const PER_MEMBER_METADATA_FIELDS = ["genre", "studio", "labels", "contentRating", "country", "isWatchlisted"] as const;
 
 /**
+ * The per-episode criteria (`episodeLevel` in the registry): Season Number,
+ * Episode Number and Seasons Behind Latest. Each is where one episode sits in
+ * its show — a whole show has none of them, and one episode's must never
+ * decide for the show: "Seasons Behind Latest ≥ 2" matches every show with
+ * three seasons or more, and under Delete from Sonarr or Unmonitor & Delete
+ * Files (which unmonitors the series) the two newest seasons it exists to keep
+ * would go with them. Blocked on Music too: a track keeps its disc and track
+ * numbers in the same columns, which these read as empty.
+ */
+const PER_EPISODE_FIELDS: readonly string[] = CONDITION_FIELDS.filter((f) => f.episodeLevel).map((f) => f.value);
+
+/**
  * The fields a rule judging whole shows or artists (group judgement) may not
  * use, per library type. `tests/unit/conditions/group-scope.test.ts`
  * classifies every field of `CONDITION_FIELDS` for each type, so a new field
@@ -141,8 +154,8 @@ const PER_MEMBER_METADATA_FIELDS = ["genre", "studio", "labels", "contentRating"
  * tracks need not all carry the artist's id.
  */
 export const GROUP_SCOPE_BLOCKED_FIELDS: Readonly<Record<GroupScopeType, ReadonlySet<string>>> = {
-  SERIES: new Set<string>([...PER_FILE_OR_ITEM_FIELDS, ...PER_MEMBER_METADATA_FIELDS]),
-  MUSIC: new Set<string>([...PER_FILE_OR_ITEM_FIELDS, ...PER_MEMBER_METADATA_FIELDS, "hasExternalId"]),
+  SERIES: new Set<string>([...PER_FILE_OR_ITEM_FIELDS, ...PER_MEMBER_METADATA_FIELDS, ...PER_EPISODE_FIELDS]),
+  MUSIC: new Set<string>([...PER_FILE_OR_ITEM_FIELDS, ...PER_MEMBER_METADATA_FIELDS, ...PER_EPISODE_FIELDS, "hasExternalId"]),
 };
 
 /**

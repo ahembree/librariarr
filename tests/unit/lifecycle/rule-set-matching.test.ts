@@ -137,6 +137,11 @@ describe("ruleSetVersion", () => {
     for (const change of changes) expect(ruleSetVersion({ ...row, ...change }), JSON.stringify(change)).not.toBe(ruleSetVersion(row));
   });
 
+  it("changes when a tag moves from one list to the other: one action adds some tags and removes others", () => {
+    expect(ruleSetVersion({ ...row, addArrTags: ["a"], removeArrTags: ["b"] })).not.toBe(ruleSetVersion(row));
+    expect(ruleSetVersion({ ...row, addArrTags: [], removeArrTags: ["a", "b"] })).not.toBe(ruleSetVersion(row));
+  });
+
   it("reads exactly the columns it compares", () => {
     expect(Object.keys(RULE_SET_VERSION_SELECT).sort()).toEqual(Object.keys(row).sort());
   });

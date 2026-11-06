@@ -895,6 +895,45 @@ describe("POST /api/query/actions", () => {
     expect(mockedExecuteAction.mock.calls[0][0].episodeScope).toBe(false);
   });
 
+  it.each(["UNMONITOR_SONARR", "SEARCH_SONARR"])(
+    "%s in the grouped view of a query with a season criterion acts on the matched episodes, not the series",
+    async (actionType) => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+      const sonarr = await createTestSonarrInstance(user.id);
+
+      // Both the grouped re-check and the episode re-run answer with the two
+      // matched season-1 episodes (the grouped row is represented by ep1).
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show", seriesKey: "title:show" },
+        { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show", seriesKey: "title:show" },
+      ]));
+
+      const query = {
+        ...BASE_QUERY,
+        mediaTypes: ["SERIES"],
+        groups: [{
+          id: "g1",
+          condition: "AND",
+          rules: [{ id: "r1", field: "seasonsBehindLatest", operator: "greaterThanOrEqual", value: 2, condition: "AND" }],
+          groups: [],
+        }],
+      };
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: { query, mediaItemIds: [ep1.id], actionType, arrInstanceId: sonarr.id },
+      });
+      await expectStreamResult(response);
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+      const record = mockedExecuteAction.mock.calls[0][0];
+      expect(record.episodeScope).toBe(true);
+      expect(new Set(record.matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
+    },
+  );
+
   it("records a FAILED action and surfaces the error when execution throws", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

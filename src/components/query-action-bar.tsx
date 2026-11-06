@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { withoutTags } from "@/lib/lifecycle/arr-tag-lists";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -411,10 +412,10 @@ export function QueryActionBar({
       {supportsTags && (
         <>
           <BlockedReason reason={gate?.tags ?? null}>
-            <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={setAddArrTags} disabled={controlsDisabled || !!gate?.tags} />
+            <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={(tags) => { setAddArrTags(tags); setRemoveArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled || !!gate?.tags} />
           </BlockedReason>
           <BlockedReason reason={gate?.tags ?? null}>
-            <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={setRemoveArrTags} disabled={controlsDisabled || !!gate?.tags} />
+            <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={(tags) => { setRemoveArrTags(tags); setAddArrTags((prev) => withoutTags(prev, tags)); }} disabled={controlsDisabled || !!gate?.tags} />
           </BlockedReason>
         </>
       )}

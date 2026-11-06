@@ -200,6 +200,16 @@ TMDB id specifically", use `notEquals TMDB`.
 | Matched By Rule Set | `matchedByRuleSet` | Names of the rule sets currently matching the item — multi-select |
 | Has Pending Action | `hasPendingAction` | Whether another rule set already has an action pending on the item or another copy of it |
 
+### Episode Fields
+
+Series rule sets (and Series on the Query page) only. These are judged on each episode, so a rule set using one must have **series scope off**, and its action must act only on the matched episodes (**Delete Files Only**, **Unmonitor Only**, **Search for New Copy** or **Do Nothing**, without tags) — see [Season and episode criteria](#season-and-episode-criteria).
+
+| Label | Field | Description |
+|-|-------|-------------|
+| Season Number | `seasonNumber` | The episode's season number (specials are season `0`) |
+| Episode Number | `episodeNumber` | The episode's number within its season |
+| Seasons Behind Latest | `seasonsBehindLatest` | How many seasons the episode's season is behind the show's newest season in your library: `0` for the newest season, `1` for the one before, and so on. Specials and episodes without a season number have no value |
+
 ### Series Fields
 
 Series rule sets only. See [Series scope and aggregate fields](#series-scope-and-aggregate-fields).
@@ -379,6 +389,15 @@ Create a rule set with an OR group:
 - `resolution` equals `SD`
 - `videoCodec` equals `mpeg2video`
 
+### Example: Clear Out Older Seasons
+
+Keep the two newest seasons of every show and free the space taken by the rest. Create a **Series** rule set, turn **Match against entire series** off, and add:
+
+- `seasonsBehindLatest` greaterThanOrEqual `2` — Every season older than the two newest
+- `playCount` greaterThan `0` — Already watched (optional)
+
+With the action **Delete Files Only**, the files of each show's older seasons are deleted, while the two newest seasons are left alone (Sonarr's **Unmonitor Deleted Episodes** setting, or a second rule set with **Unmonitor Only**, keeps Sonarr from downloading them again). **Unmonitor Only** unmonitors those episodes and keeps the files. **Unmonitor & Delete Files** can't be used here: it unmonitors the whole series in Sonarr, newest seasons included, so the editor offers it disabled (see [Season and episode criteria](#season-and-episode-criteria)). When a new season arrives, the window moves with it on the next run. Use `seasonNumber` instead to target fixed seasons (for example `seasonNumber` between `1,3`).
+
 ### Example: Watched Only By Departed Household Members
 
 Create a rule set with an AND group:
@@ -455,7 +474,7 @@ Every library type offers the same eight actions, against Radarr (movies), Sonar
 
 The three file-delete actions can **Search for new copy after file deletion**.
 
-**Manage Tags** adds or removes *arr tags alongside the action, including **Do Nothing**. It is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them.
+**Manage Tags** adds and removes *arr tags alongside the action, including **Do Nothing**. It has two lists, **Add Tags** and **Remove Tags**, and one action can use both — for example, add `archived` while removing `new`. A tag can be in only one of the lists: picking it in one takes it out of the other. Tags are added first, then removed, and the record is written once. **Manage Tags** is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them. Tags — added, removed or both — belong to the whole series or artist in Sonarr and Lidarr, so on a Series or Music rule set they can't follow criteria that describe one episode or track, **Season Number** and the other [episode fields](#season-and-episode-criteria) included (see [Actions on the whole show with series scope off](#actions-on-the-whole-show-with-series-scope-off)).
 
 ### Which files a file delete removes
 
@@ -491,7 +510,7 @@ Each action links a rule set to an *arr instance:
 2. Switch on **Enable lifecycle action** and choose the **Action type**
 3. Set the **Delay (days)** — how long after a match the action runs (default 7)
 4. Set action-specific options (import list exclusion, target quality profile, search after)
-5. Optionally turn on **Manage Tags** to add or remove tags
+5. Optionally turn on **Manage Tags** to add tags, remove tags, or both
 
 <Aside type="caution">
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
@@ -582,7 +601,7 @@ With series scope on, a rule judges the **whole show**, and its action covers ev
 
 #### Criteria not allowed with series scope on
 
-Criteria that describe **one episode or its file** can't be used with series scope on: **Resolution** and every other video and audio field, **Container**, **Duration**, the stream fields (**Audio Language**, **Subtitle Language**, **Stream Audio Codec**, the track counts) and stream query groups, **Year**, **Release Date** (the episode's own — the *arr **Release Date** and **First Aired** describe the series and stay available), **Rating**, **Audience Rating**, **Rating Count**, **Album**, and the metadata Librariarr stores per episode: **Genre**, **Studio**, **Content Rating**, **Label**, **Country** and **Is Watchlisted**. Judging a whole show by one of them lets a single episode decide for every other: *Resolution = 4K* matched a show with one 4K episode, and **Delete from Sonarr** then deleted every 1080p episode with it. The metadata fields are no different: an episode keeps its own genres (it takes the show's only when it has none), its own studio and content rating on Jellyfin and Emby, its own labels on Plex, and its own favourite flag on Jellyfin and Emby (a new episode also reads as not on your Plex watchlist until the next full sync), so *NOT Content Rating = TV-MA* would match a show with one TV-14 episode. To act on episodes by their resolution, codec or genre, turn series scope off and use an action that acts only on the matched episodes: each episode is checked on its own, and a file delete acts only on the episodes that matched.
+Criteria that describe **one episode or its file** can't be used with series scope on: **Resolution** and every other video and audio field, **Container**, **Duration**, the stream fields (**Audio Language**, **Subtitle Language**, **Stream Audio Codec**, the track counts) and stream query groups, **Year**, **Release Date** (the episode's own — the *arr **Release Date** and **First Aired** describe the series and stay available), **Rating**, **Audience Rating**, **Rating Count**, **Album**, the [episode fields](#season-and-episode-criteria) (**Season Number**, **Episode Number**, **Seasons Behind Latest**), and the metadata Librariarr stores per episode: **Genre**, **Studio**, **Content Rating**, **Label**, **Country** and **Is Watchlisted**. Judging a whole show by one of them lets a single episode decide for every other: *Resolution = 4K* matched a show with one 4K episode, and **Delete from Sonarr** then deleted every 1080p episode with it. The metadata fields are no different: an episode keeps its own genres (it takes the show's only when it has none), its own studio and content rating on Jellyfin and Emby, its own labels on Plex, and its own favourite flag on Jellyfin and Emby (a new episode also reads as not on your Plex watchlist until the next full sync), so *NOT Content Rating = TV-MA* would match a show with one TV-14 episode. To act on episodes by their resolution, codec or genre, turn series scope off and use an action that acts only on the matched episodes: each episode is checked on its own, and a file delete acts only on the episodes that matched.
 
 - **In the editor** these fields, and **Stream Query**, are offered disabled while series scope is on, with the reason on hover. Turning series scope on over rules that use one shows a warning naming them, with a **Turn off series scope** button — offered only when the action acts on the matched episodes alone; with **Delete from Sonarr** or another whole-show action the warning says to switch the action as well. Each such condition is marked too, and **Save**, **Preview** and **Test Media** stay off, the reason on hover, until you resolve it.
 - **Saving** such a rule set is refused by the server as well as the editor, with the criteria named; so is turning series scope on over them. A rule set already in that state can still be turned off with its switch in the rule set list.
@@ -590,13 +609,13 @@ Criteria that describe **one episode or its file** can't be used with series sco
 
 #### Actions on the whole show with series scope off
 
-With series scope off each episode is checked on its own, so an action that acts on the **whole show** would let one matching episode decide for every other: *Resolution = 4K* with **Delete from Sonarr** deletes a show with a single 4K episode, and *Play Count = 0* deletes a show with one unwatched episode, however much of the rest was watched yesterday. Those actions — **Delete from Sonarr**, **Unmonitor & Delete Files**, **Monitor & Delete Files**, **Change Quality Profile**, and any action with Arr tags — may follow only what every episode of a show answers alike: **Artist / Series** (the show's name), **Has External ID**, the series-aggregate fields, and every *arr and Seerr field. Everything else is the episode's own with series scope off, **Title**, **Play Count**, **Last Played**, **Date Added**, **File Size**, **Watched By User** and the cross-system fields included.
+With series scope off each episode is checked on its own, so an action that acts on the **whole show** would let one matching episode decide for every other: *Resolution = 4K* with **Delete from Sonarr** deletes a show with a single 4K episode, and *Play Count = 0* deletes a show with one unwatched episode, however much of the rest was watched yesterday. Those actions — **Delete from Sonarr**, **Unmonitor & Delete Files**, **Monitor & Delete Files**, **Change Quality Profile**, and any action with Arr tags — may follow only what every episode of a show answers alike: **Artist / Series** (the show's name), **Has External ID**, the series-aggregate fields, and every *arr and Seerr field. Everything else is the episode's own with series scope off, **Title**, **Play Count**, **Last Played**, **Date Added**, **File Size**, **Watched By User**, the cross-system fields and the [episode fields](#season-and-episode-criteria) included.
 
 - **In the editor**, while the rules use such a criterion, those actions are offered disabled in the action picker, and **Manage Tags** with them, the reason on hover; and while one of them is chosen, the criteria it can't follow are offered disabled in the builder. A rule set that has both anyway shows a warning naming them, with the ways out: remove the criteria, switch to an action that acts only on the matched episodes (**Delete Files Only**, **Unmonitor Only** or **Search for New Copy**, without tags), or — when the show itself answers every one of them, as it does **Play Count** (its total) — **Turn on series scope**.
 - **Saving** it is refused, whether by the rules, a new action type, its tags, or switching the action on. A save that only turns the action off, or switches it to one on the matched episodes, is always allowed.
 - **Preview**, **Test Media** and the **Match Changes Preview** judge the rules with the action as you have it in the editor, saved or not: while it can't follow them, the buttons stay off with the reason on hover, and the server refuses each of them with the reason detection would give, rather than showing matches the rule set could never act on.
 - **A rule set saved before this rule** is skipped by detection and its actions are held, exactly as above.
-- **On the Query page**, which checks every episode on its own, the same actions are refused on the results of a query using such a criterion — and so, grouped by show, are **Unmonitor Only** and **Search for New Copy**, which act on the whole series there (see [When a query action is refused](/docs/features/query/#when-a-query-action-is-refused)).
+- **On the Query page**, which checks every episode on its own, the same actions are refused on the results of a query using such a criterion — and so, grouped by show, are **Unmonitor Only** and **Search for New Copy**, which act on the whole series there unless the query uses an episode field (see [When a query action is refused](/docs/features/query/#when-a-query-action-is-refused)).
 
 Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watchedEpisodeCount`, `watchedEpisodePercentage`, `lastEpisodeAiredAt`, `lastEpisodeAddedAt`, `latestEpisodeViewDate`, and `seriesLastPlayedAt` (**Series Last Played**). These describe the show as a whole and can only be computed across every episode, so a rule that references one is always evaluated at the series level — even with Series Scope off.
 
@@ -622,6 +641,14 @@ When Series Scope is **off** and your rule mixes an aggregate field with a per-e
 The matched criteria on the Matches page, in **Preview** and in **Test Media** follow the same reading: such a criterion is listed as matched only when it holds for every episode, and its value shows each episode's own — one value when they all agree, otherwise each value with how many episodes have it (*none (2 of 3); Keep (1 of 3)*).
 
 **Has Pending Action** also counts another server's copy of an item an action is pending on — the copies a merged match lists, and the same title on another server — since every copy is backed by the one *arr record the action acts on; and it never counts the rule set's own actions, so *Has Pending Action = false* does not cancel the action its own rule set scheduled on the previous run.
+
+### Season and episode criteria
+
+**Season Number**, **Episode Number** and **Seasons Behind Latest** describe a single episode, so they need **series scope off**: a whole show has no season or episode number, and one episode's must never decide for the whole show. They follow the same rules as every other criterion of one episode (see [Criteria not allowed with series scope on](#criteria-not-allowed-with-series-scope-on) and [Actions on the whole show with series scope off](#actions-on-the-whole-show-with-series-scope-off)): the editor disables them while series scope is on, a rule set saved with one in series scope is refused, and one already in that state (restored from a backup, say) is skipped by detection and its actions held until it is edited. With series scope off the show is matched through the episodes that satisfy the rule, and the actions on the matched episodes — **Delete Files Only**, **Unmonitor Only**, **Search for New Copy** and **Do Nothing**, without tags — act on exactly those episodes. An action on the whole series can't follow them: **Delete from Sonarr**, **Change Quality Profile**, **Unmonitor & Delete Files** and **Monitor & Delete Files** (which unmonitor or monitor the whole series — *Seasons Behind Latest ≥ 2* with **Unmonitor & Delete Files** would stop Sonarr downloading the two newest seasons too) and Arr tags are offered disabled and refused on save.
+
+**Seasons Behind Latest** is measured by season number against the newest numbered season of the same show **in the same library** that has a file — the placeholder episodes Jellyfin and Emby can list for missing or announced episodes don't count, so an announced season never pushes the seasons you have further back: with seasons 1–5 in the library, season 5 is `0` and season 1 is `4`. A gap in numbering counts (seasons 1, 2 and 5 give season 2 a value of `3`), and the value is re-measured on every run, so it follows the show as new seasons are added. Specials (season 0) and episodes without a season number have no value: they never match a comparison such as *≥ 2*, and match *Is Empty*.
+
+A rule that mixes these with a series-aggregate field (for example, *watched episode % ≥ 90 **and** seasons behind latest ≥ 2*) is checked episode by episode with the show's aggregate values carried over, as described [above](#series-scope-and-aggregate-fields): the show matches through the episodes that satisfy every condition, and those are the episodes its action acts on.
 
 ### Artist scope
 

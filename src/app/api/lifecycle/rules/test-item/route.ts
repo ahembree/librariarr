@@ -15,8 +15,10 @@ import {
   hasWatchedByUserRules,
   hasCrossSystemFieldRules,
   hasCustomFormatScoreRules,
+  hasSeasonsBehindLatestRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import { fetchCrossSystemData, crossSystemValuesOf } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -144,6 +146,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
     originallyAvailableAt: item.originallyAvailableAt?.toISOString() ?? null,
     streams: item.streams ?? [],
   };
+  // Seasons Behind Latest, measured against the show's newest season in the
+  // episode's library, as the engines attach it.
+  if (hasSeasonsBehindLatestRules(typedRules)) await attachSeasonsBehindLatest([single]);
 
   // A SERIES rule reading a series-aggregate field is evaluated at the series
   // level even with seriesScope off, exactly as detection routes it

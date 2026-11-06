@@ -145,6 +145,11 @@ const AT_GROUP_SCOPE: Record<string, Row> = {
   seerrRequestedBy: both("allowed", SEERR),
   seerrApprovalDate: both("allowed", SEERR),
   seerrDeclineDate: both("allowed", SEERR),
+  // Episode: where one episode sits in its show, which a whole show has none
+  // of (a track's disc and track numbers read as empty).
+  seasonNumber: both("blocked", "the episode's own season; a show has none"),
+  episodeNumber: both("blocked", "the episode's own number; a show has none"),
+  seasonsBehindLatest: both("blocked", "how far the episode's own season is behind the newest; a show has none"),
   // Series aggregates
   latestEpisodeViewDate: both("allowed", AGGREGATE),
   seriesLastPlayedAt: both("allowed", AGGREGATE),
@@ -293,6 +298,13 @@ describe("actions on the whole show or artist", () => {
 
   it("counts Arr tags on any action, and Lidarr's search after a file delete", () => {
     expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["x"] })).toBe("Arr tags");
+    // One action may add some tags and remove others: still the whole record.
+    expect(wholeRecordActionOf("SERIES", {
+      actionEnabled: true, actionType: "UNMONITOR_SONARR", addArrTags: ["old"], removeArrTags: ["keep"],
+    })).toBe("Arr tags");
+    expect(wholeRecordActionOf("MUSIC", {
+      actionEnabled: true, actionType: "DELETE_FILES_LIDARR", addArrTags: ["a"], removeArrTags: ["b"],
+    })).toBe("Arr tags");
     expect(wholeRecordActionOf("MUSIC", { actionEnabled: true, actionType: "DO_NOTHING", removeArrTags: ["x"] })).toBe("Arr tags");
     expect(wholeRecordActionOf("SERIES", { actionEnabled: true, actionType: null, addArrTags: ["x"] })).toBe("Arr tags");
     expect(wholeRecordActionOf("MUSIC", { actionEnabled: true, actionType: "DELETE_FILES_LIDARR", searchAfterAction: true })).toBe(
