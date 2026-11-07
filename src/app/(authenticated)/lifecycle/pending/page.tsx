@@ -30,6 +30,7 @@ import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useCardSize } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
+import { rowSurfaceClass } from "@/lib/table-row-surface";
 import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { MetadataLine } from "@/components/metadata-line";
 import { TabNav } from "@/components/tab-nav";
@@ -273,7 +274,7 @@ function VirtualizedActionTable({
                   key={action.id}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className={`transition-colors duration-200 even:bg-white/1.5 ${hasMediaItem ? "hover:bg-white/3 hover:ring-1 hover:ring-primary/20 cursor-pointer" : ""}`}
+                  className={rowSurfaceClass({ index: virtualRow.index, interactive: hasMediaItem })}
                   onClick={hasMediaItem ? () => onItemClick(action) : undefined}
                 >
                   <td className="p-4 align-middle">

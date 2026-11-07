@@ -4,6 +4,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Calendar, Clock, HardDrive, LayoutGrid, ShieldOff, TableProperties } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
 import { MediaTable } from "@/components/media-table";
+import { RowToneChip } from "@/components/row-tone-chip";
 import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { CardSizeControl } from "@/components/card-size-control";
@@ -23,6 +24,7 @@ import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { formatDuration, formatFileSize } from "@/lib/format";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import type { MediaItemWithRelations } from "@/lib/types";
+import type { RowTone } from "@/lib/table-row-surface";
 import { cn } from "@/lib/utils";
 
 export interface PreviewItem extends MediaItemWithRelations {
@@ -83,6 +85,11 @@ function previewHoverContent(item: PreviewItem, mediaType: MediaType, withImage:
 
 const previewKey = (item: PreviewItem) => item.id;
 
+/** A diff status as the row/card tone it shows; retained items are untoned. */
+function previewTone(status: PreviewDiffStatus | undefined): RowTone | undefined {
+  return status === "added" || status === "removed" ? status : undefined;
+}
+
 interface PreviewCardProps {
   item: PreviewItem;
   mediaType: MediaType;
@@ -110,14 +117,20 @@ const PreviewCard = memo(function PreviewCard({
   showServers,
 }: PreviewCardProps) {
   const isMusic = mediaType === "MUSIC";
+  const tone = diffActive ? previewTone(diffStatus) : undefined;
   return (
     <div
       className={cn(
         "relative rounded-xl",
-        diffActive && diffStatus === "added" && "ring-1 ring-green/40",
-        diffActive && diffStatus === "removed" && "ring-1 ring-amber/40 opacity-60",
+        tone === "added" && "ring-1 ring-green/40",
+        tone === "removed" && "ring-1 ring-amber/40 opacity-60",
       )}
     >
+      {tone && (
+        // Over the poster, so on a solid backdrop rather than the chip's
+        // translucent fill.
+        <RowToneChip tone={tone} className="absolute top-2 right-2 z-20 bg-background/90 backdrop-blur-sm" />
+      )}
       {excepted && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -270,14 +283,9 @@ export const RulePreviewSection = memo(function RulePreviewSection({
     [mediaType],
   );
 
-  const rowClassName = useMemo(() => {
+  const rowTone = useMemo(() => {
     if (diffMap.size === 0) return undefined;
-    return (item: PreviewItem) => {
-      const status = diffMap.get(item.id);
-      if (status === "added") return "bg-green-dim ring-1 ring-inset ring-green/40";
-      if (status === "removed") return "bg-amber-dim ring-1 ring-inset ring-amber/40 opacity-60";
-      return undefined;
-    };
+    return (item: PreviewItem) => previewTone(diffMap.get(item.id));
   }, [diffMap]);
 
   return (
@@ -358,7 +366,7 @@ export const RulePreviewSection = memo(function RulePreviewSection({
             mediaType={mediaType}
             exceptedItemIds={exceptedItemIds}
             renderHoverContent={renderHoverContent}
-            rowClassName={rowClassName}
+            rowTone={rowTone}
           />
         ) : (
           <PreviewCardGrid
