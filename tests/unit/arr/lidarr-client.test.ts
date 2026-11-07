@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 describe("LidarrClient", () => {
   let client: LidarrClient;
@@ -179,8 +180,10 @@ describe("LidarrClient", () => {
     it("sends bulk delete with file IDs", async () => {
       mockAxiosInstance.delete.mockResolvedValueOnce({});
       await client.deleteTrackFiles([1, 2]);
+      // The recycle-bin move happens inside the request: the long file-delete timeout.
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith("/api/v1/trackfile/bulk", {
         data: { trackFileIds: [1, 2] },
+        timeout: FILE_DELETE_TIMEOUT_MS,
       });
     });
 

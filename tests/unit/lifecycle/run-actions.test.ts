@@ -76,7 +76,7 @@ describe("executeActionsForItems", () => {
     expect(result.notAttempted).toBe(2);
     // Every item still gets its FAILED history row, carrying the host error.
     expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(3);
-    for (const f of result.failures) expect(f.error).toMatch(/Radarr unreachable/);
+    for (const f of result.failures) expect(f.error).toMatch(/Radarr did not answer in time/);
   });
 
   it("stops where beforeEach answers a reason, leaving that item and the rest untouched", async () => {

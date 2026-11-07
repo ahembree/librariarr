@@ -1,4 +1,4 @@
-import { ArrClientBase } from "@/lib/arr/arr-client-base";
+import { ArrClientBase, FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 export interface SonarrSeries {
   id: number;
@@ -113,10 +113,12 @@ export class SonarrClient extends ArrClientBase {
     return data;
   }
 
+  /** Deletes the given episode files in one request, under the file-delete timeout. */
   async deleteEpisodeFiles(episodeFileIds: number[]): Promise<void> {
     if (episodeFileIds.length === 0) return;
     await this.client.delete("/api/v3/episodefile/bulk", {
       data: { episodeFileIds },
+      timeout: FILE_DELETE_TIMEOUT_MS,
     });
   }
 

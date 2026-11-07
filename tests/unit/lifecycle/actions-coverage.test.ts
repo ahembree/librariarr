@@ -5,7 +5,8 @@
  * every Arr family, member-scoped deletes that must refuse rather than widen,
  * and the outcome reporting that `deletedBytes` is computed from.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { AxiosError } from "axios";
 
 const mockPrisma = vi.hoisted(() => ({
   radarrInstance: { findFirst: vi.fn() },
@@ -20,6 +21,7 @@ const mockPrisma = vi.hoisted(() => ({
 
 const mockRadarr = vi.hoisted(() => ({
   getMovieByTmdbId: vi.fn(),
+  getMovieById: vi.fn(),
   deleteMovie: vi.fn(),
   updateMovie: vi.fn(),
   deleteMovieFile: vi.fn(),
@@ -71,6 +73,7 @@ vi.mock("@/lib/arr/radarr-client", () => ({ RadarrClient: function () { return m
 vi.mock("@/lib/arr/sonarr-client", () => ({ SonarrClient: function () { return mockSonarr; } }));
 vi.mock("@/lib/arr/lidarr-client", () => ({ LidarrClient: function () { return mockLidarr; } }));
 
+import { IntegrationError } from "@/lib/integration-error";
 import {
   ArrExecutionContext,
   executeAction,
@@ -660,6 +663,59 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
     expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+  });
+});
+
+describe("a file delete the app outlives (recycle bin on another mount)", () => {
+  /** The client's timeout on a delete, as `createIntegrationHttp` reports it. */
+  const timedOut = (app: string, url: string) =>
+    new IntegrationError(app, {
+      isAxiosError: true, name: "AxiosError", message: "timeout", code: "ECONNABORTED",
+      config: { url, method: "delete" }, toJSON: () => ({}),
+    } as unknown as AxiosError);
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("Sonarr: deletes a long show's files a chunk at a time and confirms the one that timed out", async () => {
+    const episodes = Array.from({ length: 30 }, (_, i) => ({
+      id: `e${i + 1}`, seasonNumber: 1, episodeNumber: i + 1, originallyAvailableAt: null,
+    }));
+    mockPrisma.mediaItem.findMany.mockResolvedValue(episodes);
+    const sonarrEpisodes = episodes.map((e, i) => ({ id: 500 + i, seasonNumber: 1, episodeNumber: i + 1, episodeFileId: 1000 + i }));
+    mockSonarr.getEpisodes.mockResolvedValueOnce(sonarrEpisodes);
+    // The first chunk outlives the request; Sonarr has removed its files by the first look.
+    mockSonarr.deleteEpisodeFiles.mockRejectedValueOnce(timedOut("Sonarr", "/api/v3/episodefile/bulk"));
+    mockSonarr.getEpisodes.mockResolvedValueOnce(sonarrEpisodes.map((ep, i) => (i < 25 ? { ...ep, episodeFileId: 0 } : ep)));
+
+    const run = executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: episodes.map((e) => e.id) }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const outcome = await run;
+
+    expect(mockSonarr.deleteEpisodeFiles.mock.calls.map(([ids]) => ids.length)).toEqual([25, 5]);
+    expect(outcome.deletedMemberIds).toHaveLength(30);
+  });
+
+  it("Radarr: confirms a movie file delete that timed out by reading the movie back", async () => {
+    mockRadarr.deleteMovieFile.mockRejectedValueOnce(timedOut("Radarr", "/api/v3/moviefile/70"));
+    mockRadarr.getMovieById.mockResolvedValue({ ...MOVIE, hasFile: false, movieFileId: 0 });
+
+    const run = executeAction(movieAction({ actionType: "DELETE_FILES_RADARR" }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(run).resolves.toBeDefined();
+    expect(mockRadarr.deleteMovieFile).toHaveBeenCalledTimes(1);
+    expect(mockRadarr.getMovieById).toHaveBeenCalledWith(7);
+  });
+
+  it("fails, never re-sending the delete, when the file is still there after the wait", async () => {
+    mockRadarr.deleteMovieFile.mockRejectedValueOnce(timedOut("Radarr", "/api/v3/moviefile/70"));
+    mockRadarr.getMovieById.mockResolvedValue({ ...MOVIE });
+
+    const run = executeAction(movieAction({ actionType: "DELETE_FILES_RADARR" }));
+    const failed = expect(run).rejects.toThrow(/^Radarr had not finished deleting 1 of 1 movie file/);
+    await vi.advanceTimersByTimeAsync(16 * 60_000);
+    await failed;
+    expect(mockRadarr.deleteMovieFile).toHaveBeenCalledTimes(1);
   });
 });
 

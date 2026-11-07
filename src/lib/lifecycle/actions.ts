@@ -12,6 +12,7 @@ import { seriesTitleOf } from "@/lib/media/display-title";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
+import { deleteFilesConfirmed } from "@/lib/lifecycle/confirmed-delete";
 
 /**
  * Extract a meaningful error message from Arr API failures, including the
@@ -488,6 +489,22 @@ const movieOf = (session: ActionArrSession) => session.resolve<RadarrClient, Rad
 const seriesOf = (session: ActionArrSession) => session.resolve<SonarrClient, SonarrSeries>("SONARR");
 const artistOf = (session: ActionArrSession) => session.resolve<LidarrClient, LidarrArtist>("LIDARR");
 
+/** The movie's file deleted, confirmed by reading the movie back when Radarr outlives the request. */
+async function deleteMovieFileConfirmed(client: RadarrClient, movie: RadarrMovie): Promise<void> {
+  const fileId = movie.movieFileId;
+  if (!movie.hasFile || !fileId) return;
+  await deleteFilesConfirmed({
+    app: "Radarr",
+    what: "movie file",
+    fileIds: [fileId],
+    remove: () => client.deleteMovieFile(fileId),
+    stillPresent: async () => {
+      const current = await client.getMovieById(movie.id);
+      return new Set(current.hasFile && current.movieFileId ? [current.movieFileId] : []);
+    },
+  });
+}
+
 async function executeDeleteRadarr(session: ActionArrSession, action: ActionRecord) {
   const { client, record: movie } = await movieOf(session);
   await client.deleteMovie(movie.id, true, action.addImportExclusion);
@@ -505,9 +522,7 @@ async function executeUnmonitor(session: ActionArrSession, family: ArrFamily) {
 async function executeUnmonitorDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
   await session.update<RadarrMovie>("RADARR", { monitored: false });
   const { client, record: movie } = await movieOf(session);
-  if (movie.hasFile && movie.movieFileId) {
-    await client.deleteMovieFile(movie.movieFileId);
-  }
+  await deleteMovieFileConfirmed(client, movie);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -826,7 +841,14 @@ async function deleteMatchedEpisodeFiles(
 
   if (fileIds.length > 0) {
     logger.info("Lifecycle", `Deleting ${fileIds.length} matched episode files (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}) for Sonarr series ${seriesId}`);
-    await client.deleteEpisodeFiles(fileIds);
+    await deleteFilesConfirmed({
+      app: "Sonarr",
+      what: "episode file",
+      fileIds,
+      remove: (ids) => client.deleteEpisodeFiles(ids),
+      stillPresent: async () =>
+        new Set((await client.getEpisodes(seriesId)).map((ep) => ep.episodeFileId).filter((id) => id > 0)),
+    });
   } else {
     logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
   }
@@ -1163,7 +1185,14 @@ async function deleteTrackFilesForAction(
     "Lifecycle",
     `Deleting ${fileIds.length} matched track file(s) (${tracks.length} tracks matched, ${tracks.length - memberByLidarrId.size} not found in Lidarr) for Lidarr artist "${artist.artistName}"`,
   );
-  await client.deleteTrackFiles(fileIds);
+  await deleteFilesConfirmed({
+    app: "Lidarr",
+    what: "track file",
+    fileIds,
+    remove: (ids) => client.deleteTrackFiles(ids),
+    stillPresent: async () =>
+      new Set((await client.getTracks(artist.id)).filter((t) => t.hasFile && t.trackFileId > 0).map((t) => t.trackFileId)),
+  });
   return { deletedMemberIds, arrItemIds };
 }
 
@@ -1174,9 +1203,7 @@ async function executeMonitorDeleteFilesRadarr(session: ActionArrSession, action
     await session.update<RadarrMovie>("RADARR", { monitored: true });
   }
   const { client, record: movie } = await movieOf(session);
-  if (movie.hasFile && movie.movieFileId) {
-    await client.deleteMovieFile(movie.movieFileId);
-  }
+  await deleteMovieFileConfirmed(client, movie);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -1214,9 +1241,7 @@ async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action
 
 async function executeDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
   const { client, record: movie } = await movieOf(session);
-  if (movie.hasFile && movie.movieFileId) {
-    await client.deleteMovieFile(movie.movieFileId);
-  }
+  await deleteMovieFileConfirmed(client, movie);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }

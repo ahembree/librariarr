@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 describe("SonarrClient", () => {
   let client: SonarrClient;
@@ -206,6 +207,7 @@ describe("SonarrClient", () => {
       await client.deleteEpisodeFiles([1, 2, 3]);
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith("/api/v3/episodefile/bulk", {
         data: { episodeFileIds: [1, 2, 3] },
+        timeout: FILE_DELETE_TIMEOUT_MS,
       });
     });
 
