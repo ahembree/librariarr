@@ -63,7 +63,12 @@ interface MediaTableProps<T extends MediaListItem = MediaListItem> {
   exceptedItemIds?: Set<string>;
   /** Hide the servers column (e.g. when only one server is connected) */
   hideServers?: boolean;
-  /** Optional callback to add extra CSS classes to a row based on the item */
+  /**
+   * Optional callback to add extra CSS classes to a row based on the item.
+   * A row given classes here drops the zebra stripe: `even:` outranks a plain
+   * background class, so a striped row would lose its highlight fill and a run
+   * of highlighted rows would alternate.
+   */
   rowClassName?: (item: T) => string | undefined;
   /** Optional render function for hover popover content on each row */
   renderHoverContent?: (item: T) => React.ReactNode;
@@ -759,6 +764,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                       </span>
                     );
 
+                    const highlightClass = rowClassName?.(item);
                     const tableRow = (
                       <TableRow
                         data-index={virtualRow.index}
@@ -766,7 +772,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                         // A row opens its item — a detail page or the side
                         // panel — and both read the item's record by this id.
                         {...intentHandlers(() => prefetchMediaRecord(item.id))}
-                        className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 ${rowClassName?.(item) ?? ""}`}
+                        className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 hover:ring-1 hover:ring-primary/20 ${highlightClass || "even:bg-white/1.5"}`}
                       >
                         {/* Title cell - always shown */}
                         <TableCell className="font-medium overflow-hidden text-ellipsis">
