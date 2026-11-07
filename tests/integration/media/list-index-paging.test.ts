@@ -165,6 +165,36 @@ describe("GET /api/media/movies paged", () => {
     const searched = await get(moviesGet, "/api/media/movies", { search: "char", limit: "5", index: "1" });
     expect(searched.index).toEqual({ total: 1, letters: { C: 0 } });
   });
+
+  it("checks track counts once for every page of a filtered listing, and again after the media changes", async () => {
+    const { server } = await seedUser();
+    const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+    const prisma = getTestPrisma();
+    for (const title of ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]) {
+      const m = await createTestMediaItem(lib.id, { title });
+      for (let i = 0; i < 2; i++) {
+        await prisma.mediaStream.create({ data: { mediaItemId: m.id, streamType: 2, index: i, codec: "aac" } });
+      }
+    }
+    const spy = vi.spyOn(prisma, "$queryRawUnsafe");
+    try {
+      const filter = { audioStreamCountConditions: "gte:2" };
+      const { index, rows } = await readPaged<{ title: string }>(moviesGet, "/api/media/movies", filter, 2);
+      expect(index).toEqual({ total: 5, letters: { A: 0, B: 1, C: 2, D: 3, E: 4 } });
+      expect(rows.map((r) => r.title)).toEqual(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
+      // Three pages, one track-count check.
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      await createTestMediaItem(lib.id, { title: "Foxtrot" });
+      invalidateMediaCaches();
+      const after = await get(moviesGet, "/api/media/movies", { ...filter, limit: "2", offset: "4", index: "1" });
+      expect(spy).toHaveBeenCalledTimes(2);
+      // Foxtrot has no tracks: still five.
+      expect(after.index!.total).toBe(5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("flat listings' counts", () => {

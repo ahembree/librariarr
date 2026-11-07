@@ -12,12 +12,17 @@ vi.mock("@/hooks/use-realtime", () => ({
     mocks.subscribers.push({ type, cb });
     return { connected: true, authExpired: false };
   },
+  useRealtimeEvents: (types: readonly string[], cb: (data: Record<string, unknown>) => void) => {
+    for (const type of types) mocks.subscribers.push({ type, cb });
+    return { connected: true, authExpired: false };
+  },
   isRealtimeLive: () => mocks.live,
 }));
 
 import { useLibraryList } from "@/hooks/use-library-list";
 import { clearLibraryListCache } from "@/lib/media/list-cache";
 import { LIST_PAGE_SIZE, MAX_PAGES_IN_FLIGHT } from "@/lib/media/paged-list";
+import { pageRetryDelay } from "@/hooks/use-library-list";
 
 interface Item {
   id: string;
@@ -39,19 +44,27 @@ function stubFetch() {
   pending = [];
   requested = [];
   const fn = vi.fn(
-    (url: string) =>
-      new Promise<Response>((resolve) => {
+    (url: string, init?: { signal?: AbortSignal }) =>
+      new Promise<Response>((resolve, reject) => {
         requested.push(url);
-        pending.push({
+        const request: PendingRequest = {
           url,
           answer: (body) => resolve({ ok: true, status: 200, json: async () => body } as Response),
           fail: (status = 500) => resolve({ ok: false, status, json: async () => ({}) } as Response),
+        };
+        pending.push(request);
+        // An aborted request leaves the queue and rejects, as `fetch` does.
+        init?.signal?.addEventListener("abort", () => {
+          pending = pending.filter((p) => p !== request);
+          aborted.push(url);
+          reject(new DOMException("The operation was aborted.", "AbortError"));
         });
       }),
   );
   vi.stubGlobal("fetch", fn);
   return fn;
 }
+let aborted: string[] = [];
 
 const offsetOf = (url: string) => Number(new URL(url, "http://x").searchParams.get("offset"));
 const pageOf = (page: number) => (url: string) => offsetOf(url) === page * LIST_PAGE_SIZE;
@@ -124,13 +137,22 @@ async function settle() {
 beforeEach(() => {
   mocks.subscribers = [];
   mocks.live = true;
+  aborted = [];
   clearLibraryListCache();
   stubFetch();
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+/** An event other than `sync:completed` that the shell drops the list cache on. */
+function emitEvent(type: string, data: Record<string, unknown>) {
+  clearLibraryListCache();
+  act(() => mocks.subscribers.filter((s) => s.type === type).at(-1)!.cb(data));
+}
 
 describe("useLibraryList", () => {
   it("reads the first page with the listing's index, and sizes the list by it", async () => {
@@ -177,22 +199,40 @@ describe("useLibraryList", () => {
     expect(requested).toHaveLength(4);
   });
 
-  it("keeps at most a few pages in flight, then reads what the range on screen needs now", async () => {
+  it("keeps at most a few pages in flight, nearest the middle of the range first", async () => {
     const { result } = renderList({ query: "" });
     await settle();
     await answer(pageOf(0), pageBody(0, 100_000));
 
-    act(() => result.current.requestRange(1000, 1600));
+    // Rows 950–1850: pages 9–18, the middle one first, then outwards.
+    act(() => result.current.requestRange(1000, 1800));
+    expect(pending.map((p) => offsetOf(p.url))).toEqual([1400, 1300, 1500].slice(0, MAX_PAGES_IN_FLIGHT));
+    await answer(pageOf(14), pageBody(14, 100_000));
     expect(pending).toHaveLength(MAX_PAGES_IN_FLIGHT);
-    // A fling far past them: nothing more goes out until one finishes…
-    act(() => result.current.requestRange(50_000, 50_040));
-    expect(pending).toHaveLength(MAX_PAGES_IN_FLIGHT);
-    // …and then only the pages the range on screen now needs.
-    await answer(pageOf(9), pageBody(9, 100_000));
-    expect(offsetOf(pending.at(-1)!.url)).toBe(49_900);
   });
 
-  it("leaves a failed page a placeholder, and asks again once the range moves", async () => {
+  it("aborts the requests a fling has scrolled away from, and reads where it stopped at once", async () => {
+    const { result } = renderList({ query: "" });
+    await settle();
+    await answer(pageOf(0), pageBody(0, 100_000));
+
+    act(() => result.current.requestRange(1000, 1040));
+    expect(pending).toHaveLength(2);
+    act(() => result.current.requestRange(20_000, 20_040));
+    act(() => result.current.requestRange(50_000, 50_040));
+    // Only the pages where the range stopped are still asked for.
+    expect(pending.map((p) => offsetOf(p.url)).sort((a, b) => a - b)).toEqual([49_900, 50_000]);
+    expect(aborted.map(offsetOf).sort((a, b) => a - b)).toEqual([900, 1000, 19_900, 20_000]);
+    await answer(pageOf(500), pageBody(500, 100_000));
+    expect(result.current.items[50_020]).toEqual(item(50_020));
+    // An aborted page is not a failed one: back in range, it is asked for again.
+    act(() => result.current.requestRange(1000, 1040));
+    expect(pending.some((p) => offsetOf(p.url) === 1000)).toBe(true);
+  });
+
+  it("leaves a failed page a placeholder, and asks again only after a back-off", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const { result } = renderList({ query: "" });
     await settle();
     await answer(pageOf(0), pageBody(0, 500));
@@ -200,11 +240,50 @@ describe("useLibraryList", () => {
     act(() => result.current.requestRange(310, 320));
     await fail(pageOf(3));
     expect(result.current.items[315]).toBeUndefined();
+    // Scrolling on does not ask again straight away (every frame would).
+    act(() => result.current.requestRange(311, 321));
+    act(() => result.current.requestRange(312, 322));
     expect(pending.filter((p) => pageOf(3)(p.url))).toHaveLength(0);
 
-    act(() => result.current.requestRange(311, 321));
+    now += pageRetryDelay(1);
+    act(() => result.current.requestRange(313, 323));
+    await fail(pageOf(3));
+    // A second failure waits twice as long.
+    now += pageRetryDelay(1);
+    act(() => result.current.requestRange(314, 324));
+    expect(pending.filter((p) => pageOf(3)(p.url))).toHaveLength(0);
+    now += pageRetryDelay(2);
+    act(() => result.current.requestRange(315, 325));
     await answer(pageOf(3), pageBody(3, 500));
     expect(result.current.items[315]).toEqual(item(315));
+    expect(pageRetryDelay(20)).toBe(60_000);
+  });
+
+  it("reads a page asked for while new filters wait out their debounce with the listing on screen's query", async () => {
+    const { result, rerender } = renderList({ query: "genre=a" });
+    await settle();
+    await answer(withQuery("genre=a"), pageBody(0, 1000));
+
+    // The filter changed; its first page has not gone out yet, and the table
+    // on screen (the old listing's) reports its range.
+    rerender({ query: "genre=b" });
+    act(() => result.current.requestRange(400, 410));
+    const pagesAsked = pending.filter((p) => offsetOf(p.url) > 0);
+    expect(pagesAsked.length).toBeGreaterThan(0);
+    for (const p of pagesAsked) expect(p.url).toContain("genre=a");
+  });
+
+  it("starts a new listing's paging at its top, not where the last one was scrolled", async () => {
+    const { result, rerender } = renderList({ query: "genre=a" });
+    await settle();
+    await answer(withQuery("genre=a"), pageBody(0, 10_000));
+    act(() => result.current.requestRange(5000, 5010));
+
+    rerender({ query: "genre=b" });
+    await settle();
+    await answer(withQuery("genre=b"), pageBody(0, 10_000));
+    // Nothing deep in the new listing until its view says it is there.
+    expect(pending.filter((p) => p.url.includes("genre=b"))).toHaveLength(0);
   });
 
   it("shows the skeleton for new parameters, and never applies the old ones' answers", async () => {
@@ -216,9 +295,9 @@ describe("useLibraryList", () => {
     rerender({ query: "genre=b" });
     await settle();
     expect(result.current.loading).toBe(true);
-    // The old listing's page arrives late: dropped.
-    await answer(withQuery("genre=a"), pageBody(1, 300, "-old"));
-    expect(result.current.loading).toBe(true);
+    // The old listing's page request is aborted: nobody will read it.
+    expect(aborted.some((url) => url.includes("genre=a") && offsetOf(url) === 100)).toBe(true);
+    expect(pending.some((p) => p.url.includes("genre=a"))).toBe(false);
 
     await answer(withQuery("genre=b"), pageBody(0, 40, "-b"));
     expect(result.current.loading).toBe(false);
@@ -275,7 +354,6 @@ describe("useLibraryList", () => {
 
     emitSync({ libraryTypes: ["MOVIE"] });
     await settle();
-    vi.spyOn(console, "error").mockImplementation(() => {});
     await fail(pageOf(0));
     expect(result.current.items).toHaveLength(30);
     expect(result.current.loading).toBe(false);
@@ -285,7 +363,6 @@ describe("useLibraryList", () => {
     await fail(withQuery("a=2"));
     expect(result.current.loading).toBe(false);
     expect(result.current.items).toHaveLength(0);
-    vi.mocked(console.error).mockRestore();
   });
 
   it("paints a listing read in the last minute at once — every page read — and asks for nothing", async () => {
@@ -336,5 +413,67 @@ describe("useLibraryList", () => {
     await answer(pageOf(0), pageBody(0, 11));
     expect(done).toBe(true);
     expect(result.current.items).toHaveLength(11);
+  });
+
+  it("keeps the pages a refresh has not read again out of the list cache", async () => {
+    const first = renderList({ query: "" });
+    await settle();
+    await answer(pageOf(0), pageBody(0, 250));
+    act(() => first.result.current.requestRange(0, 249));
+    await answer(pageOf(1), pageBody(1, 250));
+    await answer(pageOf(2), pageBody(2, 250));
+
+    emitSync({ libraryTypes: ["MOVIE"] });
+    await settle();
+    await answer(pageOf(0), pageBody(0, 251, "-new"));
+    first.unmount();
+
+    // Back within a minute: the refreshed first page, and placeholders where
+    // the pages from before the sync were — never those pages as fresh.
+    const again = renderList({ query: "" });
+    await settle();
+    expect(again.result.current.items[0]).toEqual(item(0, "-new"));
+    expect(again.result.current.items[150]).toBeUndefined();
+  });
+
+  it("does not make a kept listing younger by showing it", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const first = renderList({ query: "" });
+    await settle();
+    await answer(pageOf(0), pageBody(0, 50));
+    first.unmount();
+
+    now += 61_000;
+    const second = renderList({ query: "" });
+    await settle();
+    expect(second.result.current.items).toHaveLength(50);
+    // Past fresh: refreshed behind. Leave before it answers.
+    expect(pending.map((p) => offsetOf(p.url))).toEqual([0]);
+    second.unmount();
+
+    const third = renderList({ query: "" });
+    await settle();
+    // Still past fresh, so asked again.
+    expect(pending.map((p) => offsetOf(p.url))).toEqual([0]);
+    third.unmount();
+  });
+
+  it("refreshes in place on the other events that change the media, but not on a resync's", async () => {
+    const { result } = renderList({ query: "" });
+    await settle();
+    await answer(pageOf(0), pageBody(0, 20));
+
+    emitEvent("watch-history:updated", { timestamp: 1, meta: { serverId: "s1" } });
+    await settle();
+    expect(pending.map((p) => offsetOf(p.url))).toEqual([0]);
+    await answer(pageOf(0), pageBody(0, 21));
+    expect(result.current.items).toHaveLength(21);
+    expect(result.current.loading).toBe(false);
+
+    // A resync passes no event: `sync:completed`'s subscriber reads it.
+    emitEvent("server:changed", {});
+    await settle();
+    expect(pending).toHaveLength(0);
   });
 });

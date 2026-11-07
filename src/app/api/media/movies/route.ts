@@ -13,6 +13,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 import { letterOffsets, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
+import { memoListRows } from "@/lib/api/list-rows-memo";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -172,17 +173,23 @@ const listGet = withSession(async (session, request: NextRequest) => {
     // candidates are listed in order, the counts checked in one SQL statement
     // over them, and the page cut from what is left — never as an `id IN (…)`
     // over every match, which runs out of bind parameters on a large library.
-    const candidates = await prisma.mediaItem.findMany({
-      where,
-      orderBy,
-      select: { id: true, title: withIndex, titleSort: withIndex },
-    });
-    const matching = await filterIdsByStreamCounts(
-      prisma,
-      candidates.map((c) => c.id),
-      streamCounts,
-    );
-    const kept = candidates.filter((c) => matching.has(c.id));
+    // That is the whole filtered library's work, so a page of a listing the
+    // Movies page is scrolling through reads the matches kept from its
+    // previous page (`memoListRows`) instead of redoing it per page.
+    const loadMatches = async () => {
+      const candidates = await prisma.mediaItem.findMany({
+        where,
+        orderBy,
+        select: { id: true, title: true, titleSort: true },
+      });
+      const matching = await filterIdsByStreamCounts(
+        prisma,
+        candidates.map((c) => c.id),
+        streamCounts,
+      );
+      return candidates.filter((c) => matching.has(c.id));
+    };
+    const kept = limit > 0 ? await memoListRows("movies-stream-counts", searchParams, loadMatches) : await loadMatches();
     if (withIndex) index = { total: kept.length, letters: letterOffsets(kept.map((c) => titleOf(c))) };
     const ordered = kept.map((c) => c.id);
     const pageIds = limit > 0 ? ordered.slice(skip, skip + limit + 1) : ordered.slice(skip);

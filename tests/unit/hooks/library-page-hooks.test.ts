@@ -84,7 +84,7 @@ describe("useLibraryAlphabet", () => {
   it("jumps the grid by row in the card view", () => {
     const scrollToIndex = vi.fn();
     const grid = fakeGrid(scrollToIndex);
-    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, grid, viewMode: "cards" }));
+    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, titleSorted: true, grid, viewMode: "cards" }));
     expect([...result.current.availableLetters].sort()).toEqual(["A", "B", "Z"]);
     act(() => result.current.onLetterClick("Z"));
     // Zodiac is the fourth item: the second row of two.
@@ -94,7 +94,7 @@ describe("useLibraryAlphabet", () => {
   it("jumps the table by item in the table view", () => {
     const scrollToIndex = vi.fn();
     const grid = fakeGrid(scrollToIndex);
-    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, grid, viewMode: "table" }));
+    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, titleSorted: true, grid, viewMode: "table" }));
     const tableScroll = vi.fn();
     result.current.tableScrollToIndexRef.current = tableScroll;
     act(() => result.current.onLetterClick("B"));
@@ -102,7 +102,7 @@ describe("useLibraryAlphabet", () => {
     expect(scrollToIndex).not.toHaveBeenCalled();
   });
 
-  it("reads the active letter off a loaded row's title, and off the index for a row not loaded yet", () => {
+  it("reads the active letter off a loaded row's title, and off the index for a row not loaded yet in a title sort", () => {
     vi.useFakeTimers();
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16) as unknown as number);
     try {
@@ -112,14 +112,23 @@ describe("useLibraryAlphabet", () => {
       const grid = fakeGrid(vi.fn(), { getVirtualItems: () => rows, scrollOffset: 150 }, main);
       // Rows 2 and 3 have not loaded: row 1 (items 2–3) reads its letter off the index.
       const paged = [items[0], items[1], undefined, undefined];
-      const { result } = renderHook(() =>
-        useLibraryAlphabet({ letters, items: paged, titleOf, grid, viewMode: "cards" }),
+      const { result, rerender } = renderHook(({ titleSorted }) =>
+        useLibraryAlphabet({ letters, items: paged, titleOf, titleSorted, grid, viewMode: "cards" }),
+        { initialProps: { titleSorted: true } },
       );
       act(() => {
         main.dispatchEvent(new Event("scroll"));
         vi.advanceTimersByTime(16);
       });
       expect(result.current.activeLetter).toBe("B");
+
+      // Under another sort the letters interleave: a row not loaded has none.
+      rerender({ titleSorted: false });
+      act(() => {
+        main.dispatchEvent(new Event("scroll"));
+        vi.advanceTimersByTime(16);
+      });
+      expect(result.current.activeLetter).toBeNull();
 
       rows.splice(1, 1);
       act(() => {

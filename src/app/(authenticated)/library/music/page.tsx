@@ -193,7 +193,14 @@ export default function MusicPage() {
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabet = useLibraryAlphabet({ letters: index?.letters, items: artistList, titleOf: artistTitleOf, grid, viewMode });
+  const alphabet = useLibraryAlphabet({
+    letters: index?.letters,
+    items: artistList,
+    titleOf: artistTitleOf,
+    titleSorted: sortBy === "parentTitle",
+    grid,
+    viewMode,
+  });
 
   // Summed over every artist by the server: the page holds only the pages read.
   const totals = { albums: index?.sums?.albums ?? 0, tracks: index?.sums?.tracks ?? 0 };

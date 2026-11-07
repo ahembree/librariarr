@@ -109,7 +109,14 @@ export default function MoviesPage() {
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabet = useLibraryAlphabet({ letters: index?.letters, items, titleOf: movieTitleOf, grid, viewMode });
+  const alphabet = useLibraryAlphabet({
+    letters: index?.letters,
+    items,
+    titleOf: movieTitleOf,
+    titleSorted: sortBy === "title",
+    grid,
+    viewMode,
+  });
 
   const openMovie = useCallback(
     (item: MediaListItem) => {

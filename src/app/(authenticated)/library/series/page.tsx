@@ -194,7 +194,14 @@ export default function SeriesPage() {
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabet = useLibraryAlphabet({ letters: index?.letters, items: seriesList, titleOf: seriesTitleOf, grid, viewMode });
+  const alphabet = useLibraryAlphabet({
+    letters: index?.letters,
+    items: seriesList,
+    titleOf: seriesTitleOf,
+    titleSorted: sortBy === "parentTitle",
+    grid,
+    viewMode,
+  });
 
   // Summed over every show by the server: the page holds only the pages read.
   const totals = { seasons: index?.sums?.seasons ?? 0, episodes: index?.sums?.episodes ?? 0 };

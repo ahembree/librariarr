@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { detailChildrenUrl, detailPrefetch, type DetailChildList } from "@/lib/media/detail-prefetch";
+import { LIST_PAGE_SIZE } from "@/lib/media/paged-list";
 
 export interface DetailChildren<T> {
   /** The list for this id; empty until it has answered. */
@@ -47,16 +48,34 @@ export function useDetailChildren<T>(
         setState((prev) => ({ forId: id, items: prev.forId === id ? prev.items : [] }));
         return;
       }
-      // A season's episodes and an album's tracks come a page at a time; the
-      // rest are read on while the route says there is more.
+      // A season's episodes and an album's tracks come a page at a time. The
+      // first page carries the list's length (`index.total`), so the rest are
+      // asked for together; a list that grew past it is read on after them.
       const items = [...(pickRef.current(body) ?? [])];
       let more = hasMore(body) && items.length > 0;
+      const total = totalOf(body);
+      if (more && total !== null) {
+        const offsets: number[] = [];
+        for (let offset = items.length; offset < total; offset += LIST_PAGE_SIZE) offsets.push(offset);
+        const pages = await Promise.all(
+          offsets.map((offset) => detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id, offset))),
+        );
+        if (!latest.isCurrent(token)) return;
+        if (pages.some((page) => !page.ok || !page.body)) {
+          keepOnScreen(items);
+          return;
+        }
+        for (const page of pages) items.push(...(pickRef.current(page.body!) ?? []));
+        const last = pages.at(-1)?.body;
+        more = !!last && hasMore(last) && items.length > 0;
+      }
       while (more) {
         const next = await detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id, items.length));
         if (!latest.isCurrent(token)) return;
-        if (!next.body) {
-          // A page that never answered: what is on screen stays, as above.
-          setState((prev) => ({ forId: id, items: prev.forId === id ? prev.items : items }));
+        // An error status (a 500, a 429) answers an error body, not the end of
+        // the list: like a page that never answered, it keeps what is on screen.
+        if (!next.ok || !next.body) {
+          keepOnScreen(items);
           return;
         }
         const rows = pickRef.current(next.body) ?? [];
@@ -65,6 +84,12 @@ export function useDetailChildren<T>(
       }
       setState({ forId: id, items });
     })();
+
+    // A later page failed: the list this id already shows stays; with none,
+    // the pages read so far.
+    function keepOnScreen(read: T[]) {
+      setState((prev) => ({ forId: id, items: prev.forId === id ? prev.items : read }));
+    }
   }, [id, kind, tick, latest]);
 
   const current = state.forId === id;
@@ -73,6 +98,12 @@ export function useDetailChildren<T>(
 
 // One empty list for every not-yet-answered read, so it is stable for memos.
 const NONE: never[] = [];
+
+/** A paged answer's whole length (`index.total`, asked for with its first page), or null. */
+function totalOf(body: Record<string, unknown>): number | null {
+  const index = body.index as { total?: unknown } | undefined;
+  return typeof index?.total === "number" ? index.total : null;
+}
 
 /** Whether a paged answer (`pagination.hasMore`) has rows after it. */
 function hasMore(body: Record<string, unknown>): boolean {

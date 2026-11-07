@@ -163,14 +163,14 @@ export type DetailChildList = "seasons" | "episodes" | "tracks" | "albums";
  * themselves, so the list is asked for beside the record instead of after it
  * arrives — the pages built the URL from the record's fields and so waited a
  * whole round trip. A season's episodes and an album's tracks are read in
- * pages of `LIST_PAGE_SIZE` (`offset` past the first; `useDetailChildren`
- * reads on while the route says `hasMore`), so no answer is larger than one
- * page however long the season; a show's seasons and an artist's albums are
- * one aggregate answer each.
+ * pages of `LIST_PAGE_SIZE`, the first with the list's index (`index=1`, its
+ * length) and the rest by `offset` (`useDetailChildren` asks for them
+ * together), so no answer is larger than one page however long the season; a
+ * show's seasons and an artist's albums are one aggregate answer each.
  */
 export function detailChildrenUrl(kind: DetailChildList, id: string, offset = 0): string {
   const itemId = encodeURIComponent(id);
-  const page = `limit=${LIST_PAGE_SIZE}${offset > 0 ? `&offset=${offset}` : ""}`;
+  const page = `limit=${LIST_PAGE_SIZE}${offset > 0 ? `&offset=${offset}` : "&index=1"}`;
   switch (kind) {
     case "seasons":
       return `/api/media/series/seasons?itemId=${itemId}`;

@@ -595,8 +595,15 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
 
   const visibleColumns = availableColumns.filter((col) => columnVisibility[col.id]);
 
-  const isShowView = items.some((i) => i?.parentTitle);
-  const isGroupedShowView = items.some((i) => i?.matchedEpisodes);
+  // Once per list, not per render: a paged listing is as long as the whole
+  // library, and the table re-renders on every range change while scrolling.
+  const { isShowView, isGroupedShowView } = useMemo(
+    () => ({
+      isShowView: items.some((i) => i?.parentTitle),
+      isGroupedShowView: items.some((i) => i?.matchedEpisodes),
+    }),
+    [items],
+  );
 
   // Total column count for spacer row colSpan
   const totalColumnCount = 1 + (isShowView && !isGroupedShowView ? 1 : 0)

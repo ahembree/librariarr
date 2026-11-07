@@ -113,5 +113,55 @@ describe("useDetailChildren", () => {
       await act(async () => {});
       expect(result.current.items).toHaveLength(100);
     });
+
+    it("asks for the rest together once the first page gives the list's length", async () => {
+      const waiting = new Map<string, () => void>();
+      fetchMock.mockImplementation((url: string) => {
+        if (url === detailChildrenUrl("episodes", "s1")) {
+          return Promise.resolve(
+            ok({ items: Array.from({ length: 100 }, (_, i) => ({ n: i })), pagination: { hasMore: true }, index: { total: 320 } }),
+          );
+        }
+        return new Promise((resolve) => {
+          const from = Number(new URL(url, "http://x").searchParams.get("offset"));
+          waiting.set(url, () => resolve(page(Math.min(100, 320 - from), from, from + 100 < 320)));
+        });
+      });
+      const { result } = renderHook(() => useDetailChildren("s1", "episodes", 0, pickItems));
+      // Every later page is out before any of them answers.
+      await waitFor(() => expect(waiting.size).toBe(3));
+      expect([...waiting.keys()]).toEqual([100, 200, 300].map((o) => detailChildrenUrl("episodes", "s1", o)));
+      expect(result.current.loaded).toBe(false);
+      await act(async () => {
+        for (const go of [...waiting.values()].reverse()) go();
+      });
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      expect(result.current.items.map((i) => i.n)).toEqual(Array.from({ length: 320 }, (_, i) => i));
+    });
+
+    it("reads an error status on a later page as a failure, not as the end of the list", async () => {
+      const first = { items: Array.from({ length: 100 }, (_, i) => ({ n: i })), pagination: { hasMore: true } };
+      fetchMock.mockImplementation((url: string) =>
+        url === detailChildrenUrl("episodes", "s1")
+          ? Promise.resolve(ok(first))
+          : Promise.resolve(ok({ items: [{ n: 100 }], pagination: { hasMore: false } })),
+      );
+      const { result, rerender } = renderHook(({ tick }) => useDetailChildren("s1", "episodes", tick, pickItems), {
+        initialProps: { tick: 0 },
+      });
+      await waitFor(() => expect(result.current.items).toHaveLength(101));
+
+      // The second page answers 500 with an error body: the list on screen
+      // stays whole rather than shrinking to the first page.
+      fetchMock.mockImplementation((url: string) =>
+        url === detailChildrenUrl("episodes", "s1")
+          ? Promise.resolve(ok(first))
+          : Promise.resolve({ ok: false, status: 500, json: async () => ({ error: "boom" }) }),
+      );
+      rerender({ tick: 1 });
+      await waitFor(() => expect(calls(detailChildrenUrl("episodes", "s1", 100))).toBe(2));
+      await act(async () => {});
+      expect(result.current.items).toHaveLength(101);
+    });
   });
 });

@@ -37,6 +37,12 @@ export interface LibraryAlphabetOptions<T> {
   items: readonly (T | undefined)[];
   /** The title a row's letter comes from — the one the server's letters are read from. */
   titleOf: (item: T) => string | null | undefined;
+  /**
+   * The list is sorted by that title, so each letter is one run of rows and a
+   * row not loaded yet reads its letter off the offsets. Under any other sort
+   * the letters interleave and such a row has none until it loads.
+   */
+  titleSorted: boolean;
   grid: VirtualPosterGrid;
   viewMode: LibraryViewMode;
 }
@@ -47,12 +53,14 @@ export interface LibraryAlphabetOptions<T> {
  * paged list holds only the pages scrolled to); the grid jumps through its
  * virtualizer, the table through its own index scroller, and only the view on
  * screen listens for scrolling. The active letter is a loaded row's own title,
- * or — for a row not loaded yet — the letter whose run it falls in.
+ * or — for a row not loaded yet, in a title sort — the letter whose run it
+ * falls in.
  */
 export function useLibraryAlphabet<T>({
   letters,
   items,
   titleOf,
+  titleSorted,
   grid,
   viewMode,
 }: LibraryAlphabetOptions<T>): LibraryAlphabet {
@@ -66,11 +74,11 @@ export function useLibraryAlphabet<T>({
   const letterAt = useCallback(
     (index: number) => {
       const item = items[index];
-      if (item === undefined) return letterAtOffset(letters, index);
+      if (item === undefined) return titleSorted ? letterAtOffset(letters, index) : null;
       const title = titleOfRef.current(item);
       return title ? getLetterForTitle(title) : null;
     },
-    [items, letters],
+    [items, letters, titleSorted],
   );
 
   const gridAlphabet = useVirtualGridAlphabet({

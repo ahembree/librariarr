@@ -33,6 +33,8 @@ export interface CachedList<T> {
   value: T;
   /** Young enough to show without asking the server again. */
   fresh: boolean;
+  /** When what the entry holds was read — its age, which `set` keeps when passed back. */
+  storedAt: number;
 }
 
 export interface ListCache {
@@ -41,8 +43,13 @@ export interface ListCache {
    * Store `value` — unless the cache was cleared since `generation` was read.
    * A request started before a clear answers with the list as it was before
    * whatever the clear was for; stored, it would read as fresh.
+   *
+   * `storedAt` is when the value was read (default: now). A paged listing
+   * stores itself again as each page answers, with the time its index was
+   * read: stamped now, an old listing would read as fresh again and never
+   * reach `LIST_MAX_AGE_MS`.
    */
-  set(key: string, value: unknown, generation?: number): void;
+  set(key: string, value: unknown, generation?: number, storedAt?: number): void;
   clear(): void;
   /** Bumped by every `clear`; read it when a request starts and pass it to `set`. */
   generation(): number;
@@ -56,7 +63,8 @@ export function createListCache(
     // Whether the events that clear the cache are reaching this tab.
     cleared = () => true,
   }: { freshMs?: number; maxAgeMs?: number; maxEntries?: number; cleared?: () => boolean } = {},
-  now: () => number = Date.now,
+  // Read at each call, so it is the same clock the hook stamps listings with.
+  now: () => number = () => Date.now(),
 ): ListCache {
   const entries = new Map<string, Entry>();
   let currentGeneration = 0;
@@ -72,12 +80,12 @@ export function createListCache(
       // Most recently used moves to the end, so eviction takes the oldest use.
       entries.delete(key);
       entries.set(key, entry);
-      return { value: entry.value as T, fresh: age <= freshMs && cleared() };
+      return { value: entry.value as T, fresh: age <= freshMs && cleared(), storedAt: entry.storedAt };
     },
-    set(key, value, generation) {
+    set(key, value, generation, storedAt) {
       if (generation !== undefined && generation !== currentGeneration) return;
       entries.delete(key);
-      entries.set(key, { value, storedAt: now() });
+      entries.set(key, { value, storedAt: storedAt ?? now() });
       while (entries.size > maxEntries) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;

@@ -34,9 +34,9 @@ describe("createListCache", () => {
     let now = 0;
     const cache = createListCache({}, () => now);
     cache.set("k", [1]);
-    expect(cache.get("k")).toEqual({ value: [1], fresh: true });
+    expect(cache.get("k")).toEqual({ value: [1], fresh: true, storedAt: 0 });
     now = LIST_FRESH_MS + 1;
-    expect(cache.get("k")).toEqual({ value: [1], fresh: false });
+    expect(cache.get("k")).toEqual({ value: [1], fresh: false, storedAt: 0 });
     now = LIST_MAX_AGE_MS + 1;
     expect(cache.get("k")).toBeUndefined();
   });
@@ -45,9 +45,22 @@ describe("createListCache", () => {
     let live = false;
     const cache = createListCache({ cleared: () => live });
     cache.set("k", [1]);
-    expect(cache.get("k")).toEqual({ value: [1], fresh: false });
+    expect(cache.get("k")).toMatchObject({ value: [1], fresh: false });
     live = true;
-    expect(cache.get("k")).toEqual({ value: [1], fresh: true });
+    expect(cache.get("k")).toMatchObject({ value: [1], fresh: true });
+  });
+
+  it("keeps the age it is given, so storing a listing again does not make it younger", () => {
+    let now = 0;
+    const cache = createListCache({}, () => now);
+    cache.set("k", "first page");
+    now = LIST_FRESH_MS + 10;
+    // A later page of the same listing, stored with the time its index was read.
+    cache.set("k", "two pages", undefined, 0);
+    expect(cache.get("k")).toEqual({ value: "two pages", fresh: false, storedAt: 0 });
+    now = LIST_MAX_AGE_MS + 1;
+    cache.set("k", "three pages", undefined, 0);
+    expect(cache.get("k")).toBeUndefined();
   });
 
   it("evicts the least recently used past its bound", () => {
