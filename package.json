@@ -74,7 +74,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "cron-parser": "^5.10.2",
+    "cron-parser": "^5.10.3",
     "embla-carousel-react": "^8.6.0",
     "graphile-worker": "^0.18.0",
     "iron-session": "^9.0.1",
