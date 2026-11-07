@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { withSession, type LoggedInSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
+import { executeActionsForItems, executePhaseUpdate, type ActionRunProgress } from "@/lib/lifecycle/run-actions";
+import { progressStreamResponse } from "@/lib/progress/stream";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
 import {
@@ -12,7 +13,8 @@ import {
   endRuleSetExecution,
 } from "@/lib/lifecycle/execute-in-flight";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
-import { actionHonorsMemberIds, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope } from "@/lib/lifecycle/episode-scope";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -118,11 +120,20 @@ export const POST = withSession(async (session, request: NextRequest) => {
       { status: 409 }
     );
   }
-  try {
-    return await executeRuleSet(session, ruleSet, mediaItemIds);
-  } finally {
+  const release = () => {
     endRuleSetExecution(session.userId);
     endExecute(ruleSet.id, lockedItems);
+  };
+  // The Pending page streams the run's progress (`?stream=1`); an API key
+  // never does — the public API answers one JSON body.
+  let lockAdopted = false;
+  const stream = request.nextUrl.searchParams.get("stream") === "1" && !apiKey
+    ? { request, adoptLock: () => { lockAdopted = true; return release; } }
+    : undefined;
+  try {
+    return await executeRuleSet(session, ruleSet, mediaItemIds, stream);
+  } finally {
+    if (!lockAdopted) release();
   }
 });
 
@@ -137,7 +148,13 @@ async function executeRuleSet(
   session: LoggedInSession,
   ruleSet: RuleSetRow,
   mediaItemIds: string[] | undefined,
-): Promise<NextResponse> {
+  /**
+   * Set when the caller asked for the run's progress: the request the stream
+   * answers, and `adoptLock`, which hands the execute lock's release to the
+   * stream (released when the run ends rather than when `POST` returns).
+   */
+  stream?: { request: Request; adoptLock: () => () => void },
+): Promise<Response> {
   // A disabled rule set must not fire destructive actions, even manually — the
   // scheduled execution path enforces this via its enabled filter, and a
   // disabled rule set can still hold matches (PUT with clearMatches=false), so
@@ -292,7 +309,11 @@ async function executeRuleSet(
 
   // An episode-scoped Unmonitor/Search acts on the episodes its Pending row
   // lists (`episodesToExecute`), not every episode the match holds now.
-  if (ruleSet.actionType && ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) {
+  if (
+    ruleSet.actionType &&
+    !isDestructiveActionType(ruleSet.actionType) &&
+    ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)
+  ) {
     const signature = actionConfigSignature(ruleSet);
     const [pending, settled] = await Promise.all([
       prisma.lifecycleAction.findMany({
@@ -486,73 +507,124 @@ async function executeRuleSet(
     return null;
   };
 
-  const { executed, failed, errors, failures, notAttempted, stopped } = await executeActionsForItems(
-    session.userId,
-    items,
-    {
-      actionType: ruleSet.actionType ?? "DO_NOTHING",
-      arrInstanceId: ruleSet.arrInstanceId,
-      targetQualityProfileId: ruleSet.targetQualityProfileId,
-      addImportExclusion: ruleSet.addImportExclusion,
-      searchAfterAction: ruleSet.searchAfterAction,
-      addArrTags: ruleSet.addArrTags,
-      removeArrTags: ruleSet.removeArrTags,
-      episodeScope: ruleSetActsOnEpisodes(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
-    },
-    episodeIdMap,
-    {
-      ruleSetId: ruleSet.id,
-      ruleSetName: ruleSet.name,
-      ruleSetType: ruleSet.type,
-      cleanupMatches: true,
-    },
-    undefined,
-    { beforeEach: stillJudgedRuleSet },
-  );
+  /** The run, and what it answers: a JSON reply's status and body, or a stream's result. */
+  const runAndReport = async (
+    onProgress?: (progress: ActionRunProgress) => void,
+  ): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const { executed, failed, errors, failures, notActedOn, notActedOnCount, notAttempted, stopped } = await executeActionsForItems(
+      session.userId,
+      items,
+      {
+        actionType: ruleSet.actionType ?? "DO_NOTHING",
+        arrInstanceId: ruleSet.arrInstanceId,
+        targetQualityProfileId: ruleSet.targetQualityProfileId,
+        addImportExclusion: ruleSet.addImportExclusion,
+        searchAfterAction: ruleSet.searchAfterAction,
+        addArrTags: ruleSet.addArrTags,
+        removeArrTags: ruleSet.removeArrTags,
+        episodeScope: ruleSetActsOnEpisodes(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
+        seasonScope: ruleSetSeasonScope(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
+      },
+      episodeIdMap,
+      {
+        ruleSetId: ruleSet.id,
+        ruleSetName: ruleSet.name,
+        ruleSetType: ruleSet.type,
+        cleanupMatches: true,
+      },
+      onProgress,
+      { beforeEach: stillJudgedRuleSet },
+    );
 
-  // Items failed without anything being sent (their Arr instance was already
-  // down) deleted nothing, so they go back to the budget. A failure that did
-  // reach the Arr app stays charged: a timed-out write may have landed. Items
-  // a stop left were never attempted either.
-  apiReservation?.release(notAttempted + (stopped?.remaining ?? 0));
+    // Items failed without anything being sent (their Arr instance was already
+    // down) deleted nothing, so they go back to the budget. A failure that did
+    // reach the Arr app stays charged: a timed-out write may have landed. Items
+    // a stop left were never attempted either.
+    apiReservation?.release(notAttempted + (stopped?.remaining ?? 0));
 
-  // Stopped before acting on anything: refused, as the hold check above
-  // refuses — nothing ran.
-  if (stopped && executed === 0 && failed === 0) {
-    return NextResponse.json({ error: stopped.reason }, { status: 409 });
-  }
+    // Stopped before acting on anything: refused, as the hold check above
+    // refuses — nothing ran.
+    if (stopped && executed === 0 && failed === 0) {
+      return { status: 409, body: { error: stopped.reason } };
+    }
 
-  // Send Discord notification for failures if the rule set has notifications enabled
-  if (failed > 0 && ruleSet.discordNotifyOnAction) {
-    try {
-      const settings = await prisma.appSettings.findUnique({
-        where: { userId: session.userId },
-        select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
-      });
-      if (settings?.discordWebhookUrl) {
-        await sendDiscordNotification(settings.discordWebhookUrl, {
-          username: settings.discordWebhookUsername || "Librariarr",
-          avatar_url: settings.discordWebhookAvatarUrl || undefined,
-          embeds: [buildFailureSummaryEmbed(ruleSet.name, ruleSet.actionType ?? "DO_NOTHING", failures)],
+    // Send Discord notification for failures if the rule set has notifications enabled
+    if (failed > 0 && ruleSet.discordNotifyOnAction) {
+      try {
+        const settings = await prisma.appSettings.findUnique({
+          where: { userId: session.userId },
+          select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
         });
+        if (settings?.discordWebhookUrl) {
+          await sendDiscordNotification(settings.discordWebhookUrl, {
+            username: settings.discordWebhookUsername || "Librariarr",
+            avatar_url: settings.discordWebhookAvatarUrl || undefined,
+            embeds: [buildFailureSummaryEmbed(ruleSet.name, ruleSet.actionType ?? "DO_NOTHING", failures)],
+          });
+        }
+      } catch {
+        // Don't let notification failures break the response
       }
-    } catch {
-      // Don't let notification failures break the response
+    }
+
+    // Same event the scheduled executor emits. A manual Execute deletes media,
+    // clears RuleMatch rows and moves the deletion stats — so the Pending list,
+    // the Matches page and the dashboard pipeline are all stale the moment it
+    // returns, and nothing was telling them.
+    if (executed > 0 || failed > 0) {
+      eventBus.emit({
+        type: "lifecycle:action-executed",
+        userId: session.userId,
+        meta: { executed, failed, manual: true },
+      });
+    }
+
+    // Stopped part-way: what ran is reported, and why the rest did not. Each
+    // failed item with its reason, and the episodes or tracks of actions that
+    // ran but were left alone, for the Pending page's results dialog.
+    return {
+      status: 200,
+      body: {
+        executed,
+        failed,
+        errors,
+        failures,
+        notActedOn,
+        notActedOnCount,
+        ...(stopped ? { stopped: stopped.reason } : {}),
+      },
+    };
+  };
+
+  // The Pending page asks for the run's progress (`?stream=1`): the refusals
+  // above stay plain JSON with their status, and the run itself streams its
+  // per-item progress, then the body as the result — a refusal it meets
+  // mid-run (the rule set edited before the first item) as the stream's error.
+  // The run keeps the execute lock until it ends, not until the stream opens.
+  if (stream) {
+    const release = stream.adoptLock();
+    try {
+      return progressStreamResponse(
+        async (emit) => {
+          try {
+            emit({ type: "plan", phases: [{ key: "execute", label: "Running actions" }] });
+            emit(executePhaseUpdate({ done: 0, total: items.length }));
+            const { status, body } = await runAndReport((progress) => emit(executePhaseUpdate(progress)));
+            if (status !== 200) throw new Error(String(body.error));
+            return body;
+          } finally {
+            release();
+          }
+        },
+        { request: stream.request },
+      );
+    } catch (err) {
+      // The stream never started, so its `finally` never runs.
+      release();
+      throw err;
     }
   }
 
-  // Same event the scheduled executor emits. A manual Execute deletes media,
-  // clears RuleMatch rows and moves the deletion stats — so the Pending list,
-  // the Matches page and the dashboard pipeline are all stale the moment it
-  // returns, and nothing was telling them.
-  if (executed > 0 || failed > 0) {
-    eventBus.emit({
-      type: "lifecycle:action-executed",
-      userId: session.userId,
-      meta: { executed, failed, manual: true },
-    });
-  }
-
-  // Stopped part-way: what ran is reported, and why the rest did not.
-  return NextResponse.json({ executed, failed, errors, ...(stopped ? { stopped: stopped.reason } : {}) });
+  const { status, body } = await runAndReport();
+  return NextResponse.json(body, { status });
 }

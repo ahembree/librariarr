@@ -186,7 +186,7 @@ describe("checkLifecycleRuleEvaluability", () => {
       async (field) => {
         for (const action of [
           { actionEnabled: true, actionType: "DELETE_SONARR" },
-          { actionEnabled: true, actionType: "UNMONITOR_DELETE_FILES_SONARR" },
+          { actionEnabled: true, actionType: "MONITOR_DELETE_FILES_SONARR" },
           { actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["old"], removeArrTags: ["keep"] },
         ]) {
           const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), undefined, undefined, false, action);

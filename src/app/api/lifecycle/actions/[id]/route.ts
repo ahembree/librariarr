@@ -21,7 +21,8 @@ import {
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
-import { actsOnMembers, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actsOnMembers } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope } from "@/lib/lifecycle/episode-scope";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { HOLD_ACTION_SELECT, actionHoldFor } from "@/lib/lifecycle/held-actions";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
@@ -299,6 +300,7 @@ async function retryAction(
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
       episodeScope,
+      seasonScope: ruleSetSeasonScope(action.actionType, ruleSet),
       targetTitle,
       mediaItem,
     });

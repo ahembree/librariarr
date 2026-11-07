@@ -78,9 +78,12 @@ export class IntegrationError extends Error {
       }
     }
 
+    // A timeout is an answer that did not come in time, not a host that could
+    // not be reached: a slow write (a bulk file delete) may still be running.
+    const timedOut = code === "ECONNABORTED" || code === "ETIMEDOUT";
     const msg = status !== null
       ? `${service} HTTP ${status}${detail ? `: ${detail}` : ""}${url ? ` (${url})` : ""}`
-      : `${service} unreachable${url ? ` (${url})` : ""}: ${code}`;
+      : `${service} ${timedOut ? "did not answer in time" : "unreachable"}${url ? ` (${url})` : ""}: ${code}`;
 
     super(msg, { cause: error });
     this.name = "IntegrationError";

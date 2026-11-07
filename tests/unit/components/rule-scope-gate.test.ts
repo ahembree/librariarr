@@ -200,7 +200,7 @@ describe("a whole-show action following per-episode criteria", () => {
     const warning = screen.getByRole("alert");
     expect(warning.textContent).toContain("Per-episode criteria can't decide a whole-show action");
     expect(warning.textContent).toContain("“Delete from Sonarr” acts on the whole show");
-    expect(warning.textContent).toContain("switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor Only or Search for New Copy, without Arr tags)");
+    expect(warning.textContent).toContain("switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor & Delete Files, Unmonitor Only or Search for New Copy, without Arr tags)");
     expect(warning.textContent).toContain("Resolution");
     // Turning series scope on would not do: Resolution describes one episode there too.
     expect(screen.queryByRole("button", { name: /Turn (on|off) series scope/ })).toBeNull();
@@ -245,7 +245,7 @@ describe("a whole-show action following per-episode criteria", () => {
     expect(options).toEqual({
       "Do Nothing": false,
       "Delete from Sonarr": true,
-      "Unmonitor & Delete Files": true,
+      "Unmonitor & Delete Files": false,
       "Monitor & Delete Files": true,
       "Delete Files Only": false,
       "Unmonitor Only": false,

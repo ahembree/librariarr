@@ -11,6 +11,7 @@ import {
   callRoute,
   callRouteWithParams,
   expectJson,
+  expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -257,6 +258,82 @@ describe("POST /api/lifecycle/actions/execute — extra paths", () => {
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
+  describe("streamed progress (the Pending page's ?stream=1)", () => {
+    const streamExec = (body: unknown) =>
+      callRoute(execute, { url: "/api/lifecycle/actions/execute", method: "POST", body, searchParams: { stream: "1" } });
+
+    async function twoMovies() {
+      const user = await createTestUser();
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const a = await createTestMediaItem(library.id, { title: "Alien", year: 1979 });
+      const b = await createTestMediaItem(library.id, { title: "Brazil", year: 1985 });
+      const ruleSet = await createTestRuleSet(user.id, { actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "arr-1" });
+      await createTestRuleMatch(ruleSet.id, a.id);
+      await createTestRuleMatch(ruleSet.id, b.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { user, ruleSet, a, b };
+    }
+
+    it("streams each item's progress, then the result with every failure and every member left alone", async () => {
+      const { ruleSet } = await twoMovies();
+      mockExecuteAction.mockImplementation(async (action: { mediaItem: { title: string } }, onStep?: (label: string, fraction?: number) => void) => {
+        onStep?.("Delete from Radarr");
+        if (action.mediaItem.title === "Brazil") throw new Error("Radarr HTTP 500");
+        onStep?.("Delete from Radarr — 1 of 2 files deleted", 0.5);
+        return { notActedOn: [{ title: "Alien extras", reason: "Kept" }] };
+      });
+
+      const { result, events } = await expectStreamResult<{
+        executed: number; failed: number;
+        failures: Array<{ title: string; error: string }>;
+        notActedOn: Array<{ title: string; reason: string }>; notActedOnCount: number;
+      }>(await streamExec({ ruleSetId: ruleSet.id }));
+
+      expect(result).toMatchObject({ executed: 1, failed: 1, notActedOnCount: 1 });
+      expect(result.failures).toEqual([{ title: "Brazil", error: "Radarr HTTP 500" }]);
+      expect(result.notActedOn).toEqual([{ title: "Alien extras", reason: "Kept" }]);
+      expect(events[0]).toEqual({ type: "plan", phases: [{ key: "execute", label: "Running actions" }] });
+      const execute = events.filter((e) => e.type === "phase" && e.key === "execute");
+      expect(execute[0]).toMatchObject({ fraction: 0, detail: "0 / 2" });
+      expect(execute.at(-1)).toMatchObject({ fraction: 1, detail: "2 / 2" });
+      expect(execute.some((e) => typeof e.detail === "string" && e.detail.includes("1 of 2 files deleted"))).toBe(true);
+    });
+
+    it("keeps the execute lock until the streamed run ends, then frees it", async () => {
+      const { ruleSet } = await twoMovies();
+      let finish!: () => void;
+      mockExecuteAction.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({}); }));
+
+      const first = await streamExec({ ruleSetId: ruleSet.id });
+      const reading = expectStreamResult(first);
+      // The stream is open and its run is under way: a second Execute is refused.
+      await vi.waitFor(() => expect(mockExecuteAction).toHaveBeenCalledTimes(1));
+      expect((await expectJson<{ error: string }>(await streamExec({ ruleSetId: ruleSet.id }), 409)).error).toMatch(/already running/);
+      finish();
+      await reading;
+      // Ended: the next Execute runs (no matches left after the first, so it says so).
+      expect((await streamExec({ ruleSetId: ruleSet.id })).status).not.toBe(409);
+    });
+
+    it("answers a refusal before the run as JSON with its status, stream or not", async () => {
+      const { user } = await twoMovies();
+      const disabled = await createTestRuleSet(user.id, { enabled: false, actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "arr-1" });
+      const res = await streamExec({ ruleSetId: disabled.id });
+      expect((await expectJson<{ error: string }>(res, 400)).error).toMatch(/disabled/);
+    });
+
+    it("never streams under an API key: the public API answers one JSON body", async () => {
+      const { user, ruleSet, a } = await twoMovies();
+      mockExecuteAction.mockResolvedValue({});
+      const res = await runAsApiKey(
+        { keyId: "k", userId: user.id, name: "script", prefix: "lbr_abc", scopes: ["lifecycle:execute"] },
+        () => streamExec({ ruleSetId: ruleSet.id, mediaItemIds: [a.id] }),
+      );
+      const body = await expectJson<{ executed: number; failures: unknown[]; notActedOnCount: number }>(res, 200);
+      expect(body).toMatchObject({ executed: 1, failures: [], notActedOnCount: 0 });
+    });
+  });
+
   it("Execute All with no stored matches asks for detection first", async () => {
     const { user } = await movieSetup();
     const ruleSet = await createTestRuleSet(user.id, { actionEnabled: true, actionType: "DO_NOTHING" });
@@ -471,6 +548,84 @@ describe("episode-scoped Unmonitor (Series rule set, series scope off)", () => {
     });
     await expectJson(await exec({ ruleSetId: ruleSet.id }), 400);
     expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+  /** A rule tree of one enabled group holding `fields`. */
+  const rulesOf = (...fields: string[]) => [{
+    id: "g", condition: "AND", operator: "AND",
+    rules: fields.map((field, i) => ({ id: `r${i}`, field, operator: "greaterThan", value: "2", condition: "AND" })),
+  }];
+
+  async function deleteSetup(rules: unknown, actionType = "UNMONITOR_DELETE_FILES_SONARR") {
+    const user = await createTestUser();
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Pilot", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Two", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 2 });
+    const ruleSet = await createTestRuleSet(user.id, {
+      type: "SERIES", seriesScope: false, actionEnabled: true, actionType, arrInstanceId: "arr-1", rules,
+    });
+    await createTestRuleMatch(ruleSet.id, ep1.id, { title: "Lost", parentTitle: null, memberIds: [ep1.id, ep2.id] });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    return { user, ep1, ep2, ruleSet };
+  }
+
+  it("Execute runs Unmonitor & Delete Files on per-season criteria per episode with whole seasons, never narrowed by a completed delete", async () => {
+    const { user, ep1, ep2, ruleSet } = await deleteSetup(rulesOf("seasonsBehindLatest"));
+    // A delete is always re-schedulable: a completed one does not narrow the
+    // next to the episodes it did not act on (`episodesToExecute` is the
+    // non-destructive actions' coverage).
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_DELETE_FILES_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id],
+      },
+    });
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    const record = mockExecuteAction.mock.calls[0][0];
+    expect(record).toMatchObject({ episodeScope: true, seasonScope: "matched" });
+    expect([...record.matchedMediaItemIds].sort()).toEqual([ep1.id, ep2.id].sort());
+  });
+
+  it("Execute keeps a criterion of one episode to the matched episodes, without whole seasons", async () => {
+    const { ruleSet } = await deleteSetup(rulesOf("seasonsBehindLatest", "playCount"));
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: true });
+    expect(mockExecuteAction.mock.calls[0][0].seasonScope).toBeUndefined();
+  });
+
+  it("Execute keeps Unmonitor & Delete Files on the series when every criterion is the show's", async () => {
+    const { ruleSet } = await deleteSetup(rulesOf("availableEpisodeCount"));
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: false });
+    expect(mockExecuteAction.mock.calls[0][0].seasonScope).toBeUndefined();
+  });
+
+  it("Retry carries the season scope", async () => {
+    const { user, ep1, ep2, ruleSet } = await deleteSetup(rulesOf("seasonNumber"), "UNMONITOR_SONARR");
+    const action = await failedAction(user.id, {
+      mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+      matchedMediaItemIds: [ep1.id, ep2.id], mediaItemTitle: "Lost",
+    });
+    await expectJson(await retryCall(action.id), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: true, seasonScope: "matched" });
+  });
+
+  it("Pending marks a rule set whose Unmonitor unmonitors whole seasons", async () => {
+    const seasons = await deleteSetup(rulesOf("seasonsBehindLatest"), "UNMONITOR_SONARR");
+    const watched = await createTestRuleSet(seasons.user.id, {
+      type: "SERIES", seriesScope: false, actionEnabled: true, actionType: "UNMONITOR_SONARR", arrInstanceId: "arr-1",
+      rules: rulesOf("watchedByUser"),
+    });
+    await createTestRuleMatch(watched.id, seasons.ep2.id, { title: "Lost", parentTitle: null, memberIds: [seasons.ep2.id] });
+    const body = await expectJson<{ groups: { ruleSet: { id: string; wholeSeasons?: boolean } }[] }>(
+      await callRoute(GET, { url: "/api/lifecycle/actions" }),
+      200,
+    );
+    const flag = (id: string) => body.groups.find((g) => g.ruleSet.id === id)?.ruleSet.wholeSeasons;
+    expect(flag(seasons.ruleSet.id)).toBe(true);
+    expect(flag(watched.id)).toBe(false);
+    // The rules themselves are never returned.
+    expect(JSON.stringify(body)).not.toContain('"rules"');
   });
 });
 

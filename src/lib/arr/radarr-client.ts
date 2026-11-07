@@ -1,4 +1,4 @@
-import { ArrClientBase } from "@/lib/arr/arr-client-base";
+import { ArrClientBase, FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 import { mapWithConcurrency } from "@/lib/concurrency";
 
 export interface RadarrMovie {
@@ -156,8 +156,9 @@ export class RadarrClient extends ArrClientBase {
     return scores;
   }
 
+  /** Deletes a movie file, under the file-delete timeout. */
   async deleteMovieFile(movieFileId: number): Promise<void> {
-    await this.client.delete(`/api/v3/moviefile/${movieFileId}`);
+    await this.client.delete(`/api/v3/moviefile/${movieFileId}`, { timeout: FILE_DELETE_TIMEOUT_MS });
   }
 
   async triggerMovieSearch(movieId: number): Promise<void> {

@@ -99,7 +99,7 @@ describe("progressStreamResponse", () => {
       vi.useRealTimers();
     });
 
-    it("aborts the task's signal at the lifetime cap and sends no error line for it", async () => {
+    it("aborts the task's signal at the lifetime cap, and tells the reader still there why it ended", async () => {
       vi.useFakeTimers();
       let seen: AbortSignal | undefined;
       const response = progressStreamResponse(
@@ -115,8 +115,25 @@ describe("progressStreamResponse", () => {
       expect(seen?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(seen?.aborted).toBe(true);
-      // Nobody is left to read an error, so the stream just ends.
-      expect(await read).toEqual([]);
+      // The client is still reading: it gets the reason, not a stream that
+      // ends without a result.
+      expect(await read).toEqual([{ type: "error", message: "aborted" }]);
+    });
+
+    it("still sends the error of a run that goes on past the lifetime cap and fails", async () => {
+      vi.useFakeTimers();
+      let fail!: (error: Error) => void;
+      // Ignores the signal (as a lifecycle Execute does: it must not stop
+      // half-way through a delete).
+      const response = progressStreamResponse(
+        () => new Promise((_resolve, reject) => { fail = reject; }),
+        { maxLifetimeMs: 1_000 },
+      );
+      const read = readLines(response);
+      await vi.advanceTimersByTimeAsync(5_000);
+      fail(new Error("database went away"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await read).toContainEqual({ type: "error", message: "database went away" });
     });
 
     it("aborts the task's signal when the request's signal aborts", async () => {

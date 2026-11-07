@@ -1,4 +1,4 @@
-import { ArrClientBase } from "@/lib/arr/arr-client-base";
+import { ArrClientBase, FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 export interface SonarrSeries {
   id: number;
@@ -113,10 +113,12 @@ export class SonarrClient extends ArrClientBase {
     return data;
   }
 
+  /** Deletes the given episode files in one request, under the file-delete timeout. */
   async deleteEpisodeFiles(episodeFileIds: number[]): Promise<void> {
     if (episodeFileIds.length === 0) return;
     await this.client.delete("/api/v3/episodefile/bulk", {
       data: { episodeFileIds },
+      timeout: FILE_DELETE_TIMEOUT_MS,
     });
   }
 
@@ -141,6 +143,19 @@ export class SonarrClient extends ArrClientBase {
   async setEpisodesMonitored(episodeIds: number[], monitored: boolean): Promise<void> {
     if (episodeIds.length === 0) return;
     await this.client.put("/api/v3/episode/monitor", { episodeIds, monitored });
+  }
+
+  /**
+   * Sets the monitored flag on the given seasons of a series through the
+   * season pass (`POST /api/v3/seasonpass`), leaving its episodes and every
+   * other season as they are. Unlike a series PUT it sends no series record,
+   * so Sonarr's series validation (root folder, path) cannot refuse it.
+   */
+  async setSeasonsMonitored(seriesId: number, seasonNumbers: number[], monitored: boolean): Promise<void> {
+    if (seasonNumbers.length === 0) return;
+    await this.client.post("/api/v3/seasonpass", {
+      series: [{ id: seriesId, seasons: seasonNumbers.map((seasonNumber) => ({ seasonNumber, monitored })) }],
+    });
   }
 
   /**

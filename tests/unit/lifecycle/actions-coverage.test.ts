@@ -5,7 +5,8 @@
  * every Arr family, member-scoped deletes that must refuse rather than widen,
  * and the outcome reporting that `deletedBytes` is computed from.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { AxiosError } from "axios";
 
 const mockPrisma = vi.hoisted(() => ({
   radarrInstance: { findFirst: vi.fn() },
@@ -13,10 +14,14 @@ const mockPrisma = vi.hoisted(() => ({
   lidarrInstance: { findFirst: vi.fn() },
   mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
   mediaItemExternalId: { findMany: vi.fn() },
+  library: { findUnique: vi.fn() },
+  lifecycleException: { findMany: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
 }));
 
 const mockRadarr = vi.hoisted(() => ({
   getMovieByTmdbId: vi.fn(),
+  getMovieById: vi.fn(),
   deleteMovie: vi.fn(),
   updateMovie: vi.fn(),
   deleteMovieFile: vi.fn(),
@@ -37,6 +42,7 @@ const mockSonarr = vi.hoisted(() => ({
   triggerSeriesSearch: vi.fn(),
   triggerEpisodeSearch: vi.fn(),
   setEpisodesMonitored: vi.fn(),
+  setSeasonsMonitored: vi.fn(),
   getTags: vi.fn(),
   createTag: vi.fn(),
   deleteTag: vi.fn(),
@@ -67,6 +73,7 @@ vi.mock("@/lib/arr/radarr-client", () => ({ RadarrClient: function () { return m
 vi.mock("@/lib/arr/sonarr-client", () => ({ SonarrClient: function () { return mockSonarr; } }));
 vi.mock("@/lib/arr/lidarr-client", () => ({ LidarrClient: function () { return mockLidarr; } }));
 
+import { IntegrationError } from "@/lib/integration-error";
 import {
   ArrExecutionContext,
   executeAction,
@@ -404,9 +411,45 @@ describe("whole-record and monitoring executors", () => {
   });
 });
 
+/** An episode row as the library holds it. */
+interface LibraryEpisode {
+  id: string;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+  originallyAvailableAt: Date | null;
+  libraryId?: string;
+  seriesKey?: string | null;
+  parentTitle?: string | null;
+  dedupKey?: string | null;
+}
+
+/**
+ * Serve `mediaItem.findMany` from one library: a lookup by id answers the
+ * members, a lookup by library and season answers the season's episodes
+ * (`fullyMatchedSeasons`).
+ */
+function serveLibrary(episodes: LibraryEpisode[]) {
+  const rows = episodes.map((e) => ({
+    libraryId: "lib1", seriesKey: "tvdb:371980", parentTitle: "Severance", dedupKey: null, externalIds: [], ...e,
+  }));
+  mockPrisma.mediaItem.findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+    if (where.seasonNumber) {
+      const seasons = (where.seasonNumber as { in: number[] }).in;
+      const [keyed] = where.OR as [{ seriesKey: { in: string[] } }, { seriesKey: null }];
+      return rows.filter((r) => (r.seriesKey === null || keyed.seriesKey.in.includes(r.seriesKey)) && seasons.includes(r.seasonNumber as number));
+    }
+    const ids = (where.id as { in: string[] }).in;
+    return rows.filter((r) => ids.includes(r.id));
+  });
+  mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([]);
+  mockPrisma.library.findUnique.mockResolvedValue({ mediaServer: { userId: "u1" } });
+  mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+}
+
 describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)", () => {
   beforeEach(() => {
-    mockPrisma.mediaItem.findMany.mockResolvedValue([
+    serveLibrary([
+      { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
       { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
     ]);
     mockSonarr.getEpisodes.mockResolvedValue([
@@ -428,6 +471,10 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
   });
 
   it("with no members recorded, acts on the action's own episode", async () => {
+    serveLibrary([
+      { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      { id: "ep-rep", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+    ]);
     await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: [] }));
     expect(mockPrisma.mediaItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ["ep-rep"] } } }));
     expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
@@ -435,7 +482,8 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
   });
 
   it("acts on the episodes that resolve and warns about the rest", async () => {
-    mockPrisma.mediaItem.findMany.mockResolvedValue([
+    serveLibrary([
+      { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
       { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
       { id: "e9", seasonNumber: 9, episodeNumber: 9, originallyAvailableAt: null },
     ]);
@@ -456,6 +504,160 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
   });
 
+  describe("whole seasons (criteria that decide per season)", () => {
+    const SEASONS = [
+      { seasonNumber: 1, monitored: true },
+      { seasonNumber: 2, monitored: true },
+      { seasonNumber: 3, monitored: true },
+    ];
+    beforeEach(() => {
+      // The library holds S01E01, S01E02 and S02E01; Sonarr also knows S01E03
+      // (never downloaded) and S02E02, S03E01.
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+        { id: "s2e1", seasonNumber: 2, episodeNumber: 1, originallyAvailableAt: null },
+      ]);
+      mockSonarr.getSeriesByTvdbId.mockResolvedValue({ ...SERIES, seasons: SEASONS });
+      mockSonarr.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 11 },
+        { id: 503, seasonNumber: 1, episodeNumber: 3, episodeFileId: 0 },
+        { id: 601, seasonNumber: 2, episodeNumber: 1, episodeFileId: 12 },
+        { id: 602, seasonNumber: 2, episodeNumber: 2, episodeFileId: 0 },
+        { id: 701, seasonNumber: 3, episodeNumber: 1, episodeFileId: 0 },
+      ]);
+    });
+
+    it("unmonitors the season and all its episodes, missing ones included, never the series", async () => {
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502, 503], false);
+      // The season flag through the season pass: no series PUT to refuse it.
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        expect.stringContaining("unmonitored season(s) 1 of Sonarr series \"Severance\" whole — 1 Sonarr episode(s) besides the 2 acted on"),
+      );
+    });
+
+    it("unmonitors only the matched episodes without a season scope (criteria of one episode, e.g. watched)", async () => {
+      await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e1", "e2"] }));
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502], false);
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+    });
+
+    it("selected: leaves a season with an unselected held episode monitored", async () => {
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e2", "s2e1"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [2], false);
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502, 601, 602], false);
+    });
+
+    it("selected: a member's copy on another server covers the season's episode", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, dedupKey: "k1" },
+        { id: "e1-copy", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, dedupKey: "k1" },
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+    });
+
+    it("matched: judges the season by the rule's criteria, not by the members an earlier action left", async () => {
+      // Coverage narrowed the action to E02 (E01 was acted on before): the
+      // season's criteria match E01 too, so the season goes whole.
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502, 501, 503], false);
+    });
+
+    it("matched: an excepted episode keeps its season monitored", async () => {
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([{ mediaItemId: "e1", mediaItem: { dedupKey: null } }]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
+    });
+
+    it("leaves a season whole-alone when one of its members did not resolve in Sonarr (numbered differently)", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+        // Sonarr's S01E02 aired years earlier: the two number the show differently.
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: new Date("2030-01-01T00:00:00Z") },
+      ]);
+      mockSonarr.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 11, airDate: "2010-01-01" },
+        { id: 503, seasonNumber: 1, episodeNumber: 3, episodeFileId: 0 },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501], false);
+    });
+
+    it("keys a member that predates seriesKey from its title, as its siblings", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, seriesKey: null, parentTitle: " Severance " },
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null, seriesKey: "title:severance" },
+        { id: "e3", seasonNumber: 1, episodeNumber: 3, originallyAvailableAt: null, seriesKey: null, parentTitle: "SEVERANCE" },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      // E03 belongs to the same show and was not selected: the season stays.
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502], false);
+    });
+
+    it("UNMONITOR_DELETE_FILES_SONARR unmonitors the matched seasons, then deletes only the matched files, resolving them once", async () => {
+      const outcome = await executeAction(showAction({
+        actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502, 503], false);
+      expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+      expect(outcome.deletedMemberIds).toEqual(["e1", "e2"]);
+      expect(mockSonarr.deleteSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.getEpisodes).toHaveBeenCalledTimes(1);
+    });
+
+    it("UNMONITOR_DELETE_FILES_SONARR episode-scoped with no members changes nothing, and says so", async () => {
+      const outcome = await executeAction(showAction({
+        actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: [],
+      }));
+      expect(outcome.deletedMemberIds).toEqual([]);
+      expect(outcome.notActedOn).toEqual([
+        { title: "Severance", reason: "No matched episodes left to act on — nothing was unmonitored or deleted" },
+      ]);
+      expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("refusing to unmonitor or delete without them"));
+    });
+
+    it("UNMONITOR_DELETE_FILES_SONARR without episode scope still unmonitors the series", async () => {
+      await executeAction(showAction({ actionType: "UNMONITOR_DELETE_FILES_SONARR", matchedMediaItemIds: ["e1", "e2"] }));
+      expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: false }, expect.objectContaining({ id: 2 }));
+      expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+    });
+  });
+
   it("throws rather than widening to the series when no selected episode resolves in Sonarr", async () => {
     mockSonarr.getEpisodes.mockResolvedValue([{ id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 }]);
     await expect(
@@ -464,6 +666,71 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
     expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+  });
+});
+
+describe("a file delete the app outlives (recycle bin on another mount)", () => {
+  /** The client's timeout on a delete, as `createIntegrationHttp` reports it. */
+  const timedOut = (app: string, url: string) =>
+    new IntegrationError(app, {
+      isAxiosError: true, name: "AxiosError", message: "timeout", code: "ECONNABORTED",
+      config: { url, method: "delete" }, toJSON: () => ({}),
+    } as unknown as AxiosError);
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("Sonarr: deletes a long show's files a chunk at a time and confirms the one that timed out", async () => {
+    const episodes = Array.from({ length: 30 }, (_, i) => ({
+      id: `e${i + 1}`, seasonNumber: 1, episodeNumber: i + 1, originallyAvailableAt: null,
+    }));
+    mockPrisma.mediaItem.findMany.mockResolvedValue(episodes);
+    const sonarrEpisodes = episodes.map((e, i) => ({ id: 500 + i, seasonNumber: 1, episodeNumber: i + 1, episodeFileId: 1000 + i }));
+    mockSonarr.getEpisodes.mockResolvedValueOnce(sonarrEpisodes);
+    // The first chunk outlives the request; Sonarr has removed its files by the first look.
+    mockSonarr.deleteEpisodeFiles.mockRejectedValueOnce(timedOut("Sonarr", "/api/v3/episodefile/bulk"));
+    mockSonarr.getEpisodes.mockResolvedValueOnce(sonarrEpisodes.map((ep, i) => (i < 25 ? { ...ep, episodeFileId: 0 } : ep)));
+
+    const onStep = vi.fn();
+    const run = executeAction(
+      showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: episodes.map((e) => e.id) }),
+      onStep,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    const outcome = await run;
+
+    expect(mockSonarr.deleteEpisodeFiles.mock.calls.map(([ids]) => ids.length)).toEqual([25, 5]);
+    expect(outcome.deletedMemberIds).toHaveLength(30);
+    // The progress bar moves with the files, and says when it waits on Sonarr.
+    expect(onStep.mock.calls).toEqual([
+      ["Delete Files Only (Sonarr)"],
+      ["Delete Files Only (Sonarr) — 0 of 30 files deleted", 0],
+      ["Delete Files Only (Sonarr) — waiting for Sonarr to finish deleting (0 of 30 files deleted)", 0],
+      ["Delete Files Only (Sonarr) — 25 of 30 files deleted", 25 / 30],
+      ["Delete Files Only (Sonarr) — 30 of 30 files deleted", 1],
+    ]);
+  });
+
+  it("Radarr: confirms a movie file delete that timed out by reading the movie back", async () => {
+    mockRadarr.deleteMovieFile.mockRejectedValueOnce(timedOut("Radarr", "/api/v3/moviefile/70"));
+    mockRadarr.getMovieById.mockResolvedValue({ ...MOVIE, hasFile: false, movieFileId: 0 });
+
+    const run = executeAction(movieAction({ actionType: "DELETE_FILES_RADARR" }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(run).resolves.toBeDefined();
+    expect(mockRadarr.deleteMovieFile).toHaveBeenCalledTimes(1);
+    expect(mockRadarr.getMovieById).toHaveBeenCalledWith(7);
+  });
+
+  it("fails, never re-sending the delete, when the file is still there after the wait", async () => {
+    mockRadarr.deleteMovieFile.mockRejectedValueOnce(timedOut("Radarr", "/api/v3/moviefile/70"));
+    mockRadarr.getMovieById.mockResolvedValue({ ...MOVIE });
+
+    const run = executeAction(movieAction({ actionType: "DELETE_FILES_RADARR" }));
+    const failed = expect(run).rejects.toThrow(/^Radarr stopped deleting with 1 of 1 movie file/);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await failed;
+    expect(mockRadarr.deleteMovieFile).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -476,6 +743,8 @@ describe("Sonarr member-scoped file deletes", () => {
       expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
       expect(mockSonarr.deleteSeries).not.toHaveBeenCalled();
       expect(outcome.deletedMemberIds).toEqual([]);
+      // It ran but changed nothing: the run must not read as a clean success.
+      expect(outcome.notActedOn).toEqual([expect.objectContaining({ reason: expect.stringMatching(/^No matched episodes left to act on/) })]);
       expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("refusing to delete all episode files"));
     },
   );
@@ -506,6 +775,63 @@ describe("Sonarr member-scoped file deletes", () => {
     expect(outcome.deletedMemberIds).toEqual(["ok"]);
     // The episode whose file is already gone is still searched.
     expect(mockSonarr.triggerEpisodeSearch).toHaveBeenCalledWith([501, 504]);
+  });
+
+  it("matches an episode whose air dates disagree when both sources give it the same real title", async () => {
+    // A week apart (a pre-emption), same episode: the title settles it.
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "e10", title: "Going Down With the Ship", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 10, originallyAvailableAt: new Date("2007-11-29T00:00:00Z") },
+      { id: "e11", title: "The Unhappy Tribe", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 11, originallyAvailableAt: new Date("2007-12-06T00:00:00Z") },
+      // A placeholder title proves nothing.
+      { id: "e12", title: "Episode 12", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 12, originallyAvailableAt: new Date("2007-12-13T00:00:00Z") },
+      { id: "e13", title: "Untitled", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 13, originallyAvailableAt: new Date("2007-12-16T00:00:00Z") },
+    ]);
+    mockSonarr.getEpisodes.mockResolvedValue([
+      { id: 1510, seasonNumber: 15, episodeNumber: 10, episodeFileId: 10, airDate: "2007-11-22", title: "Going Down with the Ship!" },
+      { id: 1511, seasonNumber: 15, episodeNumber: 11, episodeFileId: 11, airDate: "2007-11-29", title: "Another Episode Entirely" },
+      { id: 1512, seasonNumber: 15, episodeNumber: 12, episodeFileId: 12, airDate: "2007-12-06", title: "Episode 12" },
+      { id: 1513, seasonNumber: 15, episodeNumber: 13, episodeFileId: 13, airDate: "2007-12-13", title: "Untitled" },
+    ]);
+
+    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["e10", "e11", "e12", "e13"] }));
+
+    expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10]);
+    expect(outcome.deletedMemberIds).toEqual(["e10"]);
+    expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Matching S15E10 of Sonarr series 2 by its title "Going Down With the Ship"'));
+    expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Skipping S15E11 of Sonarr series 2: the media server\'s air date (2007-12-06) does not match Sonarr\'s (2007-11-29), and the titles ("The Unhappy Tribe" / "Another Episode Entirely")'));
+    expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("Skipping S15E12"));
+    // The action ran; the two it left alone are reported with their reasons.
+    expect(outcome.notActedOn).toEqual([
+      {
+        title: "Survivor S15E11",
+        reason: expect.stringMatching(/^The media server and Sonarr may number this show differently: the air dates differ \(2007-12-06 \/ 2007-11-29\) and the titles do not match \("The Unhappy Tribe" \/ "Another Episode Entirely"\)$/),
+      },
+      { title: "Survivor S15E12", reason: expect.stringContaining("may number this show differently") },
+      { title: "Survivor S15E13", reason: expect.stringContaining("may number this show differently") },
+    ]);
+  });
+
+  it("reports the episodes it left alone: gone from the library, unnumbered, missing in Sonarr, or sharing a file", async () => {
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "a", title: "A", parentTitle: "Severance", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      { id: "b", title: "B", parentTitle: "Severance", seasonNumber: null, episodeNumber: null, originallyAvailableAt: null },
+      { id: "c", title: "C", parentTitle: "Severance", seasonNumber: 9, episodeNumber: 9, originallyAvailableAt: null },
+    ]);
+    // S01E01 shares its file with S01E02, which did not match.
+    mockSonarr.getEpisodes.mockResolvedValue([
+      { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 10 },
+    ]);
+
+    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["a", "b", "c", "gone"] }));
+
+    expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
+    expect(outcome.notActedOn).toEqual([
+      { title: "Severance — 1 episode", reason: "No longer in the library (removed since the action was scheduled)" },
+      { title: "Severance — B", reason: "The media server gives it no season or episode number" },
+      { title: "Severance S09E09", reason: "Sonarr has no S09E09 for this series" },
+      { title: "Severance S01E01", reason: "Its file also holds S01E02, which did not match — the file was kept" },
+    ]);
   });
 
   it("deletes nothing (without throwing) when every matched episode is file-less", async () => {

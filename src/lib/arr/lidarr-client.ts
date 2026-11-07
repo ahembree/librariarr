@@ -1,4 +1,4 @@
-import { ArrClientBase } from "@/lib/arr/arr-client-base";
+import { ArrClientBase, FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 export interface LidarrArtist {
   id: number;
@@ -106,10 +106,12 @@ export class LidarrClient extends ArrClientBase {
     await this.removeTagsWithEditor("artist", "artistIds", artistIds, tagIds);
   }
 
+  /** Deletes the given track files in one request, under the file-delete timeout. */
   async deleteTrackFiles(trackFileIds: number[]): Promise<void> {
     if (trackFileIds.length === 0) return;
     await this.client.delete("/api/v1/trackfile/bulk", {
       data: { trackFileIds },
+      timeout: FILE_DELETE_TIMEOUT_MS,
     });
   }
 

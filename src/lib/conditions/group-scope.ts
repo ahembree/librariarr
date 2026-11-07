@@ -135,9 +135,8 @@ const PER_MEMBER_METADATA_FIELDS = ["genre", "studio", "labels", "contentRating"
  * Episode Number and Seasons Behind Latest. Each is where one episode sits in
  * its show — a whole show has none of them, and one episode's must never
  * decide for the show: "Seasons Behind Latest ≥ 2" matches every show with
- * three seasons or more, and under Delete from Sonarr or Unmonitor & Delete
- * Files (which unmonitors the series) the two newest seasons it exists to keep
- * would go with them. Blocked on Music too: a track keeps its disc and track
+ * three seasons or more, and under Delete from Sonarr the two newest seasons
+ * it exists to keep would go with them. Blocked on Music too: a track keeps its disc and track
  * numbers in the same columns, which these read as empty.
  */
 const PER_EPISODE_FIELDS: readonly string[] = CONDITION_FIELDS.filter((f) => f.episodeLevel).map((f) => f.value);
@@ -243,6 +242,67 @@ export function findGroupScopeBlockedCriteria(
   return fields.size > 0 || streamQuery ? { fields: [...fields], streamQuery } : null;
 }
 
+/**
+ * Walk the ENABLED criteria of a rule tree — flat (legacy) or grouped, at any
+ * depth — as the engines evaluate it: a disabled group is skipped whole, a
+ * disabled rule alone. `visit` gets each enabled rule's field, or null for an
+ * enabled stream query group; returning true stops the walk.
+ */
+function someEnabledCriterion(rules: unknown, visit: (field: string | null) => boolean): boolean {
+  const walk = (items: unknown): boolean => {
+    if (!Array.isArray(items)) return false;
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      if (obj.enabled === false) continue;
+      if (Array.isArray(obj.rules)) {
+        if (obj.streamQuery && visit(null)) return true;
+        if (walk(obj.rules) || walk(obj.groups)) return true;
+      } else if (typeof obj.field === "string") {
+        if (visit(isStreamQueryField(obj.field) ? null : obj.field)) return true;
+      }
+    }
+    return false;
+  };
+  return walk(rules);
+}
+
+/**
+ * Whether an enabled criterion of the tree is one member's own (a stream query
+ * group included): with the scope off, an episode or track then matches on
+ * its own while its siblings may not. With none, every member of a show or
+ * artist answers the rules alike — the whole show matches or none of it.
+ */
+export function hasEnabledPerMemberCriteria(type: GroupScopeType, rules: unknown): boolean {
+  return someEnabledCriterion(rules, (field) => field === null || !isMemberConstantField(field, type));
+}
+
+/** The per-episode criteria every episode of one season answers alike. */
+const SEASON_LEVEL_FIELDS: ReadonlySet<string> = new Set(["seasonNumber", "seasonsBehindLatest"]);
+
+/**
+ * Whether a Series rule tree decides per season: an enabled Season Number or
+ * Seasons Behind Latest criterion, and every other enabled criterion one each
+ * episode of a show answers alike (`isMemberConstantField`). Every episode of
+ * a season then matches or none does, so an Unmonitor acting on the matched
+ * episodes may unmonitor their seasons whole — the season and its episodes
+ * the library does not hold. Any criterion of one episode (Episode Number,
+ * Resolution, Play Count, Watched By User, …) keeps it to the matched
+ * episodes: "watched" on an airing season must not unmonitor its unaired
+ * episodes.
+ */
+export function isSeasonDetermined(rules: unknown): boolean {
+  let seasonLevel = false;
+  const other = someEnabledCriterion(rules, (field) => {
+    if (field !== null && SEASON_LEVEL_FIELDS.has(field)) {
+      seasonLevel = true;
+      return false;
+    }
+    return field === null || !isMemberConstantField(field, "SERIES");
+  });
+  return seasonLevel && !other;
+}
+
 // ─── Actions ─────────────────────────────────────────────────────────────
 
 /**
@@ -250,8 +310,9 @@ export function findGroupScopeBlockedCriteria(
  * whatever members matched (`src/lib/lifecycle/actions.ts`):
  *
  *  - Delete from Sonarr / Lidarr: `deleteSeries` / `deleteArtist`.
- *  - Unmonitor & Delete Files: unmonitors the series or artist, then deletes
- *    the matched files (and, for Lidarr, searches the whole artist).
+ *  - Lidarr's Unmonitor & Delete Files: unmonitors the artist, then deletes
+ *    the matched files and searches the whole artist. (Sonarr's is
+ *    episode-scopable, below.)
  *  - Monitor & Delete Files: monitors the series or artist when it was not,
  *    then deletes the matched files (Lidarr: searches the whole artist).
  *  - Change Quality Profile: the series' or artist's profile.
@@ -261,7 +322,8 @@ export function findGroupScopeBlockedCriteria(
  * Not listed, because they act only on the matched members: Delete Files
  * Only (Sonarr deletes and searches the matched episodes by id; Lidarr's
  * search after is the one exception, `wholeRecordActionOf`), Sonarr's
- * Unmonitor Only and Search for New Copy with series scope off (they act on
+ * Unmonitor Only, Search for New Copy and Unmonitor & Delete Files with
+ * series scope off (they act on
  * the matched episodes, `ruleSetActsOnEpisodes`; with it on the group
  * judgement applies anyway — and where they run on the whole series instead,
  * the Query page's grouped view, the action says so with `episodeScope`
@@ -271,7 +333,6 @@ export function findGroupScopeBlockedCriteria(
 export const WHOLE_RECORD_ACTION_TYPES: Readonly<Record<GroupScopeType, ReadonlySet<string>>> = {
   SERIES: new Set([
     "DELETE_SONARR",
-    "UNMONITOR_DELETE_FILES_SONARR",
     "MONITOR_DELETE_FILES_SONARR",
     "CHANGE_QUALITY_PROFILE_SONARR",
   ]),
@@ -297,7 +358,8 @@ export interface GroupScopeAction {
   removeArrTags?: readonly string[] | null;
   searchAfterAction?: boolean | null;
   /**
-   * Whether Sonarr's Unmonitor Only and Search for New Copy act on the matched
+   * Whether Sonarr's Unmonitor Only, Search for New Copy and Unmonitor & Delete
+   * Files act on the matched
    * episodes. Absent or null reads as yes: a rule set with series scope off
    * always runs them per episode (`ruleSetActsOnEpisodes`). False where they
    * act on the whole series though each episode was judged on its own — the
@@ -446,7 +508,7 @@ export const GROUP_SCOPE_TERMS: Record<GroupScopeType, {
     scope: "series scope",
     group: "show",
     member: "episode",
-    memberActions: "Delete Files Only, Unmonitor Only or Search for New Copy, without Arr tags",
+    memberActions: "Delete Files Only, Unmonitor & Delete Files, Unmonitor Only or Search for New Copy, without Arr tags",
   },
   MUSIC: {
     toggle: "Match against entire artist",

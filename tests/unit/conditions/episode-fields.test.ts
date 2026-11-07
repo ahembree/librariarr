@@ -178,7 +178,7 @@ describe("rule set guards", () => {
     "refuses %s at series scope, and with it off under an action on the whole series",
     (field) => {
       expect(groupScopeViolation("SERIES", true, tree(field))?.fields).toEqual([field]);
-      for (const actionType of ["DELETE_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR"]) {
+      for (const actionType of ["DELETE_SONARR", "MONITOR_DELETE_FILES_SONARR", "CHANGE_QUALITY_PROFILE_SONARR"]) {
         expect(groupScopeViolation("SERIES", false, tree(field), { actionEnabled: true, actionType })).toMatchObject({
           judgement: "member",
           fields: [field],
@@ -189,7 +189,7 @@ describe("rule set guards", () => {
         actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["old"], removeArrTags: ["keep"],
       })?.wholeRecordAction).toBe("Arr tags");
       // The actions on the matched episodes follow them.
-      for (const actionType of ["DELETE_FILES_SONARR", "UNMONITOR_SONARR", "SEARCH_SONARR", "DO_NOTHING"]) {
+      for (const actionType of ["DELETE_FILES_SONARR", "UNMONITOR_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "SEARCH_SONARR", "DO_NOTHING"]) {
         expect(groupScopeViolation("SERIES", false, tree(field), { actionEnabled: true, actionType })).toBeNull();
       }
     },

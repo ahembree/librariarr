@@ -341,6 +341,64 @@ describe("POST /api/query/actions", () => {
     expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
+  it("returns every failed item and every member left alone, each with its reason", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+      { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+    ]));
+    mockedExecuteAction.mockImplementation(async (action) => {
+      if (action.mediaItem.title === "B") throw new Error("Radarr HTTP 500");
+      return { notActedOn: [{ title: "A (extra)", reason: "Its file also holds another, which did not match" }] };
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [m1.id, m2.id], actionType: "DELETE_FILES_RADARR", arrInstanceId: radarr.id },
+    });
+    const { result } = await expectStreamResult<{
+      executed: number; failed: number;
+      failures: Array<{ title: string; error: string }>;
+      notActedOn: Array<{ title: string; reason: string }>; notActedOnCount: number;
+    }>(response);
+    expect(result).toMatchObject({ executed: 1, failed: 1, notActedOnCount: 1 });
+    expect(result.failures).toEqual([{ title: "B", error: "Radarr HTTP 500" }]);
+    expect(result.notActedOn).toEqual([{ title: "A (extra)", reason: "Its file also holds another, which did not match" }]);
+  });
+
+  it("moves the execute progress within an item as its file delete reports files gone", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+      { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+    ]));
+    mockedExecuteAction.mockImplementation(async (_action, onStep) => {
+      onStep?.("Delete Files Only (Radarr) — 0 of 1 files deleted", 0);
+      onStep?.("Delete Files Only (Radarr) — 1 of 2 files deleted", 0.5);
+      return {};
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [m1.id, m2.id], actionType: "DELETE_FILES_RADARR", arrInstanceId: radarr.id },
+    });
+    const { events } = await expectStreamResult<{ executed: number }>(response);
+    const execute = events.filter((e) => e.type === "phase" && e.key === "execute");
+    // Half of the first of two items is a quarter of the run; half of the second, three quarters.
+    expect(execute).toContainEqual(expect.objectContaining({ fraction: 0.25, detail: expect.stringContaining("1 of 2 files deleted") }));
+    expect(execute).toContainEqual(expect.objectContaining({ fraction: 0.75 }));
+  });
+
   it("streams phase progress events with determinate per-item execute progress", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

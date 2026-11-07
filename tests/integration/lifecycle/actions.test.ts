@@ -1588,7 +1588,7 @@ describe("Lifecycle Actions", () => {
       const gate = new Promise<void>((resolve) => { release = resolve; });
       runner.mockImplementationOnce(async () => {
         await gate;
-        return { executed: 1, failed: 0, errors: [], failures: [], notAttempted: 0 };
+        return { executed: 1, failed: 0, errors: [], failures: [], notActedOn: [], notActedOnCount: 0, notAttempted: 0 };
       });
       return { runner, release };
     }

@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProgressPhase, ProgressUpdate } from "@/lib/progress/types";
 
-interface ProgressState {
+export interface ProgressState {
   phases: ProgressPhase[];
   currentKey: string | null;
   /** 0..1 sub-progress within the current phase. */
@@ -16,33 +16,36 @@ interface ProgressState {
   detail: string | null;
 }
 
-const EMPTY: ProgressState = { phases: [], currentKey: null, fraction: 0, determinate: false, detail: null };
+export const EMPTY_PROGRESS: ProgressState = { phases: [], currentKey: null, fraction: 0, determinate: false, detail: null };
+
+/** `prev` with one stream event applied — for a page that keeps several bars (one per running Execute). */
+export function applyProgressUpdate(prev: ProgressState, update: ProgressUpdate): ProgressState {
+  if (update.type === "plan") {
+    return { phases: update.phases, currentKey: null, fraction: 0, determinate: false, detail: null };
+  }
+  return {
+    ...prev,
+    currentKey: update.key,
+    fraction: update.fraction ?? 0,
+    determinate: update.fraction !== undefined,
+    // A phase event without a detail clears any prior sub-status (e.g. when
+    // advancing from the per-item "execute" phase to "finalize").
+    detail: update.detail ?? null,
+  };
+}
 
 /**
  * Drives a {@link QueryProgress} bar from an NDJSON progress stream. Feed
  * `handleUpdate` to `consumeProgressStream`; render `<QueryProgress state={state} />`.
  */
 export function useStreamProgress() {
-  const [state, setState] = useState<ProgressState>(EMPTY);
+  const [state, setState] = useState<ProgressState>(EMPTY_PROGRESS);
 
   const handleUpdate = useCallback((update: ProgressUpdate) => {
-    setState((prev) => {
-      if (update.type === "plan") {
-        return { phases: update.phases, currentKey: null, fraction: 0, determinate: false, detail: null };
-      }
-      return {
-        ...prev,
-        currentKey: update.key,
-        fraction: update.fraction ?? 0,
-        determinate: update.fraction !== undefined,
-        // A phase event without a detail clears any prior sub-status (e.g. when
-        // advancing from the per-item "execute" phase to "finalize").
-        detail: update.detail ?? null,
-      };
-    });
+    setState((prev) => applyProgressUpdate(prev, update));
   }, []);
 
-  const reset = useCallback(() => setState(EMPTY), []);
+  const reset = useCallback(() => setState(EMPTY_PROGRESS), []);
 
   return { state, handleUpdate, reset };
 }
