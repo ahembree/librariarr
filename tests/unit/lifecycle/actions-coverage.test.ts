@@ -13,6 +13,9 @@ const mockPrisma = vi.hoisted(() => ({
   lidarrInstance: { findFirst: vi.fn() },
   mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
   mediaItemExternalId: { findMany: vi.fn() },
+  library: { findUnique: vi.fn() },
+  lifecycleException: { findMany: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
 }));
 
 const mockRadarr = vi.hoisted(() => ({
@@ -37,6 +40,7 @@ const mockSonarr = vi.hoisted(() => ({
   triggerSeriesSearch: vi.fn(),
   triggerEpisodeSearch: vi.fn(),
   setEpisodesMonitored: vi.fn(),
+  setSeasonsMonitored: vi.fn(),
   getTags: vi.fn(),
   createTag: vi.fn(),
   deleteTag: vi.fn(),
@@ -422,15 +426,21 @@ interface LibraryEpisode {
  * (`fullyMatchedSeasons`).
  */
 function serveLibrary(episodes: LibraryEpisode[]) {
-  const rows = episodes.map((e) => ({ libraryId: "lib1", seriesKey: "tvdb:371980", parentTitle: "Severance", dedupKey: null, ...e }));
+  const rows = episodes.map((e) => ({
+    libraryId: "lib1", seriesKey: "tvdb:371980", parentTitle: "Severance", dedupKey: null, externalIds: [], ...e,
+  }));
   mockPrisma.mediaItem.findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
-    if (where.libraryId) {
+    if (where.seasonNumber) {
       const seasons = (where.seasonNumber as { in: number[] }).in;
-      return rows.filter((r) => r.libraryId === where.libraryId && r.seriesKey === where.seriesKey && seasons.includes(r.seasonNumber as number));
+      const [keyed] = where.OR as [{ seriesKey: { in: string[] } }, { seriesKey: null }];
+      return rows.filter((r) => (r.seriesKey === null || keyed.seriesKey.in.includes(r.seriesKey)) && seasons.includes(r.seasonNumber as number));
     }
     const ids = (where.id as { in: string[] }).in;
     return rows.filter((r) => ids.includes(r.id));
   });
+  mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([]);
+  mockPrisma.library.findUnique.mockResolvedValue({ mediaServer: { userId: "u1" } });
+  mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
 }
 
 describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)", () => {
@@ -491,7 +501,7 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
   });
 
-  describe("a season every held episode of which matched", () => {
+  describe("whole seasons (criteria that decide per season)", () => {
     const SEASONS = [
       { seasonNumber: 1, monitored: true },
       { seasonNumber: 2, monitored: true },
@@ -517,44 +527,127 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     });
 
     it("unmonitors the season and all its episodes, missing ones included, never the series", async () => {
-      await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e1", "e2"] }));
-      expect(mockSonarr.updateSeries).toHaveBeenCalledTimes(1);
-      const [, patch] = mockSonarr.updateSeries.mock.calls[0];
-      expect(patch).toEqual({
-        seasons: [
-          { seasonNumber: 1, monitored: false },
-          { seasonNumber: 2, monitored: true },
-          { seasonNumber: 3, monitored: true },
-        ],
-      });
-      expect(patch).not.toHaveProperty("monitored");
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
       expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502, 503], false);
+      // The season flag through the season pass: no series PUT to refuse it.
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Lifecycle",
+        expect.stringContaining("unmonitored season(s) 1 of Sonarr series \"Severance\" whole — 1 Sonarr episode(s) besides the 2 acted on"),
+      );
     });
 
-    it("leaves a season with an unmatched held episode monitored, unmonitoring only the matched ones", async () => {
-      await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e2", "s2e1"] }));
-      const [, patch] = mockSonarr.updateSeries.mock.calls[0];
-      expect(patch.seasons.map((x: { monitored: boolean }) => x.monitored)).toEqual([true, false, true]);
+    it("unmonitors only the matched episodes without a season scope (criteria of one episode, e.g. watched)", async () => {
+      await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e1", "e2"] }));
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502], false);
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+    });
+
+    it("selected: leaves a season with an unselected held episode monitored", async () => {
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e2", "s2e1"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [2], false);
       expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502, 601, 602], false);
     });
 
-    it("UNMONITOR_DELETE_FILES_SONARR unmonitors the matched seasons, then deletes only the matched files", async () => {
-      const outcome = await executeAction(showAction({
-        actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, matchedMediaItemIds: ["e1", "e2"],
+    it("selected: a member's copy on another server covers the season's episode", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, dedupKey: "k1" },
+        { id: "e1-copy", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, dedupKey: "k1" },
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
       }));
-      const [, patch] = mockSonarr.updateSeries.mock.calls[0];
-      expect(patch).not.toHaveProperty("monitored");
-      expect(patch.seasons.map((x: { monitored: boolean }) => x.monitored)).toEqual([false, true, true]);
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+    });
+
+    it("matched: judges the season by the rule's criteria, not by the members an earlier action left", async () => {
+      // Coverage narrowed the action to E02 (E01 was acted on before): the
+      // season's criteria match E01 too, so the season goes whole.
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502, 501, 503], false);
+    });
+
+    it("matched: an excepted episode keeps its season monitored", async () => {
+      mockPrisma.lifecycleException.findMany.mockResolvedValue([{ mediaItemId: "e1", mediaItem: { dedupKey: null } }]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
+    });
+
+    it("leaves a season whole-alone when one of its members did not resolve in Sonarr (numbered differently)", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+        // Sonarr's S01E02 aired years earlier: the two number the show differently.
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: new Date("2030-01-01T00:00:00Z") },
+      ]);
+      mockSonarr.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 11, airDate: "2010-01-01" },
+        { id: 503, seasonNumber: 1, episodeNumber: 3, episodeFileId: 0 },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501], false);
+    });
+
+    it("keys a member that predates seriesKey from its title, as its siblings", async () => {
+      serveLibrary([
+        { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null, seriesKey: null, parentTitle: " Severance " },
+        { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null, seriesKey: "title:severance" },
+        { id: "e3", seasonNumber: 1, episodeNumber: 3, originallyAvailableAt: null, seriesKey: null, parentTitle: "SEVERANCE" },
+      ]);
+      await executeAction(showAction({
+        actionType: "UNMONITOR_SONARR", episodeScope: true, seasonScope: "selected", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      // E03 belongs to the same show and was not selected: the season stays.
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502], false);
+    });
+
+    it("UNMONITOR_DELETE_FILES_SONARR unmonitors the matched seasons, then deletes only the matched files, resolving them once", async () => {
+      const outcome = await executeAction(showAction({
+        actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: ["e1", "e2"],
+      }));
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).toHaveBeenCalledWith(2, [1], false);
       expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([501, 502, 503], false);
       expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
       expect(outcome.deletedMemberIds).toEqual(["e1", "e2"]);
       expect(mockSonarr.deleteSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.getEpisodes).toHaveBeenCalledTimes(1);
+    });
+
+    it("UNMONITOR_DELETE_FILES_SONARR episode-scoped with no members changes nothing", async () => {
+      const outcome = await executeAction(showAction({
+        actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: [],
+      }));
+      expect(outcome.deletedMemberIds).toEqual([]);
+      expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+      expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("refusing to unmonitor or delete without them"));
     });
 
     it("UNMONITOR_DELETE_FILES_SONARR without episode scope still unmonitors the series", async () => {
       await executeAction(showAction({ actionType: "UNMONITOR_DELETE_FILES_SONARR", matchedMediaItemIds: ["e1", "e2"] }));
       expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: false }, expect.objectContaining({ id: 2 }));
       expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+      expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
       expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
     });
   });

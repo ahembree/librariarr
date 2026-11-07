@@ -42,6 +42,7 @@ import { LoadingButton } from "@/components/loading-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
 import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
+import { WholeSeasonsChip } from "@/components/whole-seasons-chip";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
@@ -131,6 +132,11 @@ interface RuleSetGroup {
      * is edited. The reason, as the server words it.
      */
     scopeHoldReason?: string | null;
+    /**
+     * Whether its episode-scoped Unmonitor also unmonitors whole seasons —
+     * criteria that decide per season. The group header says so.
+     */
+    wholeSeasons?: boolean;
   };
   items: ActionItem[];
   count: number;
@@ -1068,9 +1074,10 @@ export default function PendingActionsPage() {
                   expanded={isExpanded}
                   onToggle={() => toggleExpand(group.ruleSet.id)}
                   meta={
-                    heldReason ? (
+                    heldReason || group.ruleSet.wholeSeasons ? (
                       <>
-                        <HeldChip reason={heldReason} />
+                        {heldReason && <HeldChip reason={heldReason} />}
+                        {group.ruleSet.wholeSeasons && <WholeSeasonsChip />}
                         {stats}
                       </>
                     ) : stats

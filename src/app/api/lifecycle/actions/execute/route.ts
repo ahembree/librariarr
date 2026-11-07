@@ -12,7 +12,8 @@ import {
   endRuleSetExecution,
 } from "@/lib/lifecycle/execute-in-flight";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
-import { actionHonorsMemberIds, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope } from "@/lib/lifecycle/episode-scope";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -502,6 +503,7 @@ async function executeRuleSet(
       addArrTags: ruleSet.addArrTags,
       removeArrTags: ruleSet.removeArrTags,
       episodeScope: ruleSetActsOnEpisodes(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
+      seasonScope: ruleSetSeasonScope(ruleSet.actionType ?? "DO_NOTHING", ruleSet),
     },
     episodeIdMap,
     {

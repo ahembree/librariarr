@@ -472,5 +472,83 @@ describe("episode-scoped Unmonitor (Series rule set, series scope off)", () => {
     await expectJson(await exec({ ruleSetId: ruleSet.id }), 400);
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
+  /** A rule tree of one enabled group holding `fields`. */
+  const rulesOf = (...fields: string[]) => [{
+    id: "g", condition: "AND", operator: "AND",
+    rules: fields.map((field, i) => ({ id: `r${i}`, field, operator: "greaterThan", value: "2", condition: "AND" })),
+  }];
+
+  async function deleteSetup(rules: unknown, actionType = "UNMONITOR_DELETE_FILES_SONARR") {
+    const user = await createTestUser();
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Pilot", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Two", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 2 });
+    const ruleSet = await createTestRuleSet(user.id, {
+      type: "SERIES", seriesScope: false, actionEnabled: true, actionType, arrInstanceId: "arr-1", rules,
+    });
+    await createTestRuleMatch(ruleSet.id, ep1.id, { title: "Lost", parentTitle: null, memberIds: [ep1.id, ep2.id] });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    return { user, ep1, ep2, ruleSet };
+  }
+
+  it("Execute runs Unmonitor & Delete Files on per-season criteria per episode with whole seasons, never narrowed by a completed delete", async () => {
+    const { user, ep1, ep2, ruleSet } = await deleteSetup(rulesOf("seasonsBehindLatest"));
+    // A delete is always re-schedulable: a completed one does not narrow the
+    // next to the episodes it did not act on (`episodesToExecute` is the
+    // non-destructive actions' coverage).
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_DELETE_FILES_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id],
+      },
+    });
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    const record = mockExecuteAction.mock.calls[0][0];
+    expect(record).toMatchObject({ episodeScope: true, seasonScope: "matched" });
+    expect([...record.matchedMediaItemIds].sort()).toEqual([ep1.id, ep2.id].sort());
+  });
+
+  it("Execute keeps a criterion of one episode to the matched episodes, without whole seasons", async () => {
+    const { ruleSet } = await deleteSetup(rulesOf("seasonsBehindLatest", "playCount"));
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: true });
+    expect(mockExecuteAction.mock.calls[0][0].seasonScope).toBeUndefined();
+  });
+
+  it("Execute keeps Unmonitor & Delete Files on the series when every criterion is the show's", async () => {
+    const { ruleSet } = await deleteSetup(rulesOf("availableEpisodeCount"));
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: false });
+    expect(mockExecuteAction.mock.calls[0][0].seasonScope).toBeUndefined();
+  });
+
+  it("Retry carries the season scope", async () => {
+    const { user, ep1, ep2, ruleSet } = await deleteSetup(rulesOf("seasonNumber"), "UNMONITOR_SONARR");
+    const action = await failedAction(user.id, {
+      mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+      matchedMediaItemIds: [ep1.id, ep2.id], mediaItemTitle: "Lost",
+    });
+    await expectJson(await retryCall(action.id), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: true, seasonScope: "matched" });
+  });
+
+  it("Pending marks a rule set whose Unmonitor unmonitors whole seasons", async () => {
+    const seasons = await deleteSetup(rulesOf("seasonsBehindLatest"), "UNMONITOR_SONARR");
+    const watched = await createTestRuleSet(seasons.user.id, {
+      type: "SERIES", seriesScope: false, actionEnabled: true, actionType: "UNMONITOR_SONARR", arrInstanceId: "arr-1",
+      rules: rulesOf("watchedByUser"),
+    });
+    await createTestRuleMatch(watched.id, seasons.ep2.id, { title: "Lost", parentTitle: null, memberIds: [seasons.ep2.id] });
+    const body = await expectJson<{ groups: { ruleSet: { id: string; wholeSeasons?: boolean } }[] }>(
+      await callRoute(GET, { url: "/api/lifecycle/actions" }),
+      200,
+    );
+    const flag = (id: string) => body.groups.find((g) => g.ruleSet.id === id)?.ruleSet.wholeSeasons;
+    expect(flag(seasons.ruleSet.id)).toBe(true);
+    expect(flag(watched.id)).toBe(false);
+    // The rules themselves are never returned.
+    expect(JSON.stringify(body)).not.toContain('"rules"');
+  });
 });
 

@@ -608,8 +608,8 @@ describe("per-episode and per-track criteria at series and artist scope", () => 
       expect(refused.details).toEqual([
         `actionType: "Delete from Sonarr" acts on the whole show, so with "Match against entire series" off it can't ` +
           `follow criteria that describe one episode or file: Resolution — one episode would decide for the whole show. ` +
-          `Remove them, or switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor ` +
-          `Only or Search for New Copy, without Arr tags).`,
+          `Remove them, or switch to an action that acts only on the matched episodes (Delete Files Only, Unmonitor & ` +
+          `Delete Files, Unmonitor Only or Search for New Copy, without Arr tags).`,
       ]);
       expect(await prisma.ruleSet.count()).toBe(0);
     });

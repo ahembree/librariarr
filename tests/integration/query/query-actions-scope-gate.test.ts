@@ -131,7 +131,8 @@ describe("POST /api/query/actions — per-episode and per-track criteria under a
       expect(refused.error).toBe(
         `"Delete from Sonarr" acts on the whole show, so it can't follow query criteria that describe one episode or ` +
           `file: Resolution — one matching episode would decide for the whole show. Remove them from the query, or pick ` +
-          `an action that acts only on the matched episodes (Delete Files Only, or Unmonitor Only or Search for New Copy ` +
+          `an action that acts only on the matched episodes (Delete Files Only, or Unmonitor Only, Unmonitor & Delete ` +
+          `Files or Search for New Copy ` +
           `with "Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — ` +
           `without tags).`,
       );

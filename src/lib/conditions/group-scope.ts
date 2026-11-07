@@ -242,6 +242,67 @@ export function findGroupScopeBlockedCriteria(
   return fields.size > 0 || streamQuery ? { fields: [...fields], streamQuery } : null;
 }
 
+/**
+ * Walk the ENABLED criteria of a rule tree — flat (legacy) or grouped, at any
+ * depth — as the engines evaluate it: a disabled group is skipped whole, a
+ * disabled rule alone. `visit` gets each enabled rule's field, or null for an
+ * enabled stream query group; returning true stops the walk.
+ */
+function someEnabledCriterion(rules: unknown, visit: (field: string | null) => boolean): boolean {
+  const walk = (items: unknown): boolean => {
+    if (!Array.isArray(items)) return false;
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      if (obj.enabled === false) continue;
+      if (Array.isArray(obj.rules)) {
+        if (obj.streamQuery && visit(null)) return true;
+        if (walk(obj.rules) || walk(obj.groups)) return true;
+      } else if (typeof obj.field === "string") {
+        if (visit(isStreamQueryField(obj.field) ? null : obj.field)) return true;
+      }
+    }
+    return false;
+  };
+  return walk(rules);
+}
+
+/**
+ * Whether an enabled criterion of the tree is one member's own (a stream query
+ * group included): with the scope off, an episode or track then matches on
+ * its own while its siblings may not. With none, every member of a show or
+ * artist answers the rules alike — the whole show matches or none of it.
+ */
+export function hasEnabledPerMemberCriteria(type: GroupScopeType, rules: unknown): boolean {
+  return someEnabledCriterion(rules, (field) => field === null || !isMemberConstantField(field, type));
+}
+
+/** The per-episode criteria every episode of one season answers alike. */
+const SEASON_LEVEL_FIELDS: ReadonlySet<string> = new Set(["seasonNumber", "seasonsBehindLatest"]);
+
+/**
+ * Whether a Series rule tree decides per season: an enabled Season Number or
+ * Seasons Behind Latest criterion, and every other enabled criterion one each
+ * episode of a show answers alike (`isMemberConstantField`). Every episode of
+ * a season then matches or none does, so an Unmonitor acting on the matched
+ * episodes may unmonitor their seasons whole — the season and its episodes
+ * the library does not hold. Any criterion of one episode (Episode Number,
+ * Resolution, Play Count, Watched By User, …) keeps it to the matched
+ * episodes: "watched" on an airing season must not unmonitor its unaired
+ * episodes.
+ */
+export function isSeasonDetermined(rules: unknown): boolean {
+  let seasonLevel = false;
+  const other = someEnabledCriterion(rules, (field) => {
+    if (field !== null && SEASON_LEVEL_FIELDS.has(field)) {
+      seasonLevel = true;
+      return false;
+    }
+    return field === null || !isMemberConstantField(field, "SERIES");
+  });
+  return seasonLevel && !other;
+}
+
 // ─── Actions ─────────────────────────────────────────────────────────────
 
 /**

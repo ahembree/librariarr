@@ -100,6 +100,19 @@ describe("buildActionBatches", () => {
     expect(batches.map((b) => b.length)).toEqual([1000, 500]);
   });
 
+  it("splits a show larger than the batch size at season boundaries, so no season straddles two requests", () => {
+    const season = (n: number, count: number): BatchableItem[] =>
+      episodes(`Big`, count, n * 100).map((e) => ({ ...e, seasonNumber: n }));
+    const items = [...season(1, 40), ...season(2, 40), ...season(3, 40)];
+    const batches = buildActionBatches(items, "SERIES", 100);
+    // 40 + 40 fit one request; season 3 starts the next, never 20 + 20.
+    expect(batches.map((b) => b.length)).toEqual([80, 40]);
+    expect(batches[1].every((id) => id.startsWith("Big-e3"))).toBe(true);
+    expect(batches.flat().sort()).toEqual(items.map((i) => i.id).sort());
+    // A single season larger than a request is the only one cut.
+    expect(buildActionBatches(season(1, 250), "SERIES", 100).map((b) => b.length)).toEqual([100, 100, 50]);
+  });
+
   it("partitions a large mixed-show selection into ordered, disjoint batches covering every id", () => {
     const items = [...episodes("A", 700), ...episodes("B", 700), ...episodes("C", 700)];
     const batches = buildActionBatches(items, "SERIES", 1000);

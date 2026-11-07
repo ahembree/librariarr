@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
-import { isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope } from "@/lib/lifecycle/episode-scope";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { coverageOf, uncoveredEpisodes, type EpisodeCoverage } from "@/lib/lifecycle/episode-coverage";
 import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
@@ -89,6 +90,13 @@ interface RuleSetGroup {
      * until it is edited. Null otherwise.
      */
     scopeHoldReason: string | null;
+    /**
+     * Whether the rule set's action unmonitors whole seasons in Sonarr — the
+     * season and its episodes the library does not hold — when every episode
+     * of a season matched: an Unmonitor acting on the matched episodes, on
+     * criteria that decide per season (`ruleSetSeasonScope`, episode-scope.ts).
+     */
+    wholeSeasons?: boolean;
   };
   items: ActionItem[];
   count: number;
@@ -110,7 +118,8 @@ const RULE_SET_SELECT = {
   id: true, name: true, type: true, seriesScope: true, actionType: true, actionDelayDays: true,
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
   removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true, actionsHeldSince: true,
-  // Read for the group-scope hold only (`scopeHoldReason`), never returned.
+  // Read for the group-scope hold (`scopeHoldReason`) and the action's episode
+  // and season scope (`actsOnEpisodes`, `wholeSeasons`) only, never returned.
   rules: true, actionEnabled: true,
 } as const;
 
@@ -132,6 +141,7 @@ async function loadActionLookups(userId: string) {
       select: { id: true, mediaServer: { select: { id: true, name: true, type: true } } },
     }),
   ]);
+  const rulesById = new Map(ruleSets.map((rs) => [rs.id, rs.rules]));
   return {
     ruleSetById: new Map(
       ruleSets.map(({ rules, actionEnabled, ...rs }) => [rs.id, {
@@ -140,8 +150,14 @@ async function loadActionLookups(userId: string) {
         // Its rules, scope and action: with the scope off, an action on the
         // whole show or artist following per-episode criteria is held too.
         scopeHoldReason: scopeHoldReason({ ...rs, rules, actionEnabled }),
+        // Whether its action unmonitors the seasons of its episodes whole
+        // (criteria that decide per season) — the Pending page says so.
+        wholeSeasons: !!rs.actionType && ruleSetSeasonScope(rs.actionType, { ...rs, rules }) !== undefined,
       }]),
     ),
+    /** Whether an action of this type acts on its episodes under the rule set's rules and scope. */
+    actsOnEpisodes: (ruleSet: { id: string; type: string; seriesScope: boolean }, actionType: string) =>
+      ruleSetActsOnEpisodes(actionType, { ...ruleSet, rules: rulesById.get(ruleSet.id) }),
     servers: new Map(libraries.map((l) => [l.id, l.mediaServer])) as LibraryServers,
   };
 }
@@ -272,7 +288,7 @@ export const GET = withSession(async (session, request: NextRequest) => {
 async function handlePendingGrouped(request: NextRequest, userId: string) {
   // 1. The PENDING actions, read with everything step 2 needs to tell which
   // matches still have none — four reads, none depending on another.
-  const [pendingActions, { ruleSetById, servers }, settledActions, matchKeys] = await Promise.all([
+  const [pendingActions, { ruleSetById, servers, actsOnEpisodes }, settledActions, matchKeys] = await Promise.all([
     prisma.lifecycleAction.findMany({
       where: { userId, status: "PENDING", ruleSetId: { not: null } },
       include: {
@@ -433,7 +449,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     }
     const group = groupMap.get(a.ruleSetId!)!;
     const mi = buildActionMediaItem(
-      { ...a, episodeScope: ruleSetActsOnEpisodes(a.actionType, ruleSet) },
+      { ...a, episodeScope: actsOnEpisodes(ruleSet, a.actionType) },
       ruleSet.type,
       memberDataMap,
       servers,
@@ -477,14 +493,14 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
     // those, not every member.
     const allMembers = memberIdsFromItemData(m.itemData);
     const memberIds =
-      m.ruleSet.actionType && ruleSetActsOnEpisodes(m.ruleSet.actionType, m.ruleSet)
+      m.ruleSet.actionType && actsOnEpisodes(m.ruleSet, m.ruleSet.actionType)
         ? (uncoveredFor(m.ruleSetId, m.mediaItemId) ?? allMembers)
         : allMembers;
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
       status: "PENDING",
       matchedMediaItemIds: memberIds,
-      episodeScope: ruleSetActsOnEpisodes(m.ruleSet.actionType!, m.ruleSet),
+      episodeScope: actsOnEpisodes(m.ruleSet, m.ruleSet.actionType!),
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,

@@ -306,6 +306,9 @@ export const API_OPERATIONS: readonly Operation[] = [
       `with series or artist scope on, or follows them with an action on the whole show or artist (Delete from Sonarr or Lidarr, ` +
       `Change Quality Profile, Arr tags, …) with the scope off (executing or retrying one answers 409 with that reason until the rule ` +
       `set is edited), and null otherwise. ` +
+      `Its \`ruleSet.wholeSeasons\` is true when its Sonarr Unmonitor (Only, or & Delete Files) acts on the matched episodes on ` +
+      `criteria that decide per season (Season Number or Seasons Behind Latest), so a season every episode of which in the library ` +
+      `matched is unmonitored whole, the episodes the library does not hold included. ` +
       `Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },

@@ -6,6 +6,7 @@ import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-t
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
+import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -22,6 +23,8 @@ interface ActionConfig {
   removeArrTags: string[];
   /** Unmonitor/Search act on the item's episodes, not the series (see `ActionRecord.episodeScope`). */
   episodeScope?: boolean;
+  /** How an episode-scoped Unmonitor judges a season whole (see `ActionRecord.seasonScope`). */
+  seasonScope?: SeasonScope;
 }
 
 /**
@@ -206,6 +209,7 @@ export async function executeActionsForItems(
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
         episodeScope: config.episodeScope,
+        seasonScope: config.seasonScope,
         targetTitle: title,
         mediaItem: item,
       }, reportStep, arrContext);

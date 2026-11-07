@@ -6,6 +6,7 @@ import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { unmonitorsWholeSeasons, type SeasonScope } from "@/lib/lifecycle/episode-scope";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -385,6 +386,12 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // As the scope gate above read it (`queryActionEpisodeScope`).
     const episodeScope = queryActionEpisodeScope(resolvedType, query.includeEpisodes, actionType, queryGroups);
     const isMemberScoped = actsOnMembers(actionType, episodeScope);
+    // On criteria that decide per season, an episode-scoped Unmonitor also
+    // unmonitors each season every episode of which the library holds is one
+    // it acts on — what the user selected in episode view, every matched
+    // episode of the show grouped by show (`SeasonScope`, episode-scope.ts).
+    const seasonScope: SeasonScope | undefined =
+      episodeScope && unmonitorsWholeSeasons(actionType, queryGroups) ? "selected" : undefined;
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
     // Group a show's episodes by the SAME series identity the query engine
@@ -621,6 +628,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
         addArrTags,
         removeArrTags,
         episodeScope,
+        seasonScope,
       },
       actionMembers,
       {

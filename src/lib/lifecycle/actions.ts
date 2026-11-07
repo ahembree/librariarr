@@ -9,6 +9,9 @@ import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, deletesArrRecord, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
 import { seriesTitleOf } from "@/lib/media/display-title";
+import { resolveSeriesKey } from "@/lib/media/series-key";
+import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
+import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
 
 /**
  * Extract a meaningful error message from Arr API failures, including the
@@ -82,6 +85,14 @@ export interface ActionRecord {
    * scope off (`ruleSetActsOnEpisodes`).
    */
   episodeScope?: boolean;
+  /**
+   * With `episodeScope`, whether an Unmonitor (Only, or & Delete Files) also
+   * unmonitors whole the seasons of its episodes, and how it judges one whole
+   * (`SeasonScope`, episode-scope.ts). Set only on criteria that decide per
+   * season (Season Number, Seasons Behind Latest, and what every episode of a
+   * show answers alike); absent, only the matched episodes are unmonitored.
+   */
+  seasonScope?: SeasonScope;
   /**
    * What the log lines call the item: `actionTargetTitle` of this action — a
    * series action by its show, or "<Show> SxxExx" on one episode, never by the
@@ -503,13 +514,31 @@ async function executeUnmonitorDeleteFilesRadarr(session: ActionArrSession, acti
 }
 
 async function executeUnmonitorDeleteFilesSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
-  // Episode-scoped (series scope off, the Query page's episode view or a
-  // query with a per-episode criterion): unmonitor the matched episodes — and
-  // every season all of whose episodes matched — never the series.
-  if (action.episodeScope) await unmonitorEpisodeScope(session, action);
-  else await session.update<SonarrSeries>("SONARR", { monitored: false });
-  const { client, record: series } = await seriesOf(session);
-  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
+  let deleted: MemberFileDeletion;
+  let client: SonarrClient;
+  if (action.episodeScope) {
+    // Episode-scoped (series scope off on per-episode criteria, the Query
+    // page's episode view or a query with a per-episode criterion): unmonitor
+    // the matched episodes — and, on criteria that decide per season, their
+    // whole seasons — never the series. With no member list there is nothing
+    // to act on: the delete would skip, so the unmonitor does too.
+    if (action.matchedMediaItemIds.length === 0) {
+      logger.warn(
+        "Lifecycle",
+        `Skipping ${action.actionType} for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to unmonitor or delete without them)`,
+      );
+      return { deletedMemberIds: [] };
+    }
+    const scope = await resolveEpisodeScope(session, action);
+    await unmonitorEpisodeScope(action, scope);
+    client = scope.client;
+    deleted = await deleteMatchedEpisodeFiles(client, scope.series.id, action.matchedMediaItemIds, scope.resolved);
+  } else {
+    await session.update<SonarrSeries>("SONARR", { monitored: false });
+    const resolvedSeries = await seriesOf(session);
+    client = resolvedSeries.client;
+    deleted = await deleteEpisodeFilesForAction(client, resolvedSeries.record.id, action);
+  }
   if (action.searchAfterAction) {
     // A series search skips unmonitored seasons and episodes, and this action
     // just unmonitored the series — search the episodes acted on by id.
@@ -656,8 +685,22 @@ function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined
 const formatSE = (season: number, episode: number) =>
   `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
 
+/** One of our episodes as `resolveSonarrEpisodes` reads it. */
+interface ResolvedMember {
+  id: string;
+  libraryId: string;
+  seriesKey: string | null;
+  parentTitle: string | null;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+  originallyAvailableAt: Date | null;
+  dedupKey: string | null;
+}
+
 /** Our episodes resolved to Sonarr's, by season/episode number checked against air date. */
 interface ResolvedSonarrEpisodes {
+  /** Our episodes found in the database. */
+  members: ResolvedMember[];
   sonarrEpisodes: SonarrEpisode[];
   /** Sonarr episode id → our member id. */
   memberBySonarrId: Map<number, string>;
@@ -672,9 +715,13 @@ async function resolveSonarrEpisodes(
   matchedMediaItemIds: string[],
 ): Promise<ResolvedSonarrEpisodes> {
   // Look up matched episodes from DB to get season/episode numbers
-  const episodes = await prisma.mediaItem.findMany({
+  const episodes: ResolvedMember[] = await prisma.mediaItem.findMany({
     where: { id: { in: matchedMediaItemIds } },
-    select: { id: true, seasonNumber: true, episodeNumber: true, originallyAvailableAt: true },
+    select: {
+      id: true, seasonNumber: true, episodeNumber: true, originallyAvailableAt: true,
+      // What a season-scoped Unmonitor reads (`wholeSeasonsOf`), so it needs no second lookup.
+      libraryId: true, seriesKey: true, parentTitle: true, dedupKey: true,
+    },
   });
 
   if (episodes.length !== matchedMediaItemIds.length) {
@@ -721,16 +768,18 @@ async function resolveSonarrEpisodes(
     memberBySonarrId.set(sonarrEp.id, e.id);
   }
 
-  return { sonarrEpisodes, memberBySonarrId, found: episodes.length, unresolved };
+  return { members: episodes, sonarrEpisodes, memberBySonarrId, found: episodes.length, unresolved };
 }
 
 async function deleteMatchedEpisodeFiles(
   client: SonarrClient,
   seriesId: number,
   matchedMediaItemIds: string[],
+  /** The members already resolved for this action (an Unmonitor & Delete Files that unmonitored them first). */
+  alreadyResolved?: ResolvedSonarrEpisodes,
 ): Promise<MemberFileDeletion> {
   const { sonarrEpisodes, memberBySonarrId, found, unresolved } =
-    await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds);
+    alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds));
 
   if (found > 0 && memberBySonarrId.size === 0) {
     // Recording this as done would report a delete that never happened.
@@ -790,10 +839,8 @@ interface EpisodeScope {
   series: SonarrSeries;
   /** The Sonarr episode ids of the members that resolved. */
   ids: number[];
-  /** Every episode of the series in Sonarr. */
-  sonarrEpisodes: SonarrEpisode[];
-  /** The member ids acted on (the action's own episode when it lists none). */
-  memberIds: string[];
+  /** The members as resolved — reused by a file delete that follows. */
+  resolved: ResolvedSonarrEpisodes;
 }
 
 /**
@@ -807,7 +854,8 @@ async function resolveEpisodeScope(session: ActionArrSession, action: ActionReco
   // An action stored before members were recorded is its own episode.
   const ids = action.matchedMediaItemIds.length > 0 ? action.matchedMediaItemIds : [action.mediaItem.id];
   const { client, record: series } = await seriesOf(session);
-  const { sonarrEpisodes, memberBySonarrId, found, unresolved } = await resolveSonarrEpisodes(client, series.id, ids);
+  const resolved = await resolveSonarrEpisodes(client, series.id, ids);
+  const { memberBySonarrId, found, unresolved } = resolved;
   if (found === 0) {
     throw new Error(`None of the ${ids.length} episode(s) to act on are in the library any more — nothing was changed`);
   }
@@ -825,90 +873,134 @@ async function resolveEpisodeScope(session: ActionArrSession, action: ActionReco
         (ids.length > found ? `, ${ids.length - found} are no longer in the library` : ""),
     );
   }
-  return { client, series, ids: [...memberBySonarrId.keys()], sonarrEpisodes, memberIds: ids };
+  return { client, series, ids: [...memberBySonarrId.keys()], resolved };
 }
 
 /**
- * The seasons every episode of which, as the library holds them, is one of
- * `memberIds`: the seasons an episode-scoped Unmonitor acts on whole. An
- * episode the media server does not hold (never downloaded, or deleted) has
- * no row and so no say; an excepted or unmatched episode keeps its season
- * monitored. A member's copy on another server counts as the member (same
- * `dedupKey`), so a match collapsed across servers covers both copies.
+ * The seasons of an episode-scoped Unmonitor's members that it unmonitors
+ * whole (`ActionRecord.seasonScope`, episode-scope.ts). The show is every
+ * library's episodes with a member's `seriesKey` (recomputed for a row that
+ * predates it); a season qualifies when:
+ *
+ *  - every member of it resolved in Sonarr — one that did not (null numbers,
+ *    an air date contradicting Sonarr's) means the two may number the show
+ *    differently, and Sonarr's season of that number is another one;
+ *  - `selected`: every episode of it any library holds is a member, or a copy
+ *    of one (same `dedupKey`);
+ *  - `matched`: no episode of it is protected by an exception, and each one in
+ *    a library the members do not come from (a server the rule set does not
+ *    cover) is a copy of a member or of an episode in theirs — the criteria
+ *    decide per season, so the rest of the members' libraries match too,
+ *    whatever an earlier action of the rule set already covered.
+ *
+ * An episode no library holds (never downloaded, or deleted) has no say.
  */
-export async function fullyMatchedSeasons(memberIds: string[]): Promise<Set<number>> {
-  const result = new Set<number>();
-  if (memberIds.length === 0) return result;
-  const members = await prisma.mediaItem.findMany({
-    where: { id: { in: memberIds }, type: "SERIES" },
-    select: { libraryId: true, seriesKey: true, parentTitle: true, seasonNumber: true, dedupKey: true },
-  });
-  const memberIdSet = new Set(memberIds);
-  const memberDedupKeys = new Set(members.map((m) => m.dedupKey).filter((k): k is string => !!k));
-  // The show in each library the members come from, and the seasons they touch.
-  const shows = new Map<string, { libraryId: string; seriesKey: string | null; parentTitle: string | null; seasons: Set<number> }>();
+async function wholeSeasonsOf(
+  members: readonly ResolvedMember[],
+  resolvedMemberIds: ReadonlySet<string>,
+  mode: SeasonScope,
+): Promise<Set<number>> {
+  // A member that predates `seriesKey` is keyed from its title and ids, as
+  // the listings key it (`resolveSeriesKey`).
+  const legacyIds = members.filter((m) => !m.seriesKey).map((m) => m.id);
+  const legacyExternalIds = legacyIds.length > 0
+    ? await prisma.mediaItemExternalId.findMany({
+        where: { mediaItemId: { in: legacyIds } },
+        select: { mediaItemId: true, source: true, externalId: true },
+      })
+    : [];
+  const keyOf = (m: ResolvedMember) =>
+    resolveSeriesKey({ ...m, externalIds: legacyExternalIds.filter((e) => e.mediaItemId === m.id) });
+
+  const showKeys = new Set<string>();
+  const seasons = new Set<number>();
+  const failed = new Set<number>();
   for (const m of members) {
     if (m.seasonNumber === null) continue;
-    const key = `${m.libraryId}\u0000${m.seriesKey ?? `title:${m.parentTitle ?? ""}`}`;
-    const show = shows.get(key) ?? { libraryId: m.libraryId, seriesKey: m.seriesKey, parentTitle: m.parentTitle, seasons: new Set<number>() };
-    show.seasons.add(m.seasonNumber);
-    shows.set(key, show);
+    seasons.add(m.seasonNumber);
+    const seriesKey = keyOf(m);
+    if (!resolvedMemberIds.has(m.id) || !seriesKey) failed.add(m.seasonNumber);
+    if (seriesKey) showKeys.add(seriesKey);
   }
-  const uncovered = new Set<number>();
-  const touched = new Set<number>();
-  for (const show of shows.values()) {
-    const siblings = await prisma.mediaItem.findMany({
-      where: {
-        libraryId: show.libraryId,
-        type: "SERIES",
-        seasonNumber: { in: [...show.seasons] },
-        ...(show.seriesKey ? { seriesKey: show.seriesKey } : { seriesKey: null, parentTitle: show.parentTitle }),
-      },
-      select: { id: true, seasonNumber: true, dedupKey: true },
-    });
+  const candidates = new Set([...seasons].filter((s) => !failed.has(s)));
+  if (candidates.size === 0) return candidates;
+
+  const rows = await prisma.mediaItem.findMany({
+    where: {
+      type: "SERIES",
+      seasonNumber: { in: [...candidates] },
+      // A row that predates the column is keyed from its title and ids below.
+      OR: [{ seriesKey: { in: [...showKeys] } }, { seriesKey: null }],
+    },
+    select: {
+      id: true, libraryId: true, seasonNumber: true, dedupKey: true, seriesKey: true, parentTitle: true,
+      externalIds: { select: { source: true, externalId: true } },
+    },
+  });
+  const siblings = rows.filter((row) => row.seasonNumber !== null && showKeys.has(resolveSeriesKey(row) ?? ""));
+
+  const memberIds = new Set(members.map((m) => m.id));
+  const memberDedupKeys = new Set(members.map((m) => m.dedupKey).filter((k): k is string => !!k));
+  const out = new Set<number>();
+  if (mode === "selected") {
     for (const ep of siblings) {
-      if (ep.seasonNumber === null) continue;
-      touched.add(ep.seasonNumber);
-      const covered = memberIdSet.has(ep.id) || (!!ep.dedupKey && memberDedupKeys.has(ep.dedupKey));
-      if (!covered) uncovered.add(ep.seasonNumber);
+      const covered = memberIds.has(ep.id) || (!!ep.dedupKey && memberDedupKeys.has(ep.dedupKey));
+      if (!covered) out.add(ep.seasonNumber!);
+    }
+  } else {
+    const owner = await prisma.library.findUnique({
+      where: { id: members[0].libraryId },
+      select: { mediaServer: { select: { userId: true } } },
+    });
+    if (!owner?.mediaServer) return new Set();
+    const excepted = await findExceptedItemIds(owner.mediaServer.userId, siblings.map((ep) => ep.id));
+    const memberLibraries = new Set(members.map((m) => m.libraryId));
+    const matchedKeys = new Set(memberDedupKeys);
+    for (const ep of siblings) {
+      if (memberLibraries.has(ep.libraryId) && ep.dedupKey && !excepted.has(ep.id)) matchedKeys.add(ep.dedupKey);
+    }
+    for (const ep of siblings) {
+      if (excepted.has(ep.id)) out.add(ep.seasonNumber!);
+      else if (!memberLibraries.has(ep.libraryId) && !memberIds.has(ep.id) && !(ep.dedupKey && matchedKeys.has(ep.dedupKey))) {
+        out.add(ep.seasonNumber!);
+      }
     }
   }
-  for (const season of touched) if (!uncovered.has(season)) result.add(season);
-  return result;
+  return new Set([...candidates].filter((s) => !out.has(s)));
 }
 
 /**
- * Unmonitor an episode-scoped action's episodes. A season every held episode
- * of which matched is unmonitored whole — the season itself and each of its
- * episodes in Sonarr, those the media server does not hold included — so
- * Sonarr does not go on grabbing the episodes missing from it. Every other
- * season keeps its flag, and only its matched episodes are unmonitored.
+ * Unmonitor an episode-scoped action's episodes. With a season scope
+ * (criteria that decide per season), each season `wholeSeasonsOf` passes is
+ * unmonitored whole — every episode of it in Sonarr, those the library does
+ * not hold included, and then the season itself (through the season pass, so
+ * no series validation can refuse it) — so Sonarr stops grabbing what is
+ * missing from it. Otherwise only the matched episodes are unmonitored, and
+ * every season keeps its flag.
  */
-async function unmonitorEpisodeScope(session: ActionArrSession, action: ActionRecord): Promise<void> {
-  const { client, series, ids, sonarrEpisodes, memberIds } = await resolveEpisodeScope(session, action);
-  const idSet = new Set(ids);
-  const matchedSeasons = new Set(sonarrEpisodes.filter((ep) => idSet.has(ep.id)).map((ep) => ep.seasonNumber));
-  const seasons = new Set([...(await fullyMatchedSeasons(memberIds))].filter((s) => matchedSeasons.has(s)));
-  if (seasons.size > 0 && series.seasons?.some((s) => seasons.has(s.seasonNumber) && s.monitored)) {
-    await session.update<SonarrSeries>("SONARR", {
-      seasons: series.seasons.map((s) => (seasons.has(s.seasonNumber) ? { ...s, monitored: false } : s)),
-    });
-  }
-  const episodeIds = new Set(idSet);
-  for (const ep of sonarrEpisodes) if (seasons.has(ep.seasonNumber)) episodeIds.add(ep.id);
-  if (seasons.size > 0) {
-    logger.info(
-      "Lifecycle",
-      `${action.actionType} on "${action.targetTitle}": unmonitoring season(s) ${[...seasons].sort((a, b) => a - b).join(", ")} ` +
-        `of Sonarr series "${series.title}" whole (${episodeIds.size - ids.length} episode(s) not in the library included)`,
-    );
-  }
+async function unmonitorEpisodeScope(action: ActionRecord, scope: EpisodeScope): Promise<void> {
+  const { client, series, ids, resolved } = scope;
+  const seasons = action.seasonScope
+    ? await wholeSeasonsOf(resolved.members, new Set(resolved.memberBySonarrId.values()), action.seasonScope)
+    : new Set<number>();
+  const episodeIds = new Set(ids);
+  for (const ep of resolved.sonarrEpisodes) if (seasons.has(ep.seasonNumber)) episodeIds.add(ep.id);
   await client.setEpisodesMonitored([...episodeIds], false);
+  if (seasons.size === 0) return;
+  const monitoredSeasons = (series.seasons ?? [])
+    .filter((s) => seasons.has(s.seasonNumber) && s.monitored)
+    .map((s) => s.seasonNumber);
+  if (monitoredSeasons.length > 0) await client.setSeasonsMonitored(series.id, monitoredSeasons, false);
+  logger.info(
+    "Lifecycle",
+    `${action.actionType} on "${action.targetTitle}": unmonitored season(s) ${[...seasons].sort((a, b) => a - b).join(", ")} ` +
+      `of Sonarr series "${series.title}" whole — ${episodeIds.size - ids.length} Sonarr episode(s) besides the ${ids.length} acted on`,
+  );
 }
 
 async function executeUnmonitorSonarr(session: ActionArrSession, action: ActionRecord) {
   if (!action.episodeScope) return executeUnmonitor(session, "SONARR");
-  await unmonitorEpisodeScope(session, action);
+  await unmonitorEpisodeScope(action, await resolveEpisodeScope(session, action));
 }
 
 async function executeSearchSonarr(session: ActionArrSession, action: ActionRecord) {
