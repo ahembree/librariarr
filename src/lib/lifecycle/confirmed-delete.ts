@@ -38,6 +38,16 @@ export function isUnansweredWrite(error: unknown): boolean {
   return error.status === null && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT");
 }
 
+/** Where a file delete has got to: after each chunk, and while it waits on the app. */
+export interface FileDeleteProgress {
+  app: string;
+  /** Files deleted so far. */
+  deleted: number;
+  total: number;
+  /** Whether it is waiting for the app to finish a chunk whose request timed out. */
+  waiting: boolean;
+}
+
 export interface ConfirmedDeleteOptions {
   /** The app, for log lines and errors: "Sonarr", "Lidarr", "Radarr". */
   app: string;
@@ -49,6 +59,8 @@ export interface ConfirmedDeleteOptions {
   /** The file ids the app still has, among those this delete may have touched. */
   stillPresent: () => Promise<ReadonlySet<number>>;
   chunkSize?: number;
+  /** Called before the first chunk, after each one, and when a chunk is waited on. */
+  onProgress?: (progress: FileDeleteProgress) => void;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -84,6 +96,8 @@ export async function deleteFilesConfirmed(opts: ConfirmedDeleteOptions): Promis
   const size = opts.chunkSize ?? FILE_DELETE_CHUNK;
   const total = opts.fileIds.length;
   let done = 0;
+  const report = (waiting: boolean) => opts.onProgress?.({ app: opts.app, deleted: done, total, waiting });
+  report(false);
   for (let i = 0; i < total; i += size) {
     const chunk = opts.fileIds.slice(i, i + size);
     try {
@@ -97,6 +111,7 @@ export async function deleteFilesConfirmed(opts: ConfirmedDeleteOptions): Promis
         "Lifecycle",
         `${opts.app} is still deleting ${chunk.length} ${opts.what}(s) after the request timed out — waiting for it to finish`,
       );
+      report(true);
       const left = await awaitRemoval(chunk, opts.stillPresent);
       if (left.length > 0) {
         throw new Error(
@@ -108,5 +123,6 @@ export async function deleteFilesConfirmed(opts: ConfirmedDeleteOptions): Promis
       }
     }
     done += chunk.length;
+    report(false);
   }
 }

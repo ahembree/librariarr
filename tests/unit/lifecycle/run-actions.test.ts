@@ -173,6 +173,25 @@ describe("executeActionsForItems", () => {
     });
     const SERIES_HISTORY = { ruleSetId: null, ruleSetName: "Query", ruleSetType: "SERIES" };
 
+    it("passes a step's share of the item through to the progress", async () => {
+      m.executeAction.mockImplementation(async (_action: unknown, onStep?: (label: string, fraction?: number) => void) => {
+        onStep?.("Delete Files Only (Sonarr) — 25 of 100 files deleted", 0.25);
+        return {};
+      });
+      const seen: Array<{ step: string; fraction?: number }> = [];
+
+      await executeActionsForItems(
+        "u1",
+        [episode(1)],
+        { ...CONFIG, actionType: "DELETE_FILES_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep1", ["ep1"]]]),
+        SERIES_HISTORY,
+        ({ current }) => { if (current) seen.push({ step: current.step, fraction: current.fraction }); },
+      );
+
+      expect(seen).toContainEqual({ step: "Delete Files Only (Sonarr) — 25 of 100 files deleted", fraction: 0.25 });
+    });
+
     it("names a whole-series action by the show in its progress, errors and failures", async () => {
       m.executeAction.mockRejectedValue(new Error("Series not found in Sonarr"));
       const steps: string[] = [];

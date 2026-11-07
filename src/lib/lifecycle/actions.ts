@@ -12,7 +12,10 @@ import { seriesTitleOf } from "@/lib/media/display-title";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
-import { deleteFilesConfirmed } from "@/lib/lifecycle/confirmed-delete";
+import { deleteFilesConfirmed, type FileDeleteProgress } from "@/lib/lifecycle/confirmed-delete";
+
+/** Where an action's file delete has got to (`executeAction`'s `onStep`). */
+type FileProgress = (progress: FileDeleteProgress) => void;
 
 /**
  * Extract a meaningful error message from Arr API failures, including the
@@ -363,6 +366,8 @@ class ActionArrSession {
   constructor(
     private readonly action: ActionRecord,
     readonly ctx: ArrExecutionContext,
+    /** Reports a file delete's progress to the caller's `onStep`, when it asked for steps. */
+    readonly fileProgress?: FileProgress,
   ) {}
 
   async resolve<C extends ArrClientBase, R extends ArrRecord>(
@@ -490,7 +495,7 @@ const seriesOf = (session: ActionArrSession) => session.resolve<SonarrClient, So
 const artistOf = (session: ActionArrSession) => session.resolve<LidarrClient, LidarrArtist>("LIDARR");
 
 /** The movie's file deleted, confirmed by reading the movie back when Radarr outlives the request. */
-async function deleteMovieFileConfirmed(client: RadarrClient, movie: RadarrMovie): Promise<void> {
+async function deleteMovieFileConfirmed(client: RadarrClient, movie: RadarrMovie, progress?: FileProgress): Promise<void> {
   const fileId = movie.movieFileId;
   if (!movie.hasFile || !fileId) return;
   await deleteFilesConfirmed({
@@ -502,6 +507,7 @@ async function deleteMovieFileConfirmed(client: RadarrClient, movie: RadarrMovie
       const current = await client.getMovieById(movie.id);
       return new Set(current.hasFile && current.movieFileId ? [current.movieFileId] : []);
     },
+    onProgress: progress,
   });
 }
 
@@ -522,7 +528,7 @@ async function executeUnmonitor(session: ActionArrSession, family: ArrFamily) {
 async function executeUnmonitorDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
   await session.update<RadarrMovie>("RADARR", { monitored: false });
   const { client, record: movie } = await movieOf(session);
-  await deleteMovieFileConfirmed(client, movie);
+  await deleteMovieFileConfirmed(client, movie, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -547,12 +553,12 @@ async function executeUnmonitorDeleteFilesSonarr(session: ActionArrSession, acti
     const scope = await resolveEpisodeScope(session, action);
     await unmonitorEpisodeScope(action, scope);
     client = scope.client;
-    deleted = await deleteMatchedEpisodeFiles(client, scope.series.id, action.matchedMediaItemIds, scope.resolved);
+    deleted = await deleteMatchedEpisodeFiles(client, scope.series.id, action.matchedMediaItemIds, scope.resolved, session.fileProgress);
   } else {
     await session.update<SonarrSeries>("SONARR", { monitored: false });
     const resolvedSeries = await seriesOf(session);
     client = resolvedSeries.client;
-    deleted = await deleteEpisodeFilesForAction(client, resolvedSeries.record.id, action);
+    deleted = await deleteEpisodeFilesForAction(client, resolvedSeries.record.id, action, session.fileProgress);
   }
   if (action.searchAfterAction) {
     // A series search skips unmonitored seasons and episodes, and this action
@@ -624,7 +630,7 @@ async function refuseSplitArtistDelete(
 async function executeUnmonitorDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
   await session.update<LidarrArtist>("LIDARR", { monitored: false });
   const { client, record: artist } = await artistOf(session);
-  const deleted = await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -659,9 +665,10 @@ async function deleteEpisodeFilesForAction(
   client: SonarrClient,
   seriesId: number,
   action: ActionRecord,
+  progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
   if (action.matchedMediaItemIds.length > 0) {
-    return deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds);
+    return deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds, undefined, progress);
   }
   // Member-scoped action with no targeted episodes — skip rather than delete
   // the entire series' files. Conservative by design (media deletion pipeline).
@@ -818,6 +825,7 @@ async function deleteMatchedEpisodeFiles(
   matchedMediaItemIds: string[],
   /** The members already resolved for this action (an Unmonitor & Delete Files that unmonitored them first). */
   alreadyResolved?: ResolvedSonarrEpisodes,
+  progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
   const { sonarrEpisodes, memberBySonarrId, found, unresolved } =
     alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds));
@@ -874,6 +882,7 @@ async function deleteMatchedEpisodeFiles(
       remove: (ids) => client.deleteEpisodeFiles(ids),
       stillPresent: async () =>
         new Set((await client.getEpisodes(seriesId)).map((ep) => ep.episodeFileId).filter((id) => id > 0)),
+      onProgress: progress,
     });
   } else {
     logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
@@ -1099,6 +1108,7 @@ async function deleteTrackFilesForAction(
   client: LidarrClient,
   artist: { id: number; artistName: string },
   action: ActionRecord,
+  progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
   const memberIds =
     action.matchedMediaItemIds.length > 0
@@ -1218,6 +1228,7 @@ async function deleteTrackFilesForAction(
     remove: (ids) => client.deleteTrackFiles(ids),
     stillPresent: async () =>
       new Set((await client.getTracks(artist.id)).filter((t) => t.hasFile && t.trackFileId > 0).map((t) => t.trackFileId)),
+    onProgress: progress,
   });
   return { deletedMemberIds, arrItemIds };
 }
@@ -1229,7 +1240,7 @@ async function executeMonitorDeleteFilesRadarr(session: ActionArrSession, action
     await session.update<RadarrMovie>("RADARR", { monitored: true });
   }
   const { client, record: movie } = await movieOf(session);
-  await deleteMovieFileConfirmed(client, movie);
+  await deleteMovieFileConfirmed(client, movie, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -1240,7 +1251,7 @@ async function executeMonitorDeleteFilesSonarr(session: ActionArrSession, action
     await session.update<SonarrSeries>("SONARR", { monitored: true });
   }
   const { client, record: series } = await seriesOf(session);
-  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
+  const deleted = await deleteEpisodeFilesForAction(client, series.id, action, session.fileProgress);
   // Monitoring the series alone leaves the episodes as they were — and Sonarr's
   // "Unmonitor Deleted Episodes" setting unmonitors the ones just deleted — so
   // monitor the episodes acted on, after the delete.
@@ -1256,7 +1267,7 @@ async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action
     await session.update<LidarrArtist>("LIDARR", { monitored: true });
   }
   const { client, record: artist } = await artistOf(session);
-  const deleted = await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -1267,7 +1278,7 @@ async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action
 
 async function executeDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
   const { client, record: movie } = await movieOf(session);
-  await deleteMovieFileConfirmed(client, movie);
+  await deleteMovieFileConfirmed(client, movie, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -1275,7 +1286,7 @@ async function executeDeleteFilesRadarr(session: ActionArrSession, action: Actio
 
 async function executeDeleteFilesSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
   const { client, record: series } = await seriesOf(session);
-  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
+  const deleted = await deleteEpisodeFilesForAction(client, series.id, action, session.fileProgress);
   if (action.searchAfterAction) {
     // By id: a series search skips unmonitored seasons and episodes, and
     // Sonarr may have unmonitored the episodes it just deleted.
@@ -1286,7 +1297,7 @@ async function executeDeleteFilesSonarr(session: ActionArrSession, action: Actio
 
 async function executeDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
   const { client, record: artist } = await artistOf(session);
-  const deleted = await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action, session.fileProgress);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -1329,7 +1340,7 @@ export async function executeAction(
    * item (tags → main action). Lets a streaming caller surface the multi-step
    * nature of an action (e.g. "Updating tags" then "Change Quality Profile").
    */
-  onStep?: (label: string) => void,
+  onStep?: (label: string, fraction?: number) => void,
   /**
    * Shared by every action of one run (`ArrExecutionContext`), so the run
    * reads each instance's family and tags once. Omitted, the call reads for
@@ -1338,7 +1349,20 @@ export async function executeAction(
   ctx: ArrExecutionContext = new ArrExecutionContext(),
 ): Promise<ActionOutcome> {
   let outcome: ActionOutcome = {};
-  const session = new ActionArrSession(action, ctx);
+  const willSearchAfter = action.searchAfterAction && supportsSearchAfter(action.actionType);
+  const mainStep = formatActionLabel(action.actionType) + (willSearchAfter ? " → search" : "");
+  // A file delete reports how many files are gone (and the share of this
+  // item done), so a show with hundreds of files does not sit at one step.
+  const fileProgress: FileProgress | undefined = onStep
+    ? ({ app, deleted, total, waiting }) =>
+        onStep(
+          waiting
+            ? `${mainStep} — waiting for ${app} to finish deleting (${deleted} of ${total} files deleted)`
+            : `${mainStep} — ${deleted} of ${total} files deleted`,
+          total > 0 ? deleted / total : undefined,
+        )
+    : undefined;
+  const session = new ActionArrSession(action, ctx, fileProgress);
   logger.info("Lifecycle", `Starting ${action.actionType} for "${action.targetTitle}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
@@ -1354,10 +1378,7 @@ export async function executeAction(
   // Report the main step. DELETE_FILES / quality-profile actions also trigger a
   // follow-up search inside their executor when searchAfterAction is set, so
   // note that here rather than instrumenting every executor.
-  if (action.actionType !== "DO_NOTHING") {
-    const willSearchAfter = action.searchAfterAction && supportsSearchAfter(action.actionType);
-    onStep?.(formatActionLabel(action.actionType) + (willSearchAfter ? " → search" : ""));
-  }
+  if (action.actionType !== "DO_NOTHING") onStep?.(mainStep);
 
   switch (action.actionType) {
     case "DO_NOTHING":

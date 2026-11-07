@@ -341,6 +341,34 @@ describe("POST /api/query/actions", () => {
     expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
+  it("moves the execute progress within an item as its file delete reports files gone", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "A" });
+    const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "B" });
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(queryResult([
+      { id: m1.id, type: "MOVIE", title: "A", parentTitle: null },
+      { id: m2.id, type: "MOVIE", title: "B", parentTitle: null },
+    ]));
+    mockedExecuteAction.mockImplementation(async (_action, onStep) => {
+      onStep?.("Delete Files Only (Radarr) — 0 of 1 files deleted", 0);
+      onStep?.("Delete Files Only (Radarr) — 1 of 2 files deleted", 0.5);
+      return {};
+    });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [m1.id, m2.id], actionType: "DELETE_FILES_RADARR", arrInstanceId: radarr.id },
+    });
+    const { events } = await expectStreamResult<{ executed: number }>(response);
+    const execute = events.filter((e) => e.type === "phase" && e.key === "execute");
+    // Half of the first of two items is a quarter of the run; half of the second, three quarters.
+    expect(execute).toContainEqual(expect.objectContaining({ fraction: 0.25, detail: expect.stringContaining("1 of 2 files deleted") }));
+    expect(execute).toContainEqual(expect.objectContaining({ fraction: 0.75 }));
+  });
+
   it("streams phase progress events with determinate per-item execute progress", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

@@ -688,12 +688,24 @@ describe("a file delete the app outlives (recycle bin on another mount)", () => 
     mockSonarr.deleteEpisodeFiles.mockRejectedValueOnce(timedOut("Sonarr", "/api/v3/episodefile/bulk"));
     mockSonarr.getEpisodes.mockResolvedValueOnce(sonarrEpisodes.map((ep, i) => (i < 25 ? { ...ep, episodeFileId: 0 } : ep)));
 
-    const run = executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: episodes.map((e) => e.id) }));
+    const onStep = vi.fn();
+    const run = executeAction(
+      showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: episodes.map((e) => e.id) }),
+      onStep,
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     const outcome = await run;
 
     expect(mockSonarr.deleteEpisodeFiles.mock.calls.map(([ids]) => ids.length)).toEqual([25, 5]);
     expect(outcome.deletedMemberIds).toHaveLength(30);
+    // The progress bar moves with the files, and says when it waits on Sonarr.
+    expect(onStep.mock.calls).toEqual([
+      ["Delete Files Only (Sonarr)"],
+      ["Delete Files Only (Sonarr) — 0 of 30 files deleted", 0],
+      ["Delete Files Only (Sonarr) — waiting for Sonarr to finish deleting (0 of 30 files deleted)", 0],
+      ["Delete Files Only (Sonarr) — 25 of 30 files deleted", 25 / 30],
+      ["Delete Files Only (Sonarr) — 30 of 30 files deleted", 1],
+    ]);
   });
 
   it("Radarr: confirms a movie file delete that timed out by reading the movie back", async () => {

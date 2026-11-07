@@ -102,7 +102,12 @@ interface ActionRunProgress {
    * sub-step within it, present only while an item is mid-flight. Absent on the
    * boundary updates fired before the first item and after each completes.
    */
-  current?: { title: string; step: string };
+  current?: {
+    title: string;
+    step: string;
+    /** The share of this item done (a file delete's files gone), when the step knows it. */
+    fraction?: number;
+  };
 }
 
 /**
@@ -189,7 +194,7 @@ export async function executeActionsForItems(
     const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
-      ? (step: string) => onProgress({ done: processed, total, current: { title, step } })
+      ? (step: string, fraction?: number) => onProgress({ done: processed, total, current: { title, step, fraction } })
       : undefined;
     reportStep?.("Starting");
     try {

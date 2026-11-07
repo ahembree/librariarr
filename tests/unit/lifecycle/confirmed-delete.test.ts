@@ -96,6 +96,23 @@ describe("deleteFilesConfirmed", () => {
     await failed;
   });
 
+  it("reports how many files are gone after each chunk, and when it waits on the app", async () => {
+    present = new Set();
+    const remove = vi.fn(async (chunk: number[]) => {
+      if (chunk[0] === 3) throw sonarrError("ECONNABORTED");
+    });
+    const onProgress = vi.fn();
+    const done = deleteFilesConfirmed({
+      app: "Sonarr", what: "episode file", fileIds: ids(5), remove, stillPresent, chunkSize: 2, onProgress,
+    });
+    await vi.advanceTimersByTimeAsync(DELETE_CONFIRM_INTERVAL_MS);
+    await done;
+    expect(onProgress.mock.calls.map(([p]) => [p.deleted, p.waiting])).toEqual([
+      [0, false], [2, false], [2, true], [4, false], [5, false],
+    ]);
+    expect(onProgress).toHaveBeenCalledWith({ app: "Sonarr", deleted: 4, total: 5, waiting: false });
+  });
+
   it("rethrows any other failure as it is", async () => {
     const refused = sonarrError("ERR_BAD_RESPONSE", 500);
     const remove = vi.fn(async () => {

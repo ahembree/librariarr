@@ -641,7 +641,8 @@ export const POST = withSession(async (session, request: NextRequest) => {
         emit({
           type: "phase",
           key: "execute",
-          fraction: total > 0 ? done / total : 1,
+          // Within an item, a file delete reports the share of its files gone.
+          fraction: total > 0 ? (done + Math.min(1, current?.fraction ?? 0)) / total : 1,
           // Per-item count plus the item + sub-step currently in flight.
           // `current` is only reported pre-increment, so done < total here.
           detail: current
