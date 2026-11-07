@@ -392,7 +392,9 @@ export const API_OPERATIONS: readonly Operation[] = [
       `them with an action on the whole show or artist with the scope off (409: edit the rule set), or when a limit would be ` +
       `exceeded. A call naming an item that ` +
       `another execution of the same rule set is acting on right now is refused (409) rather than repeating the deletion; ` +
-      `calls naming different items run side by side.`,
+      `calls naming different items run side by side. The answer lists \`failures\` (each failed item's \`title\` and \`error\`) ` +
+      `and \`notActedOn\` (each episode or track an action that ran left alone, with its \`title\` and \`reason\`; at most 200, ` +
+      `\`notActedOnCount\` counts them all).`,
     body: {
       description: "",
       required: true,

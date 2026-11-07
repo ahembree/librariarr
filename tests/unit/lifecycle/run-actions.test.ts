@@ -127,6 +127,23 @@ describe("executeActionsForItems", () => {
     expect(result).toMatchObject({ executed: 2, failed: 1, notAttempted: 0 });
   });
 
+  it("collects the members each action left alone, listing at most the limit and counting them all", async () => {
+    const { NOT_ACTED_ON_LIMIT } = await import("@/lib/lifecycle/action-report");
+    const many = Array.from({ length: NOT_ACTED_ON_LIMIT + 5 }, (_, i) => ({ title: `E${i}`, reason: "Sonarr has no such episode" }));
+    m.executeAction
+      .mockResolvedValueOnce({ notActedOn: [{ title: "Show S01E01", reason: "file shared" }] })
+      .mockResolvedValueOnce({ notActedOn: many })
+      .mockResolvedValueOnce({});
+
+    const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
+
+    expect(result.executed).toBe(3);
+    expect(result.failed).toBe(0);
+    expect(result.notActedOnCount).toBe(NOT_ACTED_ON_LIMIT + 6);
+    expect(result.notActedOn).toHaveLength(NOT_ACTED_ON_LIMIT);
+    expect(result.notActedOn[0]).toEqual({ title: "Show S01E01", reason: "file shared" });
+  });
+
   it("keeps going after an item-specific failure", async () => {
     m.executeAction
       .mockRejectedValueOnce(radarrReadError(404))

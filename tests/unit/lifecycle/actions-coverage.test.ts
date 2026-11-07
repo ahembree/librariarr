@@ -775,10 +775,10 @@ describe("Sonarr member-scoped file deletes", () => {
   it("matches an episode whose air dates disagree when both sources give it the same real title", async () => {
     // A week apart (a pre-emption), same episode: the title settles it.
     mockPrisma.mediaItem.findMany.mockResolvedValue([
-      { id: "e10", title: "Going Down With the Ship", seasonNumber: 15, episodeNumber: 10, originallyAvailableAt: new Date("2007-11-29T00:00:00Z") },
-      { id: "e11", title: "The Unhappy Tribe", seasonNumber: 15, episodeNumber: 11, originallyAvailableAt: new Date("2007-12-06T00:00:00Z") },
+      { id: "e10", title: "Going Down With the Ship", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 10, originallyAvailableAt: new Date("2007-11-29T00:00:00Z") },
+      { id: "e11", title: "The Unhappy Tribe", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 11, originallyAvailableAt: new Date("2007-12-06T00:00:00Z") },
       // A placeholder title proves nothing.
-      { id: "e12", title: "Episode 12", seasonNumber: 15, episodeNumber: 12, originallyAvailableAt: new Date("2007-12-13T00:00:00Z") },
+      { id: "e12", title: "Episode 12", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 12, originallyAvailableAt: new Date("2007-12-13T00:00:00Z") },
     ]);
     mockSonarr.getEpisodes.mockResolvedValue([
       { id: 1510, seasonNumber: 15, episodeNumber: 10, episodeFileId: 10, airDate: "2007-11-22", title: "Going Down with the Ship!" },
@@ -793,6 +793,37 @@ describe("Sonarr member-scoped file deletes", () => {
     expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Matching S15E10 of Sonarr series 2 by its title "Going Down With the Ship"'));
     expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Skipping S15E11 of Sonarr series 2: the media server\'s air date (2007-12-06) does not match Sonarr\'s (2007-11-29), and the titles ("The Unhappy Tribe" / "Another Episode Entirely")'));
     expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("Skipping S15E12"));
+    // The action ran; the two it left alone are reported with their reasons.
+    expect(outcome.notActedOn).toEqual([
+      {
+        title: "Survivor S15E11",
+        reason: expect.stringMatching(/^The media server and Sonarr may number this show differently: the air dates differ \(2007-12-06 \/ 2007-11-29\) and the titles do not match \("The Unhappy Tribe" \/ "Another Episode Entirely"\)$/),
+      },
+      { title: "Survivor S15E12", reason: expect.stringContaining("may number this show differently") },
+    ]);
+  });
+
+  it("reports the episodes it left alone: gone from the library, unnumbered, missing in Sonarr, or sharing a file", async () => {
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "a", title: "A", parentTitle: "Severance", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      { id: "b", title: "B", parentTitle: "Severance", seasonNumber: null, episodeNumber: null, originallyAvailableAt: null },
+      { id: "c", title: "C", parentTitle: "Severance", seasonNumber: 9, episodeNumber: 9, originallyAvailableAt: null },
+    ]);
+    // S01E01 shares its file with S01E02, which did not match.
+    mockSonarr.getEpisodes.mockResolvedValue([
+      { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 10 },
+    ]);
+
+    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["a", "b", "c", "gone"] }));
+
+    expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
+    expect(outcome.notActedOn).toEqual([
+      { title: "1 episode", reason: "No longer in the library (removed since the action was scheduled)" },
+      { title: "Severance — B", reason: "The media server gives it no season or episode number" },
+      { title: "Severance S09E09", reason: "Sonarr has no S09E09 for this series" },
+      { title: "Severance S01E01", reason: "Its file also holds S01E02, which did not match — the file was kept" },
+    ]);
   });
 
   it("deletes nothing (without throwing) when every matched episode is file-less", async () => {

@@ -43,6 +43,15 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
 import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
 import { WholeSeasonsChip } from "@/components/whole-seasons-chip";
+import { QueryProgress, EMPTY_PROGRESS, applyProgressUpdate, type ProgressState } from "@/components/query-progress";
+import {
+  addActionResult,
+  emptyActionResult,
+  toastActionResult,
+  useActionResultDialog,
+} from "@/components/action-result-dialog";
+import { consumeProgressStream } from "@/lib/progress/client";
+import type { ActionFailure, NotActedOn } from "@/lib/lifecycle/action-report";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
@@ -580,6 +589,40 @@ const ruleSetOfGroup = (g: RuleSetGroup) => g.ruleSet;
 // card above it re-read on both, so the two halves of this page never disagree.
 const PENDING_EVENTS = ["lifecycle:action-executed", "lifecycle:detection-completed"] as const;
 
+/** What an Execute answers (`POST /api/lifecycle/actions/execute`). */
+interface ExecuteAnswer {
+  executed: number;
+  failed: number;
+  errors?: string[];
+  failures?: ActionFailure[];
+  notActedOn?: NotActedOn[];
+  notActedOnCount?: number;
+  /** Why the run stopped before the rest (the rule set changed while it ran). */
+  stopped?: string;
+}
+
+/** A running Execute's progress bars on its rule set's card: Execute All's, then each row's. */
+function ExecuteProgressBanner({ runs }: { runs: Array<{ key: string; label: string; state: ProgressState }> }) {
+  if (runs.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {runs.map((run) => (
+        <div key={run.key} className="space-y-1">
+          <p className="truncate text-xs text-muted-foreground">{run.label}</p>
+          {run.state.phases.length > 0 ? (
+            <QueryProgress state={run.state} />
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-foreground/90">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
+              Starting…
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** The execute route's announcement of the run this page asked for. */
 const isOwnExecute = (result: { executed?: unknown; failed?: unknown }) => (data: Record<string, unknown>) =>
   data.manual === true && data.executed === result.executed && data.failed === result.failed;
@@ -605,6 +648,12 @@ export default function PendingActionsPage() {
   const [executingRules, executingRuleActions] = useSetState<string>();
   const [executingItems, executingItemActions] = useSetState<string>();
   const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
+  // Each running Execute's progress, by rule set id (Execute All) or
+  // `ruleSetId:mediaItemId` (a row's), shown on its rule set's card.
+  const [executeProgress, setExecuteProgress] = useState<Record<string, { label: string; state: ProgressState }>>({});
+  // Each failed item and each episode or track left alone, opened from the
+  // completion toast.
+  const { showDetails: showActionResult, dialog: actionResultDialog } = useActionResultDialog();
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
   const detailPanel = useMediaDetailPanel();
@@ -643,6 +692,8 @@ export default function PendingActionsPage() {
   }, []);
 
   useEffect(() => {
+    // Fetch-on-mount: the loading state it sets is the effect's purpose.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDeletionStats();
   }, [fetchDeletionStats]);
 
@@ -674,7 +725,7 @@ export default function PendingActionsPage() {
       }
     }
     return map;
-  }, [deletionStats?.byRuleSet]);
+  }, [deletionStats]);
 
   // Only the latest request may write. The Pending listing is the slow one
   // (it estimates rows for matches without an action), so switching to
@@ -704,6 +755,9 @@ export default function PendingActionsPage() {
   const pageRefetch = useRealtimeRefetch(PENDING_EVENTS, refreshPage);
 
   useEffect(() => {
+    // Fetch-on-mount (and on a status tab change): the loading state it sets
+    // is the effect's purpose.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchActions();
   }, [fetchActions]);
 
@@ -763,6 +817,52 @@ export default function PendingActionsPage() {
   // they answer. The route announces a run that executed or failed anything
   // with `lifecycle:action-executed`, whose re-read is the one kept when it
   // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
+  /**
+   * One Execute (Execute All, or a row's), its progress streamed into
+   * `executeProgress[progressKey]` while it runs. Refusals answer as an error
+   * (the route's 4xx before the run, or the stream's error during it).
+   */
+  const runExecute = async (
+    progressKey: string,
+    label: string,
+    body: { ruleSetId: string; mediaItemIds?: string[] },
+  ): Promise<{ ok: true; data: ExecuteAnswer } | { ok: false; error: string }> => {
+    setExecuteProgress((prev) => ({ ...prev, [progressKey]: { label, state: EMPTY_PROGRESS } }));
+    try {
+      const response = await fetch("/api/lifecycle/actions/execute?stream=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await consumeProgressStream<ExecuteAnswer>(response, (update) =>
+        setExecuteProgress((prev) =>
+          prev[progressKey]
+            ? { ...prev, [progressKey]: { label, state: applyProgressUpdate(prev[progressKey].state, update) } }
+            : prev,
+        ),
+      );
+      return { ok: true, data };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      setExecuteProgress((prev) => {
+        const next = { ...prev };
+        delete next[progressKey];
+        return next;
+      });
+    }
+  };
+
+  /** The members of a rule set's actions, as the results dialog names them. */
+  const memberNounOf = (ruleSetId: string) => {
+    const type = groups.find((g) => g.ruleSet.id === ruleSetId)?.ruleSet.type;
+    return type === "SERIES" ? "episode" : type === "MUSIC" ? "track" : "item";
+  };
+
+  // Execute All and a row's Execute re-read the listing and the stats when
+  // they answer. The route announces a run that executed or failed anything
+  // with `lifecycle:action-executed`, whose re-read is the one kept when it
+  // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
   const executeAll = async (ruleSetId: string) => {
     setConfirmExecuteRuleSetId(null);
     // A held rule set's actions are skipped, and the hold is the rule set's:
@@ -783,42 +883,34 @@ export default function PendingActionsPage() {
     });
     const ticket = pageRefetch.begin();
     try {
-      const response = await fetch("/api/lifecycle/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId }),
-      });
-      const data = await response.json();
-      if (response.ok) {
+      const answer = await runExecute(ruleSetId, "Execute All", { ruleSetId });
+      if (answer.ok) {
+        const data = answer.data;
         setExecuteResults((prev) => ({
           ...prev,
           [ruleSetId]: { executed: data.executed, failed: data.failed, errors: data.errors || [] },
         }));
-        if (data.failed > 0 && data.errors?.length > 0) {
-          toast.error(`${data.failed} action${data.failed !== 1 ? "s" : ""} failed`, {
-            description: data.errors.join("\n"),
-          });
-        } else if (data.executed > 0) {
-          toast.success(`${data.executed} action${data.executed !== 1 ? "s" : ""} executed`);
+        // Green only when nothing failed and nothing was left alone; the toast
+        // otherwise opens every reason (View Details).
+        if (data.executed > 0 || data.failed > 0) {
+          toastActionResult(
+            { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), data), note: data.stopped },
+            showActionResult,
+          );
         }
         // The rule set changed while the actions ran: the rest were left.
         if (data.stopped) toast.warning("Stopped before the rest", { description: data.stopped });
       } else {
         setExecuteResults((prev) => ({
           ...prev,
-          [ruleSetId]: { executed: 0, failed: 0, errors: [data.error || "Unknown error"] },
+          [ruleSetId]: { executed: 0, failed: 0, errors: [answer.error] },
         }));
-        toast.error(data.error || "Failed to execute actions");
+        toast.error(answer.error || "Failed to execute actions");
       }
       await ticket.settle({
-        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
-        isOwn: isOwnExecute(data),
+        expectEvent: answer.ok && (answer.data.executed > 0 || answer.data.failed > 0),
+        isOwn: isOwnExecute(answer.ok ? answer.data : {}),
       });
-    } catch (error) {
-      setExecuteResults((prev) => ({
-        ...prev,
-        [ruleSetId]: { executed: 0, failed: 0, errors: [String(error)] },
-      }));
     } finally {
       ticket.cancel();
       executingRuleActions.remove(ruleSetId);
@@ -829,29 +921,23 @@ export default function PendingActionsPage() {
     const key = `${ruleSetId}:${mediaItemId}`;
     executingItemActions.add(key);
     const ticket = pageRefetch.begin();
+    const title =
+      groups.find((g) => g.ruleSet.id === ruleSetId)?.items.find((i) => i.mediaItem.id === mediaItemId)?.mediaItem.title ??
+      "Execute";
     try {
-      const response = await fetch("/api/lifecycle/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId, mediaItemIds: [mediaItemId] }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        toast.error(data.error || "Failed to execute action");
-      } else if (data.failed > 0 && data.errors?.length > 0) {
-        toast.error("Action failed", {
-          description: data.errors.join("\n"),
-        });
+      const answer = await runExecute(key, title, { ruleSetId, mediaItemIds: [mediaItemId] });
+      if (!answer.ok) {
+        toast.error(answer.error || "Failed to execute action");
       } else {
-        toast.success("Action executed");
+        toastActionResult(
+          { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), answer.data), note: answer.data.stopped },
+          showActionResult,
+        );
       }
       await ticket.settle({
-        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
-        isOwn: isOwnExecute(data),
+        expectEvent: answer.ok && (answer.data.executed > 0 || answer.data.failed > 0),
+        isOwn: isOwnExecute(answer.ok ? answer.data : {}),
       });
-    } catch (error) {
-      console.error("Failed to execute item:", error);
-      toast.error("Failed to execute action");
     } finally {
       ticket.cancel();
       executingItemActions.remove(key);
@@ -1070,6 +1156,13 @@ export default function PendingActionsPage() {
                 <RuleSetGroupCard
                   key={group.ruleSet.id}
                   ruleSet={group.ruleSet}
+                  banner={
+                    <ExecuteProgressBanner
+                      runs={Object.entries(executeProgress)
+                        .filter(([key]) => key === group.ruleSet.id || key.startsWith(`${group.ruleSet.id}:`))
+                        .map(([key, run]) => ({ key, ...run }))}
+                    />
+                  }
                   countLabel={`${group.count} item${group.count !== 1 ? "s" : ""}`}
                   expanded={isExpanded}
                   onToggle={() => toggleExpand(group.ruleSet.id)}
@@ -1152,6 +1245,7 @@ export default function PendingActionsPage() {
         )}
 
         {/* Execute All confirmation dialog */}
+        {actionResultDialog}
         <ConfirmDialog
           open={!!confirmExecuteRuleSetId}
           onOpenChange={(open) => { if (!open) setConfirmExecuteRuleSetId(null); }}

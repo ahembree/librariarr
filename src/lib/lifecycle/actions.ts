@@ -13,6 +13,8 @@ import { resolveSeriesKey } from "@/lib/media/series-key";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
 import { deleteFilesConfirmed, type FileDeleteProgress } from "@/lib/lifecycle/confirmed-delete";
+import type { NotActedOn } from "@/lib/lifecycle/action-report";
+import { formatEpisodeTitle } from "@/lib/media/display-title";
 
 /** Where an action's file delete has got to (`executeAction`'s `onStep`). */
 type FileProgress = (progress: FileDeleteProgress) => void;
@@ -68,6 +70,13 @@ export function describeActionError(error: unknown): string {
  */
 export interface ActionOutcome {
   deletedMemberIds?: string[];
+  /**
+   * The episodes or tracks of the action it left alone, and why (an episode
+   * Sonarr numbers differently, a file shared with an unmatched episode, a
+   * track Lidarr does not list). The action itself succeeded; the manual run
+   * lists these beside its failures (`ActionResultDialog`).
+   */
+  notActedOn?: NotActedOn[];
 }
 
 // Type for the action record shape used by executors
@@ -565,7 +574,7 @@ async function executeUnmonitorDeleteFilesSonarr(session: ActionArrSession, acti
     // just unmonitored the series — search the episodes acted on by id.
     await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 async function executeDeleteLidarr(session: ActionArrSession, action: ActionRecord) {
@@ -634,7 +643,7 @@ async function executeUnmonitorDeleteFilesLidarr(session: ActionArrSession, acti
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 // --- Episode-level file deletion helper ---
@@ -657,9 +666,11 @@ interface MemberFileDeletion {
   deletedMemberIds: string[];
   /** The Arr-side ids of the same members, for a follow-up monitor/search. */
   arrItemIds: number[];
+  /** Matched members whose files were left, and why. */
+  notActedOn: NotActedOn[];
 }
 
-const NOTHING_DELETED: MemberFileDeletion = { deletedMemberIds: [], arrItemIds: [] };
+const NOTHING_DELETED: MemberFileDeletion = { deletedMemberIds: [], arrItemIds: [], notActedOn: [] };
 
 async function deleteEpisodeFilesForAction(
   client: SonarrClient,
@@ -748,6 +759,8 @@ interface ResolvedSonarrEpisodes {
   /** How many of our episodes were found in the database. */
   found: number;
   unresolved: number;
+  /** The members it could not resolve (and those gone from the library), and why. */
+  skipped: NotActedOn[];
 }
 
 async function resolveSonarrEpisodes(
@@ -783,6 +796,11 @@ async function resolveSonarrEpisodes(
   // either match nothing or match unrelated Sonarr episodes — skip and warn
   // rather than guess.
   const memberBySonarrId = new Map<number, string>();
+  const skipped: NotActedOn[] = [];
+  if (episodes.length < matchedMediaItemIds.length) {
+    const gone = matchedMediaItemIds.length - episodes.length;
+    skipped.push({ title: `${gone} episode${gone === 1 ? "" : "s"}`, reason: "No longer in the library (removed since the action was scheduled)" });
+  }
   let unresolved = 0;
   for (const e of episodes) {
     if (e.seasonNumber === null || e.episodeNumber === null) {
@@ -790,11 +808,13 @@ async function resolveSonarrEpisodes(
         "Lifecycle",
         `Skipping episode with null seasonNumber or episodeNumber in matched set for Sonarr series ${seriesId}`
       );
+      skipped.push({ title: formatEpisodeTitle(e), reason: "The media server gives it no season or episode number" });
       unresolved++;
       continue;
     }
     const sonarrEp = sonarrBySE.get(`${e.seasonNumber}:${e.episodeNumber}`);
     if (!sonarrEp) {
+      skipped.push({ title: formatEpisodeTitle(e), reason: `Sonarr has no ${formatSE(e.seasonNumber, e.episodeNumber)} for this series` });
       unresolved++;
       continue;
     }
@@ -806,6 +826,13 @@ async function resolveSonarrEpisodes(
           "Lifecycle",
           `Skipping ${se} of Sonarr series ${seriesId}: ${dates}, and the titles ("${e.title}" / "${sonarrEp.title ?? ""}") do not confirm it is the same episode — the two may number the show differently`,
         );
+        skipped.push({
+          title: formatEpisodeTitle(e),
+          reason:
+            `The media server and Sonarr may number this show differently: the air dates differ ` +
+            `(${e.originallyAvailableAt!.toISOString().slice(0, 10)} / ${sonarrEp.airDate}) and the titles do not match ` +
+            `("${e.title}" / "${sonarrEp.title ?? ""}")`,
+        });
         unresolved++;
         continue;
       }
@@ -816,7 +843,7 @@ async function resolveSonarrEpisodes(
     memberBySonarrId.set(sonarrEp.id, e.id);
   }
 
-  return { members: episodes, sonarrEpisodes, memberBySonarrId, found: episodes.length, unresolved };
+  return { members: episodes, sonarrEpisodes, memberBySonarrId, found: episodes.length, unresolved, skipped };
 }
 
 async function deleteMatchedEpisodeFiles(
@@ -827,8 +854,10 @@ async function deleteMatchedEpisodeFiles(
   alreadyResolved?: ResolvedSonarrEpisodes,
   progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
-  const { sonarrEpisodes, memberBySonarrId, found, unresolved } =
-    alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds));
+  const resolved = alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds));
+  const { sonarrEpisodes, memberBySonarrId, found, unresolved } = resolved;
+  const notActedOn: NotActedOn[] = [...resolved.skipped];
+  const memberRow = new Map(resolved.members.map((m) => [m.id, m]));
 
   if (found > 0 && memberBySonarrId.size === 0) {
     // Recording this as done would report a delete that never happened.
@@ -855,10 +884,15 @@ async function deleteMatchedEpisodeFiles(
     if (!holders.some((ep) => memberBySonarrId.has(ep.id))) continue;
     const unmatched = holders.filter((ep) => !memberBySonarrId.has(ep.id));
     if (unmatched.length > 0) {
+      const others = unmatched.map((ep) => formatSE(ep.seasonNumber, ep.episodeNumber)).join(", ");
       logger.warn(
         "Lifecycle",
-        `Skipping episode file ${fileId} of Sonarr series ${seriesId}: it also holds ${unmatched.map((ep) => formatSE(ep.seasonNumber, ep.episodeNumber)).join(", ")}, which did not match`,
+        `Skipping episode file ${fileId} of Sonarr series ${seriesId}: it also holds ${others}, which did not match`,
       );
+      for (const ep of holders) {
+        const member = memberRow.get(memberBySonarrId.get(ep.id) ?? "");
+        if (member) notActedOn.push({ title: formatEpisodeTitle(member), reason: `Its file also holds ${others}, which did not match — the file was kept` });
+      }
       continue;
     }
     fileIds.push(fileId);
@@ -887,7 +921,7 @@ async function deleteMatchedEpisodeFiles(
   } else {
     logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
   }
-  return { deletedMemberIds, arrItemIds };
+  return { deletedMemberIds, arrItemIds, notActedOn };
 }
 
 /** An episode-scoped action's members resolved in Sonarr. */
@@ -1055,15 +1089,24 @@ async function unmonitorEpisodeScope(action: ActionRecord, scope: EpisodeScope):
   );
 }
 
-async function executeUnmonitorSonarr(session: ActionArrSession, action: ActionRecord) {
-  if (!action.episodeScope) return executeUnmonitor(session, "SONARR");
-  await unmonitorEpisodeScope(action, await resolveEpisodeScope(session, action));
+async function executeUnmonitorSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  if (!action.episodeScope) {
+    await executeUnmonitor(session, "SONARR");
+    return {};
+  }
+  const scope = await resolveEpisodeScope(session, action);
+  await unmonitorEpisodeScope(action, scope);
+  return { notActedOn: scope.resolved.skipped };
 }
 
-async function executeSearchSonarr(session: ActionArrSession, action: ActionRecord) {
-  if (!action.episodeScope) return executeSearch(session, "SONARR");
-  const { client, ids } = await resolveEpisodeScope(session, action);
+async function executeSearchSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  if (!action.episodeScope) {
+    await executeSearch(session, "SONARR");
+    return {};
+  }
+  const { client, ids, resolved } = await resolveEpisodeScope(session, action);
   await client.triggerEpisodeSearch(ids);
+  return { notActedOn: resolved.skipped };
 }
 
 // --- Track-level file deletion helper (Lidarr) ---
@@ -1179,10 +1222,23 @@ async function deleteTrackFilesForAction(
   };
 
   const memberByLidarrId = new Map<number, string>();
+  const notActedOn: NotActedOn[] = [];
+  const trackLabel = (track: (typeof tracks)[number]) => `${artist.artistName} — ${track.title}`;
+  if (tracks.length < memberIds.length) {
+    const gone = memberIds.length - tracks.length;
+    notActedOn.push({ title: `${gone} track${gone === 1 ? "" : "s"}`, reason: "No longer in the library (removed since the action was scheduled)" });
+  }
   for (const track of tracks) {
     const hit = resolve(track);
     if (hit) memberByLidarrId.set(hit.id, track.id);
+    else {
+      notActedOn.push({
+        title: trackLabel(track),
+        reason: "Lidarr lists no single track it could be matched to (by MusicBrainz id, or disc and track number or title on its album)",
+      });
+    }
   }
+  const trackById = new Map(tracks.map((t) => [t.id, t]));
 
   // One file per track is the norm, but never delete a file that also backs a
   // track we did not match.
@@ -1196,7 +1252,13 @@ async function deleteTrackFilesForAction(
   const arrItemIds: number[] = [];
   for (const [fileId, holders] of holdersByFile) {
     if (!holders.some((t) => memberByLidarrId.has(t.id))) continue;
-    if (holders.some((t) => !memberByLidarrId.has(t.id))) continue;
+    if (holders.some((t) => !memberByLidarrId.has(t.id))) {
+      for (const t of holders) {
+        const member = trackById.get(memberByLidarrId.get(t.id) ?? "");
+        if (member) notActedOn.push({ title: trackLabel(member), reason: "Its file also backs a track that did not match — the file was kept" });
+      }
+      continue;
+    }
     fileIds.push(fileId);
     for (const t of holders) {
       deletedMemberIds.push(memberByLidarrId.get(t.id)!);
@@ -1214,7 +1276,7 @@ async function deleteTrackFilesForAction(
         `None of the ${tracks.length} matched track(s) could be matched to a track of Lidarr artist "${artist.artistName}" — nothing was deleted`,
       );
     }
-    return NOTHING_DELETED;
+    return { ...NOTHING_DELETED, notActedOn };
   }
 
   logger.info(
@@ -1230,7 +1292,7 @@ async function deleteTrackFilesForAction(
       new Set((await client.getTracks(artist.id)).filter((t) => t.hasFile && t.trackFileId > 0).map((t) => t.trackFileId)),
     onProgress: progress,
   });
-  return { deletedMemberIds, arrItemIds };
+  return { deletedMemberIds, arrItemIds, notActedOn };
 }
 
 // --- Monitor & Delete Files executors ---
@@ -1259,7 +1321,7 @@ async function executeMonitorDeleteFilesSonarr(session: ActionArrSession, action
   if (action.searchAfterAction) {
     await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
@@ -1271,7 +1333,7 @@ async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 // --- Delete Files Only executors (no monitor change) ---
@@ -1292,7 +1354,7 @@ async function executeDeleteFilesSonarr(session: ActionArrSession, action: Actio
     // Sonarr may have unmonitored the episodes it just deleted.
     await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 async function executeDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
@@ -1301,7 +1363,7 @@ async function executeDeleteFilesLidarr(session: ActionArrSession, action: Actio
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
-  return { deletedMemberIds: deleted.deletedMemberIds };
+  return { deletedMemberIds: deleted.deletedMemberIds, notActedOn: deleted.notActedOn };
 }
 
 // --- Change Quality Profile / Search executors (every family alike) ---
@@ -1394,7 +1456,7 @@ export async function executeAction(
       await executeUnmonitor(session, "RADARR");
       break;
     case "UNMONITOR_SONARR":
-      await executeUnmonitorSonarr(session, action);
+      outcome = await executeUnmonitorSonarr(session, action);
       break;
     case "UNMONITOR_DELETE_FILES_RADARR":
       await executeUnmonitorDeleteFilesRadarr(session, action);
@@ -1442,7 +1504,7 @@ export async function executeAction(
       await executeSearch(session, "RADARR");
       break;
     case "SEARCH_SONARR":
-      await executeSearchSonarr(session, action);
+      outcome = await executeSearchSonarr(session, action);
       break;
     case "SEARCH_LIDARR":
       await executeSearch(session, "LIDARR");

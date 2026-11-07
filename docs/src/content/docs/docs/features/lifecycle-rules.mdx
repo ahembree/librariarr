@@ -525,6 +525,10 @@ Each action links a rule set to an *arr instance:
   See [Deletion Safety](/docs/features/deletion-safety/) for an in-depth, layer-by-layer description of every check that stands between a rule firing and a file being deleted, including the exact source locations and tests that enforce each one.
 </Aside>
 
+### Executing actions by hand
+
+On the **Pending Actions** page, **Execute All** runs a rule set's pending actions now, and a row's **Execute** runs that one. While they run, a progress bar on the rule set's card shows the item in flight and its step — for a file delete, how many of its files are gone. The message when it finishes is green only when nothing failed and no episode or track was left alone; otherwise click it (or **View Details**) for **Action Results**, listing every failed item and every episode or track an action left alone, each with its reason.
+
 ### Recycle Bin Safety Check
 
 When you configure a destructive action (Delete, Delete Files, Unmonitor & Delete Files, Monitor & Delete Files) for an *arr instance, Librariarr queries that instance for its **Recycle Bin Path** (Settings → Media Management in Sonarr/Radarr/Lidarr).

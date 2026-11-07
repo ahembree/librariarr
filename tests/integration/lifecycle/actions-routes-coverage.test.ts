@@ -11,6 +11,7 @@ import {
   callRoute,
   callRouteWithParams,
   expectJson,
+  expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -255,6 +256,82 @@ describe("POST /api/lifecycle/actions/execute — extra paths", () => {
 
     expect((await expectJson<{ error: string }>(res, 400)).error).toMatch(/mediaItemIds is required/);
     expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  describe("streamed progress (the Pending page's ?stream=1)", () => {
+    const streamExec = (body: unknown) =>
+      callRoute(execute, { url: "/api/lifecycle/actions/execute", method: "POST", body, searchParams: { stream: "1" } });
+
+    async function twoMovies() {
+      const user = await createTestUser();
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const a = await createTestMediaItem(library.id, { title: "Alien", year: 1979 });
+      const b = await createTestMediaItem(library.id, { title: "Brazil", year: 1985 });
+      const ruleSet = await createTestRuleSet(user.id, { actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "arr-1" });
+      await createTestRuleMatch(ruleSet.id, a.id);
+      await createTestRuleMatch(ruleSet.id, b.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { user, ruleSet, a, b };
+    }
+
+    it("streams each item's progress, then the result with every failure and every member left alone", async () => {
+      const { ruleSet } = await twoMovies();
+      mockExecuteAction.mockImplementation(async (action: { mediaItem: { title: string } }, onStep?: (label: string, fraction?: number) => void) => {
+        onStep?.("Delete from Radarr");
+        if (action.mediaItem.title === "Brazil") throw new Error("Radarr HTTP 500");
+        onStep?.("Delete from Radarr — 1 of 2 files deleted", 0.5);
+        return { notActedOn: [{ title: "Alien extras", reason: "Kept" }] };
+      });
+
+      const { result, events } = await expectStreamResult<{
+        executed: number; failed: number;
+        failures: Array<{ title: string; error: string }>;
+        notActedOn: Array<{ title: string; reason: string }>; notActedOnCount: number;
+      }>(await streamExec({ ruleSetId: ruleSet.id }));
+
+      expect(result).toMatchObject({ executed: 1, failed: 1, notActedOnCount: 1 });
+      expect(result.failures).toEqual([{ title: "Brazil", error: "Radarr HTTP 500" }]);
+      expect(result.notActedOn).toEqual([{ title: "Alien extras", reason: "Kept" }]);
+      expect(events[0]).toEqual({ type: "plan", phases: [{ key: "execute", label: "Running actions" }] });
+      const execute = events.filter((e) => e.type === "phase" && e.key === "execute");
+      expect(execute[0]).toMatchObject({ fraction: 0, detail: "0 / 2" });
+      expect(execute.at(-1)).toMatchObject({ fraction: 1, detail: "2 / 2" });
+      expect(execute.some((e) => typeof e.detail === "string" && e.detail.includes("1 of 2 files deleted"))).toBe(true);
+    });
+
+    it("keeps the execute lock until the streamed run ends, then frees it", async () => {
+      const { ruleSet } = await twoMovies();
+      let finish!: () => void;
+      mockExecuteAction.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({}); }));
+
+      const first = await streamExec({ ruleSetId: ruleSet.id });
+      const reading = expectStreamResult(first);
+      // The stream is open and its run is under way: a second Execute is refused.
+      await vi.waitFor(() => expect(mockExecuteAction).toHaveBeenCalledTimes(1));
+      expect((await expectJson<{ error: string }>(await streamExec({ ruleSetId: ruleSet.id }), 409)).error).toMatch(/already running/);
+      finish();
+      await reading;
+      // Ended: the next Execute runs (no matches left after the first, so it says so).
+      expect((await streamExec({ ruleSetId: ruleSet.id })).status).not.toBe(409);
+    });
+
+    it("answers a refusal before the run as JSON with its status, stream or not", async () => {
+      const { user } = await twoMovies();
+      const disabled = await createTestRuleSet(user.id, { enabled: false, actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "arr-1" });
+      const res = await streamExec({ ruleSetId: disabled.id });
+      expect((await expectJson<{ error: string }>(res, 400)).error).toMatch(/disabled/);
+    });
+
+    it("never streams under an API key: the public API answers one JSON body", async () => {
+      const { user, ruleSet, a } = await twoMovies();
+      mockExecuteAction.mockResolvedValue({});
+      const res = await runAsApiKey(
+        { keyId: "k", userId: user.id, name: "script", prefix: "lbr_abc", scopes: ["lifecycle:execute"] },
+        () => streamExec({ ruleSetId: ruleSet.id, mediaItemIds: [a.id] }),
+      );
+      const body = await expectJson<{ executed: number; failures: unknown[]; notActedOnCount: number }>(res, 200);
+      expect(body).toMatchObject({ executed: 1, failures: [], notActedOnCount: 0 });
+    });
   });
 
   it("Execute All with no stored matches asks for detection first", async () => {

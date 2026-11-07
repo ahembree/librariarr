@@ -7,7 +7,9 @@ import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
+import { NOT_ACTED_ON_LIMIT, type ActionFailure, type NotActedOn } from "@/lib/lifecycle/action-report";
 import type { Prisma } from "@/generated/prisma/client";
+import type { ProgressUpdate } from "@/lib/progress/types";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -65,7 +67,14 @@ interface RunActionsResult {
   executed: number;
   failed: number;
   errors: string[];
-  failures: { title: string; error: string }[];
+  failures: ActionFailure[];
+  /**
+   * Episodes or tracks of actions that ran but were left alone, and why
+   * (`ActionOutcome.notActedOn`) — at most `NOT_ACTED_ON_LIMIT` of them;
+   * `notActedOnCount` counts every one.
+   */
+  notActedOn: NotActedOn[];
+  notActedOnCount: number;
   /**
    * Of `failed`, the items failed without contacting the Arr app at all — its
    * instance had already failed at the host level this run — so nothing was
@@ -80,6 +89,22 @@ interface RunActionsResult {
   stopped?: { reason: string; remaining: number };
 }
 
+/**
+ * One run's progress as the `execute` phase event of a progress stream: the
+ * share of items done (a file delete's share of the item in flight added), and
+ * "3 / 12 · <item> — <step>" while an item is in flight. The Query page's and
+ * the Pending page's action runs both stream it.
+ */
+export function executePhaseUpdate({ done, total, current }: ActionRunProgress): ProgressUpdate {
+  return {
+    type: "phase",
+    key: "execute",
+    fraction: total > 0 ? (done + Math.min(1, current?.fraction ?? 0)) / total : 1,
+    // `current` is only reported pre-increment, so done < total here.
+    detail: current ? `${done + 1} / ${total} · ${current.title} — ${current.step}` : `${done} / ${total}`,
+  };
+}
+
 interface RunActionsOptions {
   /**
    * Asked right before each item is acted on. A reason stops the run there:
@@ -92,7 +117,7 @@ interface RunActionsOptions {
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
-interface ActionRunProgress {
+export interface ActionRunProgress {
   /** Items fully processed so far (success or failure). */
   done: number;
   /** Total items in this run. */
@@ -167,7 +192,9 @@ export async function executeActionsForItems(
   let failed = 0;
   let notAttempted = 0;
   const errors: string[] = [];
-  const failures: { title: string; error: string }[] = [];
+  const failures: ActionFailure[] = [];
+  const notActedOn: NotActedOn[] = [];
+  let notActedOnCount = 0;
 
   const total = items.length;
   let processed = 0;
@@ -266,6 +293,10 @@ export async function executeActionsForItems(
       }
 
       executed++;
+      for (const left of outcome?.notActedOn ?? []) {
+        notActedOnCount++;
+        if (notActedOn.length < NOT_ACTED_ON_LIMIT) notActedOn.push(left);
+      }
     } catch (error) {
       unreachable.record(config.arrInstanceId, error);
       const msg = extractActionError(error);
@@ -304,5 +335,5 @@ export async function executeActionsForItems(
   // records themselves); a preview must not explain matches from before it.
   if (executed > 0 || failed > notAttempted) invalidateArrMetadataCache();
 
-  return { executed, failed, errors, failures, notAttempted, ...(stopped ? { stopped } : {}) };
+  return { executed, failed, errors, failures, notActedOn, notActedOnCount, notAttempted, ...(stopped ? { stopped } : {}) };
 }

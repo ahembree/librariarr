@@ -42,6 +42,11 @@ export interface RuleSetGroupCardProps {
   meta?: ReactNode;
   /** Buttons at the right of the header; clicks there do not toggle the card. */
   actions?: ReactNode;
+  /**
+   * Under the header whether or not the card is expanded (the Pending page's
+   * running Execute progress). A component that renders nothing adds nothing.
+   */
+  banner?: ReactNode;
   /** The card's body, rendered while expanded. */
   children?: ReactNode;
 }
@@ -59,6 +64,7 @@ export function RuleSetGroupCard({
   showAction = true,
   meta,
   actions,
+  banner,
   children,
 }: RuleSetGroupCardProps) {
   const addTags = ruleSet.addArrTags ?? [];
@@ -113,6 +119,7 @@ export function RuleSetGroupCard({
           )}
         </div>
       </CardHeader>
+      {banner && <div className="px-6 pb-4 empty:hidden">{banner}</div>}
       {expanded && children && <CardContent>{children}</CardContent>}
     </Card>
   );
