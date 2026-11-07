@@ -78,6 +78,26 @@ describe("toastActionResult", () => {
     expect(showDetails).toHaveBeenCalledTimes(2);
   });
 
+  it("is never green when the counts show a failure, even with no reason listed", () => {
+    toastActionResult(report({ executed: 1, failed: 2 }), vi.fn());
+    expect(toastMock.success).not.toHaveBeenCalled();
+    const [title, opts] = toastMock.warning.mock.calls[0];
+    expect(title).toBe("Action completed with problems");
+    // Nothing to list, so no View Details.
+    expect(opts.action).toBeUndefined();
+    expect(opts.description).toBe("1 executed, 2 failed");
+  });
+
+  it("says a stopped run in one toast, with the reason, never beside a green one", () => {
+    const showDetails = vi.fn();
+    toastActionResult(report({ executed: 3 }), showDetails, { stopped: "The rule set was edited while its actions ran" });
+    expect(toastMock.success).not.toHaveBeenCalled();
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+    const [title, opts] = toastMock.warning.mock.calls[0];
+    expect(title).toBe("Action stopped part-way");
+    expect(opts.description).toBe("3 executed — The rule set was edited while its actions ran");
+  });
+
   it("is an error when nothing ran", () => {
     toastActionResult(report({ failed: 1, failures: [{ title: "Lost", error: "HTTP 500" }] }), vi.fn());
     expect(toastMock.error.mock.calls[0][0]).toBe("Action failed");

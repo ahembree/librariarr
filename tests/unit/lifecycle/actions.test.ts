@@ -1073,6 +1073,19 @@ describe("executeAction", () => {
       ]);
     });
 
+    it("reports an action whose tracks have all left the library as having changed nothing", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+
+      const outcome = await executeAction(lidarrAction(["gone-1", "gone-2"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
+      expect(outcome.deletedMemberIds).toEqual([]);
+      expect(outcome.notActedOn).toEqual([{
+        title: "Test Artist — 2 tracks",
+        reason: "No longer in the library (removed since the action was scheduled) — nothing was deleted",
+      }]);
+    });
+
     it("tells 'Song' from 'Song (Demo)' on the same album", async () => {
       mockPrisma.mediaItem.findMany.mockResolvedValue([
         track({ id: "demo", title: "Song (Demo)", episodeNumber: 12 }),

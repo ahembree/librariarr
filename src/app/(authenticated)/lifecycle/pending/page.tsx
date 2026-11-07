@@ -45,10 +45,14 @@ import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-s
 import { WholeSeasonsChip } from "@/components/whole-seasons-chip";
 import { QueryProgress, EMPTY_PROGRESS, applyProgressUpdate, type ProgressState } from "@/components/query-progress";
 import {
+  actionResultHasProblems,
   addActionResult,
   emptyActionResult,
+  hasActionResultDetails,
+  summarizeActionResult,
   toastActionResult,
   useActionResultDialog,
+  type ActionResultReport,
 } from "@/components/action-result-dialog";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
@@ -617,6 +621,58 @@ function ExecuteProgressBanner({ runs }: { runs: Array<{ key: string; label: str
   );
 }
 
+/**
+ * A rule set's last Execute All on its card: green only when it ran cleanly;
+ * amber with the summary when an item failed, a member was left alone or the
+ * run stopped — a button reopening the details when there are reasons to list.
+ */
+function ExecuteResultChip({
+  result,
+  onShowDetails,
+}: {
+  result: { report: ActionResultReport | null; error: string | null };
+  onShowDetails: (report: ActionResultReport) => void;
+}) {
+  const { report, error } = result;
+  if (!report) {
+    return (
+      <span className="flex items-center gap-1 text-xs text-red" title={error ?? undefined}>
+        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+        Not executed
+      </span>
+    );
+  }
+  if (!actionResultHasProblems(report) && !report.note) {
+    return (
+      <span className="flex items-center gap-1 text-xs text-green">
+        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+        {report.executed} executed
+      </span>
+    );
+  }
+  const label = (
+    <>
+      <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+      {summarizeActionResult(report)}
+      {report.note ? " — stopped" : ""}
+    </>
+  );
+  return hasActionResultDetails(report) ? (
+    <button
+      type="button"
+      className="flex items-center gap-1 text-xs text-amber hover:underline"
+      title={report.note ?? "View the reasons"}
+      onClick={() => onShowDetails(report)}
+    >
+      {label}
+    </button>
+  ) : (
+    <span className="flex items-center gap-1 text-xs text-amber" title={report.note}>
+      {label}
+    </span>
+  );
+}
+
 /** The execute route's announcement of the run this page asked for. */
 const isOwnExecute = (result: { executed?: unknown; failed?: unknown }) => (data: Record<string, unknown>) =>
   data.manual === true && data.executed === result.executed && data.failed === result.failed;
@@ -641,7 +697,10 @@ export default function PendingActionsPage() {
   const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [executingRules, executingRuleActions] = useSetState<string>();
   const [executingItems, executingItemActions] = useSetState<string>();
-  const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
+  // Each rule set's last Execute All: what ran, every failure and every member
+  // left alone (the card's result chip reopens the details), or why it was
+  // refused.
+  const [executeResults, setExecuteResults] = useState<Record<string, { report: ActionResultReport | null; error: string | null }>>({});
   // Each running Execute's progress, by rule set id (Execute All) or
   // `ruleSetId:mediaItemId` (a row's), shown on its rule set's card.
   const [executeProgress, setExecuteProgress] = useState<Record<string, { label: string; state: ProgressState }>>({});
@@ -880,25 +939,16 @@ export default function PendingActionsPage() {
       const answer = await runExecute(ruleSetId, "Execute All", { ruleSetId });
       if (answer.ok) {
         const data = answer.data;
-        setExecuteResults((prev) => ({
-          ...prev,
-          [ruleSetId]: { executed: data.executed, failed: data.failed, errors: data.errors || [] },
-        }));
-        // Green only when nothing failed and nothing was left alone; the toast
-        // otherwise opens every reason (View Details).
-        if (data.executed > 0 || data.failed > 0) {
-          toastActionResult(
-            { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), data), note: data.stopped },
-            showActionResult,
-          );
+        const report = { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), data), note: data.stopped };
+        setExecuteResults((prev) => ({ ...prev, [ruleSetId]: { report, error: null } }));
+        // Green only when nothing failed, nothing was left alone and the run
+        // was not stopped (the rule set changed while it ran) — one toast,
+        // which otherwise opens every reason (View Details).
+        if (data.executed > 0 || data.failed > 0 || data.stopped) {
+          toastActionResult(report, showActionResult, { stopped: data.stopped });
         }
-        // The rule set changed while the actions ran: the rest were left.
-        if (data.stopped) toast.warning("Stopped before the rest", { description: data.stopped });
       } else {
-        setExecuteResults((prev) => ({
-          ...prev,
-          [ruleSetId]: { executed: 0, failed: 0, errors: [answer.error] },
-        }));
+        setExecuteResults((prev) => ({ ...prev, [ruleSetId]: { report: null, error: answer.error } }));
         toast.error(answer.error || "Failed to execute actions");
       }
       await ticket.settle({
@@ -923,10 +973,9 @@ export default function PendingActionsPage() {
       if (!answer.ok) {
         toast.error(answer.error || "Failed to execute action");
       } else {
-        toastActionResult(
-          { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), answer.data), note: answer.data.stopped },
-          showActionResult,
-        );
+        toastActionResult(addActionResult(emptyActionResult(memberNounOf(ruleSetId)), answer.data), showActionResult, {
+          stopped: answer.data.stopped,
+        });
       }
       await ticket.settle({
         expectEvent: answer.ok && (answer.data.executed > 0 || answer.data.failed > 0),
@@ -1173,21 +1222,7 @@ export default function PendingActionsPage() {
                     // Execute All button (only for PENDING filter, not for deleted rule sets)
                     isPending && group.count > 0 && !group.ruleSet.deleted ? (
                       <div className="flex flex-wrap items-center gap-2">
-                        {result && (
-                          <span className="text-xs">
-                            {result.failed === 0 ? (
-                              <span className="text-green flex items-center gap-1">
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                {result.executed} executed
-                              </span>
-                            ) : (
-                              <span className="text-amber flex items-center gap-1">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                {result.executed} ok, {result.failed} failed
-                              </span>
-                            )}
-                          </span>
-                        )}
+                        {result && <ExecuteResultChip result={result} onShowDetails={showActionResult} />}
                         <ExecuteAllButton
                           held={heldCount}
                           heldReason={heldReason}

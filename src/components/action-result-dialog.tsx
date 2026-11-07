@@ -62,36 +62,56 @@ export function addActionResult(into: ActionResultReport, part: Partial<ActionRu
 }
 
 /**
- * The run's result as a toast: success only when nothing failed and nothing
- * was left alone; otherwise a warning (an error when nothing ran) whose text
- * — and its View Details button — opens the dialog listing each reason.
+ * Whether the run went other than cleanly: an item failed, or an action that
+ * ran left an episode or track alone — judged from the counts, so a failure
+ * the response did not list still keeps the toast from going green.
+ */
+export function actionResultHasProblems(report: ActionResultReport): boolean {
+  return report.failed > 0 || report.notActedOnCount > 0;
+}
+
+/**
+ * The run's result as a toast: success only when nothing failed, nothing was
+ * left alone and the run was not stopped; otherwise a warning (an error when
+ * nothing ran). When there are reasons to list, its text — and its View
+ * Details button — open the dialog with each one.
+ *
+ * `stopped`: why the run stopped before the rest — one toast says it, with
+ * what ran (never a second toast beside a "complete" one).
  */
 export function toastActionResult(
   report: ActionResultReport,
   showDetails: (report: ActionResultReport) => void,
-  opts: { title?: string; suffix?: string } = {},
+  opts: { title?: string; suffix?: string; stopped?: string } = {},
 ): void {
-  const summary = `${summarizeActionResult(report)}${opts.suffix ?? ""}`;
-  if (!hasActionResultDetails(report)) {
+  const summary = `${summarizeActionResult(report)}${opts.suffix ?? ""}${opts.stopped ? ` — ${opts.stopped}` : ""}`;
+  const withNote = opts.stopped ? { ...report, note: opts.stopped } : report;
+  if (!actionResultHasProblems(report) && !opts.stopped) {
     toast.success(opts.title ?? "Action complete", { description: summary });
     return;
   }
   const nothingRan = report.executed === 0;
-  const title = opts.title ?? (nothingRan ? "Action failed" : "Action completed with problems");
+  const title =
+    opts.title ??
+    (opts.stopped ? "Action stopped part-way" : nothingRan ? "Action failed" : "Action completed with problems");
+  const show = nothingRan && !opts.stopped ? toast.error : toast.warning;
+  if (!hasActionResultDetails(report)) {
+    show(title, { description: summary, duration: 20_000 });
+    return;
+  }
   const description: ReactNode = (
     <button
       type="button"
       className="text-left hover:underline focus-visible:underline focus-visible:outline-none"
-      onClick={() => showDetails(report)}
+      onClick={() => showDetails(withNote)}
     >
       {summary} — click for details
     </button>
   );
-  const show = nothingRan ? toast.error : toast.warning;
   show(title, {
     description,
     duration: 20_000,
-    action: { label: "View Details", onClick: () => showDetails(report) },
+    action: { label: "View Details", onClick: () => showDetails(withNote) },
   });
 }
 

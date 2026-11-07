@@ -557,12 +557,14 @@ async function executeUnmonitorDeleteFilesSonarr(session: ActionArrSession, acti
         "Lifecycle",
         `Skipping ${action.actionType} for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to unmonitor or delete without them)`,
       );
-      return { deletedMemberIds: [] };
+      return { deletedMemberIds: [], notActedOn: [noMembers(action, "episodes", "unmonitored or deleted")] };
     }
     const scope = await resolveEpisodeScope(session, action);
     await unmonitorEpisodeScope(action, scope);
     client = scope.client;
-    deleted = await deleteMatchedEpisodeFiles(client, scope.series.id, action.matchedMediaItemIds, scope.resolved, session.fileProgress);
+    deleted = await deleteMatchedEpisodeFiles(
+      client, scope.series.id, action.matchedMediaItemIds, seriesTitleOf(action.mediaItem), scope.resolved, session.fileProgress,
+    );
   } else {
     await session.update<SonarrSeries>("SONARR", { monitored: false });
     const resolvedSeries = await seriesOf(session);
@@ -679,7 +681,7 @@ async function deleteEpisodeFilesForAction(
   progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
   if (action.matchedMediaItemIds.length > 0) {
-    return deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds, undefined, progress);
+    return deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds, seriesTitleOf(action.mediaItem), undefined, progress);
   }
   // Member-scoped action with no targeted episodes — skip rather than delete
   // the entire series' files. Conservative by design (media deletion pipeline).
@@ -688,7 +690,7 @@ async function deleteEpisodeFilesForAction(
       "Lifecycle",
       `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
     );
-    return NOTHING_DELETED;
+    return { ...NOTHING_DELETED, notActedOn: [noMembers(action, "episodes", "deleted")] };
   }
   // Non-member-scoped action types should never reach here, but if they do,
   // there is nothing scoped to act on — skip.
@@ -696,7 +698,19 @@ async function deleteEpisodeFilesForAction(
     "Lifecycle",
     `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no episodes to act on`,
   );
-  return NOTHING_DELETED;
+  return { ...NOTHING_DELETED, notActedOn: [noMembers(action, "episodes", "deleted")] };
+}
+
+/**
+ * The not-acted-on entry for an action that ran with no members to act on
+ * (their ids lost, or every one gone since it was scheduled): it changed
+ * nothing, and the run's result must not read as a clean success.
+ */
+function noMembers(action: ActionRecord, members: "episodes" | "tracks", what: string): NotActedOn {
+  return {
+    title: seriesTitleOf(action.mediaItem),
+    reason: `No matched ${members} left to act on — nothing was ${what}`,
+  };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -716,8 +730,13 @@ function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined
   return Math.abs(ours.getTime() - theirs) > 2 * DAY_MS;
 }
 
-/** A title that names only a position ("Episode 10", "Part 2", "TBA"): it says nothing about which episode. */
-const PLACEHOLDER_EPISODE_TITLE = /^(?:(?:episode|ep|chapter|part)\s*)?\d+$|^tb[ad]$/;
+/**
+ * A title that names only a position or nothing ("Episode 10", "Part 2",
+ * "TBA", "Untitled", "Untitled Episode 3", "Unknown"): it says nothing about
+ * which episode, so two of them agreeing proves nothing.
+ */
+const PLACEHOLDER_EPISODE_TITLE =
+  /^(?:(?:episode|ep|chapter|part)\s*)?\d+$|^tb[ad]$|^(?:untitled|unknown|episode)(?:\s+(?:episode|ep))?(?:\s*\d+)?$/;
 
 /**
  * Whether our episode and the Sonarr episode at the same season/episode number
@@ -767,6 +786,8 @@ async function resolveSonarrEpisodes(
   client: SonarrClient,
   seriesId: number,
   matchedMediaItemIds: string[],
+  /** The show, naming the members gone from the library in `skipped`. */
+  showTitle: string,
 ): Promise<ResolvedSonarrEpisodes> {
   // Look up matched episodes from DB to get season/episode numbers
   const episodes: ResolvedMember[] = await prisma.mediaItem.findMany({
@@ -799,7 +820,10 @@ async function resolveSonarrEpisodes(
   const skipped: NotActedOn[] = [];
   if (episodes.length < matchedMediaItemIds.length) {
     const gone = matchedMediaItemIds.length - episodes.length;
-    skipped.push({ title: `${gone} episode${gone === 1 ? "" : "s"}`, reason: "No longer in the library (removed since the action was scheduled)" });
+    skipped.push({
+      title: `${showTitle} — ${gone} episode${gone === 1 ? "" : "s"}`,
+      reason: "No longer in the library (removed since the action was scheduled)",
+    });
   }
   let unresolved = 0;
   for (const e of episodes) {
@@ -850,11 +874,13 @@ async function deleteMatchedEpisodeFiles(
   client: SonarrClient,
   seriesId: number,
   matchedMediaItemIds: string[],
+  /** The show, naming the members it leaves alone. */
+  showTitle: string,
   /** The members already resolved for this action (an Unmonitor & Delete Files that unmonitored them first). */
   alreadyResolved?: ResolvedSonarrEpisodes,
   progress?: FileProgress,
 ): Promise<MemberFileDeletion> {
-  const resolved = alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds));
+  const resolved = alreadyResolved ?? (await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds, showTitle));
   const { sonarrEpisodes, memberBySonarrId, found, unresolved } = resolved;
   const notActedOn: NotActedOn[] = [...resolved.skipped];
   const memberRow = new Map(resolved.members.map((m) => [m.id, m]));
@@ -945,7 +971,7 @@ async function resolveEpisodeScope(session: ActionArrSession, action: ActionReco
   // An action stored before members were recorded is its own episode.
   const ids = action.matchedMediaItemIds.length > 0 ? action.matchedMediaItemIds : [action.mediaItem.id];
   const { client, record: series } = await seriesOf(session);
-  const resolved = await resolveSonarrEpisodes(client, series.id, ids);
+  const resolved = await resolveSonarrEpisodes(client, series.id, ids, seriesTitleOf(action.mediaItem));
   const { memberBySonarrId, found, unresolved } = resolved;
   if (found === 0) {
     throw new Error(`None of the ${ids.length} episode(s) to act on are in the library any more — nothing was changed`);
@@ -1175,7 +1201,13 @@ async function deleteTrackFilesForAction(
       "Lifecycle",
       `Skipping ${action.actionType} for artist "${artist.artistName}" — no matched tracks resolved (refusing to delete the whole artist)`,
     );
-    return NOTHING_DELETED;
+    return {
+      ...NOTHING_DELETED,
+      notActedOn: [{
+        title: `${artist.artistName} — ${memberIds.length} track${memberIds.length === 1 ? "" : "s"}`,
+        reason: "No longer in the library (removed since the action was scheduled) — nothing was deleted",
+      }],
+    };
   }
 
   const [lidarrTracks, lidarrAlbums] = await Promise.all([
@@ -1226,7 +1258,10 @@ async function deleteTrackFilesForAction(
   const trackLabel = (track: (typeof tracks)[number]) => `${artist.artistName} — ${track.title}`;
   if (tracks.length < memberIds.length) {
     const gone = memberIds.length - tracks.length;
-    notActedOn.push({ title: `${gone} track${gone === 1 ? "" : "s"}`, reason: "No longer in the library (removed since the action was scheduled)" });
+    notActedOn.push({
+      title: `${artist.artistName} — ${gone} track${gone === 1 ? "" : "s"}`,
+      reason: "No longer in the library (removed since the action was scheduled)",
+    });
   }
   for (const track of tracks) {
     const hit = resolve(track);

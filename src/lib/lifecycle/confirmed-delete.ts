@@ -12,30 +12,43 @@
  *
  * So the files go a chunk at a time (each request a bounded amount of work),
  * and a chunk whose request went unanswered is confirmed rather than failed:
- * the app's files are read back until the chunk's are gone, for up to
- * `DELETE_CONFIRM_TIMEOUT_MS`. A write is never re-sent (`configureRetry`):
- * the app may still be applying it.
+ * the app's files are read back until the chunk's are gone. The wait ends
+ * early when the app is gone (a read fails at the host level: that error is
+ * the action's, so the run stops sending to the host) or has stopped deleting
+ * (no file of the chunk gone for `DELETE_STALL_TIMEOUT_MS`), and in any case
+ * after `DELETE_CONFIRM_TIMEOUT_MS`. A write is never re-sent
+ * (`configureRetry`): the app may still be applying it.
  */
 import { IntegrationError } from "@/lib/integration-error";
+import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 import { logger } from "@/lib/logger";
 
 /** Files per delete request. */
 export const FILE_DELETE_CHUNK = 25;
-/** How long an unanswered chunk is waited for before the action fails. */
-export const DELETE_CONFIRM_TIMEOUT_MS = 15 * 60_000;
+/** The longest an unanswered chunk is waited for, however steadily its files go. */
+export const DELETE_CONFIRM_TIMEOUT_MS = 60 * 60_000;
+/**
+ * How long the wait goes on without one of the chunk's files going. One large
+ * file copied into a recycle bin on another mount takes minutes on its own,
+ * so this is generous; past it the app has stopped (a permission error
+ * part-way, a restart).
+ */
+export const DELETE_STALL_TIMEOUT_MS = 5 * 60_000;
 /** How often the app's files are read back while waiting. */
 export const DELETE_CONFIRM_INTERVAL_MS = 5_000;
 
 /**
  * Whether a write failed without an answer that says what happened: the
- * client's timeout (`ECONNABORTED`/`ETIMEDOUT`, no response) or a gateway in
- * front of the app giving up on it (504). The app may have applied it, or be
- * applying it still.
+ * client's timeout (`ECONNABORTED`/`ETIMEDOUT`, no response), the connection
+ * cut under it (`ECONNRESET`, a proxy closing an idle request), or a gateway
+ * in front of the app giving up on it (502, 504, Cloudflare's 524 at 100 s).
+ * The app may have applied it, or be applying it still; if it is down, the
+ * read-back says so at once.
  */
 export function isUnansweredWrite(error: unknown): boolean {
   if (!(error instanceof IntegrationError)) return false;
-  if (error.status === 504) return true;
-  return error.status === null && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT");
+  if (error.status === 502 || error.status === 504 || error.status === 524) return true;
+  return error.status === null && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT" || error.code === "ECONNRESET");
 }
 
 /** Where a file delete has got to: after each chunk, and while it waits on the app. */
@@ -66,23 +79,35 @@ export interface ConfirmedDeleteOptions {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * The ids of `ids` the app still has once it stops removing them, or after
- * `DELETE_CONFIRM_TIMEOUT_MS`. A read that fails (the app busy with the very
- * delete) is retried at the next interval.
+ * The ids of `ids` the app still has once they are gone (none), once none has
+ * gone for `DELETE_STALL_TIMEOUT_MS`, or after `DELETE_CONFIRM_TIMEOUT_MS`. A
+ * read that fails on its own (the app busy with the very delete) is tried
+ * again at the next interval; one that fails at the host level
+ * (`isHostLevelFailure`: the connection refused, a read unanswered after its
+ * retries) is thrown — the app is gone, and the run records the host as down
+ * rather than waiting on it.
  */
-async function awaitRemoval(ids: readonly number[], stillPresent: () => Promise<ReadonlySet<number>>): Promise<number[]> {
+async function awaitRemoval(
+  ids: readonly number[],
+  stillPresent: () => Promise<ReadonlySet<number>>,
+): Promise<{ left: number[]; stalled: boolean }> {
   const deadline = Date.now() + DELETE_CONFIRM_TIMEOUT_MS;
   let left = [...ids];
+  let lastProgressAt = Date.now();
   for (;;) {
     await sleep(DELETE_CONFIRM_INTERVAL_MS);
     try {
       const present = await stillPresent();
-      left = ids.filter((id) => present.has(id));
-      if (left.length === 0) return [];
-    } catch {
+      const now = ids.filter((id) => present.has(id));
+      if (now.length === 0) return { left: [], stalled: false };
+      if (now.length < left.length) lastProgressAt = Date.now();
+      left = now;
+    } catch (error) {
+      if (isHostLevelFailure(error)) throw error;
       // Unreadable for now — keep waiting.
     }
-    if (Date.now() >= deadline) return left;
+    if (Date.now() - lastProgressAt >= DELETE_STALL_TIMEOUT_MS) return { left, stalled: true };
+    if (Date.now() >= deadline) return { left, stalled: false };
   }
 }
 
@@ -112,13 +137,16 @@ export async function deleteFilesConfirmed(opts: ConfirmedDeleteOptions): Promis
         `${opts.app} is still deleting ${chunk.length} ${opts.what}(s) after the request timed out — waiting for it to finish`,
       );
       report(true);
-      const left = await awaitRemoval(chunk, opts.stillPresent);
+      const { left, stalled } = await awaitRemoval(chunk, opts.stillPresent);
       if (left.length > 0) {
+        const before = done > 0 ? ` (${done} of ${total} deleted before)` : "";
         throw new Error(
-          `${opts.app} had not finished deleting ${left.length} of ${chunk.length} ${opts.what}(s) after ` +
-            `${Math.round(DELETE_CONFIRM_TIMEOUT_MS / 60_000)} minutes` +
-            (done > 0 ? ` (${done} of ${total} deleted before)` : "") +
-            ` — it may still be moving them to its recycle bin; run the action again once it has`,
+          stalled
+            ? `${opts.app} stopped deleting with ${left.length} of ${chunk.length} ${opts.what}(s) left — none went for ` +
+                `${Math.round(DELETE_STALL_TIMEOUT_MS / 60_000)} minutes${before}; check its logs, then run the action again for the rest`
+            : `${opts.app} had not finished deleting ${left.length} of ${chunk.length} ${opts.what}(s) after ` +
+                `${Math.round(DELETE_CONFIRM_TIMEOUT_MS / 60_000)} minutes${before} — it may still be moving them to its ` +
+                `recycle bin; run the action again once it has`,
         );
       }
     }

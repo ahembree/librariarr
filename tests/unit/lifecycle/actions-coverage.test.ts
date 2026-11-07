@@ -634,11 +634,14 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
       expect(mockSonarr.getEpisodes).toHaveBeenCalledTimes(1);
     });
 
-    it("UNMONITOR_DELETE_FILES_SONARR episode-scoped with no members changes nothing", async () => {
+    it("UNMONITOR_DELETE_FILES_SONARR episode-scoped with no members changes nothing, and says so", async () => {
       const outcome = await executeAction(showAction({
         actionType: "UNMONITOR_DELETE_FILES_SONARR", episodeScope: true, seasonScope: "matched", matchedMediaItemIds: [],
       }));
       expect(outcome.deletedMemberIds).toEqual([]);
+      expect(outcome.notActedOn).toEqual([
+        { title: "Severance", reason: "No matched episodes left to act on — nothing was unmonitored or deleted" },
+      ]);
       expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
       expect(mockSonarr.setSeasonsMonitored).not.toHaveBeenCalled();
       expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
@@ -724,8 +727,8 @@ describe("a file delete the app outlives (recycle bin on another mount)", () => 
     mockRadarr.getMovieById.mockResolvedValue({ ...MOVIE });
 
     const run = executeAction(movieAction({ actionType: "DELETE_FILES_RADARR" }));
-    const failed = expect(run).rejects.toThrow(/^Radarr had not finished deleting 1 of 1 movie file/);
-    await vi.advanceTimersByTimeAsync(16 * 60_000);
+    const failed = expect(run).rejects.toThrow(/^Radarr stopped deleting with 1 of 1 movie file/);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
     await failed;
     expect(mockRadarr.deleteMovieFile).toHaveBeenCalledTimes(1);
   });
@@ -740,6 +743,8 @@ describe("Sonarr member-scoped file deletes", () => {
       expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
       expect(mockSonarr.deleteSeries).not.toHaveBeenCalled();
       expect(outcome.deletedMemberIds).toEqual([]);
+      // It ran but changed nothing: the run must not read as a clean success.
+      expect(outcome.notActedOn).toEqual([expect.objectContaining({ reason: expect.stringMatching(/^No matched episodes left to act on/) })]);
       expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("refusing to delete all episode files"));
     },
   );
@@ -779,14 +784,16 @@ describe("Sonarr member-scoped file deletes", () => {
       { id: "e11", title: "The Unhappy Tribe", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 11, originallyAvailableAt: new Date("2007-12-06T00:00:00Z") },
       // A placeholder title proves nothing.
       { id: "e12", title: "Episode 12", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 12, originallyAvailableAt: new Date("2007-12-13T00:00:00Z") },
+      { id: "e13", title: "Untitled", parentTitle: "Survivor", seasonNumber: 15, episodeNumber: 13, originallyAvailableAt: new Date("2007-12-16T00:00:00Z") },
     ]);
     mockSonarr.getEpisodes.mockResolvedValue([
       { id: 1510, seasonNumber: 15, episodeNumber: 10, episodeFileId: 10, airDate: "2007-11-22", title: "Going Down with the Ship!" },
       { id: 1511, seasonNumber: 15, episodeNumber: 11, episodeFileId: 11, airDate: "2007-11-29", title: "Another Episode Entirely" },
       { id: 1512, seasonNumber: 15, episodeNumber: 12, episodeFileId: 12, airDate: "2007-12-06", title: "Episode 12" },
+      { id: 1513, seasonNumber: 15, episodeNumber: 13, episodeFileId: 13, airDate: "2007-12-13", title: "Untitled" },
     ]);
 
-    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["e10", "e11", "e12"] }));
+    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["e10", "e11", "e12", "e13"] }));
 
     expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10]);
     expect(outcome.deletedMemberIds).toEqual(["e10"]);
@@ -800,6 +807,7 @@ describe("Sonarr member-scoped file deletes", () => {
         reason: expect.stringMatching(/^The media server and Sonarr may number this show differently: the air dates differ \(2007-12-06 \/ 2007-11-29\) and the titles do not match \("The Unhappy Tribe" \/ "Another Episode Entirely"\)$/),
       },
       { title: "Survivor S15E12", reason: expect.stringContaining("may number this show differently") },
+      { title: "Survivor S15E13", reason: expect.stringContaining("may number this show differently") },
     ]);
   });
 
@@ -819,7 +827,7 @@ describe("Sonarr member-scoped file deletes", () => {
 
     expect(mockSonarr.deleteEpisodeFiles).not.toHaveBeenCalled();
     expect(outcome.notActedOn).toEqual([
-      { title: "1 episode", reason: "No longer in the library (removed since the action was scheduled)" },
+      { title: "Severance — 1 episode", reason: "No longer in the library (removed since the action was scheduled)" },
       { title: "Severance — B", reason: "The media server gives it no season or episode number" },
       { title: "Severance S09E09", reason: "Sonarr has no S09E09 for this series" },
       { title: "Severance S01E01", reason: "Its file also holds S01E02, which did not match — the file was kept" },

@@ -7,6 +7,7 @@ import { IntegrationError } from "@/lib/integration-error";
 import {
   DELETE_CONFIRM_INTERVAL_MS,
   DELETE_CONFIRM_TIMEOUT_MS,
+  DELETE_STALL_TIMEOUT_MS,
   deleteFilesConfirmed,
   isUnansweredWrite,
 } from "@/lib/lifecycle/confirmed-delete";
@@ -30,6 +31,10 @@ describe("isUnansweredWrite", () => {
     expect(isUnansweredWrite(sonarrError("ECONNABORTED"))).toBe(true);
     expect(isUnansweredWrite(sonarrError("ETIMEDOUT"))).toBe(true);
     expect(isUnansweredWrite(sonarrError("ERR_BAD_RESPONSE", 504))).toBe(true);
+    // Cloudflare gives up on the origin at 100 s; a proxy may cut or fail the request.
+    expect(isUnansweredWrite(sonarrError("ERR_BAD_RESPONSE", 524))).toBe(true);
+    expect(isUnansweredWrite(sonarrError("ERR_BAD_RESPONSE", 502))).toBe(true);
+    expect(isUnansweredWrite(sonarrError("ECONNRESET"))).toBe(true);
     expect(isUnansweredWrite(sonarrError("ECONNREFUSED"))).toBe(false);
     expect(isUnansweredWrite(sonarrError("ERR_BAD_RESPONSE", 500))).toBe(false);
     expect(isUnansweredWrite(new Error("timeout"))).toBe(false);
@@ -83,17 +88,67 @@ describe("deleteFilesConfirmed", () => {
     await expect(done).resolves.toBeUndefined();
   });
 
-  it("fails when the files are still there after the wait, saying how far it got", async () => {
+  it("fails once no file has gone for the stall window, saying how far it got", async () => {
     present = new Set([3, 4]);
     const remove = vi.fn(async (chunk: number[]) => {
       if (chunk[0] === 3) throw sonarrError("ECONNABORTED");
     });
     const done = deleteFilesConfirmed({ app: "Sonarr", what: "episode file", fileIds: ids(4), remove, stillPresent, chunkSize: 2 });
     const failed = expect(done).rejects.toThrow(
-      /^Sonarr had not finished deleting 2 of 2 episode file\(s\) after 15 minutes \(2 of 4 deleted before\)/,
+      /^Sonarr stopped deleting with 2 of 2 episode file\(s\) left — none went for 5 minutes \(2 of 4 deleted before\)/,
     );
+    await vi.advanceTimersByTimeAsync(DELETE_STALL_TIMEOUT_MS + DELETE_CONFIRM_INTERVAL_MS);
+    await failed;
+  });
+
+  it("keeps waiting while files keep going, however slowly, up to the overall cap", async () => {
+    present = new Set(ids(4));
+    const remove = vi.fn(async () => {
+      throw sonarrError("ECONNABORTED");
+    });
+    const done = deleteFilesConfirmed({ app: "Sonarr", what: "episode file", fileIds: ids(4), remove, stillPresent });
+    let settled = false;
+    void done.then(() => { settled = true; }, () => { settled = true; });
+    // One file every 4 minutes: slower than the stall window would allow in
+    // total, but never 5 minutes without one going.
+    for (let i = 1; i <= 4; i++) {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(settled).toBe(false);
+      present = new Set(ids(4 - i, i + 1));
+    }
+    await vi.advanceTimersByTimeAsync(DELETE_CONFIRM_INTERVAL_MS);
+    await expect(done).resolves.toBeUndefined();
+  });
+
+  it("gives up at the overall cap even while files still trickle out", async () => {
+    let left = 25;
+    present = new Set(ids(left));
+    // One of the chunk's files goes every 4 minutes: 100 minutes for all 25.
+    const trickle = setInterval(() => {
+      left = Math.max(1, left - 1);
+      present = new Set(ids(left, 26 - left));
+    }, 4 * 60_000);
+    const remove = vi.fn(async () => {
+      throw sonarrError("ECONNABORTED");
+    });
+    const done = deleteFilesConfirmed({ app: "Sonarr", what: "episode file", fileIds: ids(25), remove, stillPresent });
+    const failed = expect(done).rejects.toThrow(/^Sonarr had not finished deleting \d+ of 25 episode file\(s\) after 60 minutes/);
     await vi.advanceTimersByTimeAsync(DELETE_CONFIRM_TIMEOUT_MS + DELETE_CONFIRM_INTERVAL_MS);
     await failed;
+    clearInterval(trickle);
+  });
+
+  it("stops waiting at once when the app is gone, failing with the host's error", async () => {
+    const hostDown = sonarrError("ECONNREFUSED");
+    stillPresent.mockRejectedValueOnce(hostDown);
+    const remove = vi.fn(async () => {
+      throw sonarrError("ECONNABORTED");
+    });
+    const done = deleteFilesConfirmed({ app: "Sonarr", what: "episode file", fileIds: [1], remove, stillPresent });
+    const failed = expect(done).rejects.toBe(hostDown);
+    await vi.advanceTimersByTimeAsync(DELETE_CONFIRM_INTERVAL_MS);
+    await failed;
+    expect(stillPresent).toHaveBeenCalledTimes(1);
   });
 
   it("reports how many files are gone after each chunk, and when it waits on the app", async () => {

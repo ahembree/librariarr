@@ -251,6 +251,23 @@ describe("deletion safety of the public API", () => {
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(3);
     });
 
+    it("answers one JSON body even when asked to stream: the switch is the Pending page's, never forwarded", async () => {
+      const { user, library } = await setup();
+      const { ruleSet, items } = await matchedMovies(user.id, library.id, 1);
+      const key = await executeKey(user.id);
+
+      const res = await callRoute(v1Execute.POST, {
+        url: "/api/v1/lifecycle/actions/execute",
+        method: "POST",
+        body: { ruleSetId: ruleSet.id, mediaItemIds: [items[0].id] },
+        searchParams: { stream: "1" },
+        headers: { authorization: `Bearer ${key}` },
+      });
+
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await expectJson<{ executed: number }>(res, 200)).toMatchObject({ executed: 1 });
+    });
+
     it("gives back the budget of items never sent because their Arr instance was already down", async () => {
       const { user, library } = await setup();
       const { ruleSet, items } = await matchedMovies(user.id, library.id, 5);
