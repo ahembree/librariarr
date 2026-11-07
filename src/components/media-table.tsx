@@ -40,6 +40,8 @@ import { formatFileSize, formatDuration, formatDate, formatDateOnly, formatChann
 import { formatEpisodeCode } from "@/lib/media/display-title";
 import { intentHandlers } from "@/lib/intent-prefetch";
 import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
+import { rowSurfaceClass, type RowTone } from "@/lib/table-row-surface";
+import { RowToneChip } from "@/components/row-tone-chip";
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -64,12 +66,12 @@ interface MediaTableProps<T extends MediaListItem = MediaListItem> {
   /** Hide the servers column (e.g. when only one server is connected) */
   hideServers?: boolean;
   /**
-   * Optional callback to add extra CSS classes to a row based on the item.
-   * A row given classes here drops the zebra stripe: `even:` outranks a plain
-   * background class, so a striped row would lose its highlight fill and a run
-   * of highlighted rows would alternate.
+   * Marks a row added or removed (the rule editor's preview diff). The table
+   * draws the tone itself (`rowSurfaceClass`): the fill replaces the zebra
+   * stripe, survives hover, and a "New"/"Removed" chip leads the title so the
+   * state never rests on colour alone.
    */
-  rowClassName?: (item: T) => string | undefined;
+  rowTone?: (item: T) => RowTone | undefined;
   /** Optional render function for hover popover content on each row */
   renderHoverContent?: (item: T) => React.ReactNode;
 }
@@ -417,7 +419,7 @@ const VIDEO_COLUMN_IDS = new Set([
   "aspectRatio",
 ]);
 
-function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
+function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowTone, renderHoverContent }: MediaTableProps<T>) {
   const allColumns = useMemo(() => buildColumns(), []);
   // Inside the shell the saved columns are the settings store's: the layout
   // seeded it, so the table opens with them (fetched after mount, it drew the
@@ -736,9 +738,11 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                     const item = items[virtualRow.index];
                     const epLabel = formatEpisodeLabel(item, isMusic);
                     const hoverContent = renderHoverContent?.(item);
+                    const tone = rowTone?.(item);
 
                     const titleContent = (
                       <span className="inline-flex items-center gap-1.5">
+                        {tone && <RowToneChip tone={tone} />}
                         {exceptedItemIds?.has(item.id) && (
                           <TooltipProvider>
                             <Tooltip>
@@ -764,7 +768,6 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                       </span>
                     );
 
-                    const highlightClass = rowClassName?.(item);
                     const tableRow = (
                       <TableRow
                         data-index={virtualRow.index}
@@ -772,7 +775,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                         // A row opens its item — a detail page or the side
                         // panel — and both read the item's record by this id.
                         {...intentHandlers(() => prefetchMediaRecord(item.id))}
-                        className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 hover:ring-1 hover:ring-primary/20 ${highlightClass || "even:bg-white/1.5"}`}
+                        className={rowSurfaceClass({ index: virtualRow.index, tone, interactive: true })}
                       >
                         {/* Title cell - always shown */}
                         <TableCell className="font-medium overflow-hidden text-ellipsis">

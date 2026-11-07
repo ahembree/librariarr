@@ -27,6 +27,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { rowSurfaceClass } from "@/lib/table-row-surface";
 import type { MediaItemWithRelations } from "@/lib/types";
 import {
   ChevronDown,
@@ -316,7 +317,7 @@ function MatchItemsTableView({
               <tr
                 ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
-                className="transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 cursor-pointer"
+                className={cn(rowSurfaceClass({ index: virtualRow.index, interactive: true }), "transition-all hover:shadow-md hover:shadow-primary/10")}
                 style={{
                   position: "absolute",
                   top: 0,

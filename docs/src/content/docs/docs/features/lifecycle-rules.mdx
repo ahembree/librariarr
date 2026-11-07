@@ -434,7 +434,7 @@ The [Rule Set Library](/docs/guides/rule-set-library/) has ready-made rule sets 
 Before executing any actions, use the **Preview** feature to see which media items match your rules:
 
 - Shows a count of matching items, in a card or table view
-- On an existing rule set, marks each item as **new**, **retained** or **removed** compared with its current matches
+- On an existing rule set, marks each item as **new**, **retained** or **removed** compared with its current matches: new items are tinted green and labelled **+ New**, removed ones tinted amber, faded and labelled **− Removed** (in both the table and card views, so the state reads without relying on colour), and the header counts each
 - Runs when you click **Preview** (and **Test Media** checks one item of your choice against the rules)
 - Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
 - Reuses the *arr and Seerr data it fetched for 45 seconds, so **Preview**, **Test Media** and the **Match Changes Preview** of **Save and re-detect**, pressed one after another, share one read of your *arr and Seerr libraries instead of each reading them again. A change made in Sonarr, Radarr, Lidarr or Seerr (a tag added there, say) can therefore take up to 45 seconds to show in a preview. Adding, editing or removing an *arr or Seerr instance in Librariarr discards the kept data at once, and running actions discards the *arr data. Detection and the actions themselves never use it: they always read fresh data.
