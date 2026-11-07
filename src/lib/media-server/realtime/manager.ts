@@ -126,15 +126,38 @@ export class RealtimeManager {
   }
 
   private async runReconcile(): Promise<void> {
+    // What the DB wants. A read that fails says nothing about it, so this pass
+    // changes nothing: tearing down on an unreadable setting stopped every
+    // connection and disposed every debouncer with its pending work —
+    // including library changes just handed back after a refused enqueue — so
+    // a database outage longer than one 60 s tick lost them for good. Only an
+    // explicit `realtimeSync: false`, or a server the list no longer holds
+    // enabled, tears anything down. The next pass reads again.
+    let servers: RealtimeServerConfig[];
     try {
-      const enabled = await this.isRealtimeEnabled();
-      const servers = enabled ? await this.loadServers() : [];
+      servers = (await this.isRealtimeEnabled()) ? await this.loadServers() : [];
+    } catch (error) {
+      logger.warn(
+        "Realtime",
+        `Could not read the realtime setting or the server list — keeping ${this.connections.size} ` +
+          `connection(s) and their pending work as they are; the next reconcile tries again`,
+        { error: String(error) },
+      );
+      return;
+    }
+
+    try {
       const wanted = new Map(servers.map((s) => [s.id, s]));
 
       // Drop connections that are gone, disabled, or whose config changed.
       for (const [id, managed] of this.connections) {
         const want = wanted.get(id);
         if (!want || connectionSignature(want) !== managed.signature) {
+          // Only its connection changed: the library changes it already
+          // reported, and a watch refresh already armed, are still owed —
+          // apply them now rather than cancel them with their debouncers.
+          // They are dropped only for a server that is removed or disabled.
+          if (want) this.flushPendingWork(id);
           managed.conn.stop();
           this.connections.delete(id);
           this.disposeDebouncers(id);
@@ -203,8 +226,9 @@ export class RealtimeManager {
         // ~30s. Leading-edge throttle: immediate on a real change, floored so a
         // server that keeps pushing session frames can't drive it in a loop.
         this.enforcerThrottle.trigger();
-        // Tell the browser too, so the sidebar's stream badge updates on a push
-        // rather than on a 30s poll that round-trips to every media server.
+        // Tell the browser too, so the sidebar's stream badge updates on a push.
+        // Its session poll (round-trips to every media server) is a 5-minute
+        // fallback that runs only while the event stream is not delivering.
         this.getSessionBridge(event.serverId).trigger();
         break;
       case "library-changed":
@@ -229,10 +253,11 @@ export class RealtimeManager {
   /**
    * Forward a media-server connection state change to the browser.
    *
-   * `realtimeBus` is server-side only, so before this the UI could learn a
-   * server had dropped only by watching the sidebar's 30s session poll fail —
-   * a poll that round-trips to every server to find out something this layer
-   * already knew instantly.
+   * `realtimeBus` is server-side only, so without this the UI could learn a
+   * server had dropped only by watching the sidebar's session poll fail — a
+   * 5-minute fallback poll (`useFallbackPoll`, only while the event stream is
+   * not delivering) that round-trips to every server to find out something
+   * this layer already knew instantly.
    *
    * Only emitted on an actual transition. `server-status` can repeat the same
    * state (a reconnect attempt that fails again), and a browser event per
@@ -291,14 +316,34 @@ export class RealtimeManager {
     // contributes nothing rather than escalating the window to a full sync.
     if (changed.length === 0 && removed.length === 0) return false;
 
-    let pending = this.pendingChanges.get(event.serverId);
+    this.addPendingChanges(event.serverId, changed, removed);
+    return true;
+  }
+
+  private addPendingChanges(serverId: string, changed: Iterable<string>, removed: Iterable<string>): void {
+    let pending = this.pendingChanges.get(serverId);
     if (!pending) {
       pending = { changed: new Set(), removed: new Set() };
-      this.pendingChanges.set(event.serverId, pending);
+      this.pendingChanges.set(serverId, pending);
     }
     for (const id of changed) pending.changed.add(id);
     for (const id of removed) pending.removed.add(id);
-    return true;
+  }
+
+  /**
+   * Hand a library sync the queue did not take back to the debouncer.
+   *
+   * `enqueueJob` never throws: a queue or database error comes back as
+   * `false` so the caller can retry, and dropping the batch there lost every
+   * add and delete it named. The ids go back into the accumulator, merged
+   * with any that arrived meanwhile, and the debouncer is re-armed, so the
+   * retry waits a quiet window rather than looping hot. A server removed or
+   * disabled meanwhile is no longer managed and has nothing left to sync.
+   */
+  private requeueLibraryChanges(serverId: string, changedIds: string[], removedIds: string[]): void {
+    if (!this.connections.has(serverId)) return;
+    this.addPendingChanges(serverId, changedIds, removedIds);
+    this.getSyncDebouncer(serverId).trigger();
   }
 
   /**
@@ -350,7 +395,8 @@ export class RealtimeManager {
 
   private flushLibraryChanges(serverId: string): void {
     // Snapshot + clear synchronously so events arriving during the async enqueue
-    // start a fresh accumulator (no lost ids).
+    // start a fresh accumulator (no lost ids). A batch the queue does not take
+    // is merged back into it (`requeueLibraryChanges`).
     const pending = this.pendingChanges.get(serverId);
     this.pendingChanges.delete(serverId);
 
@@ -383,6 +429,7 @@ export class RealtimeManager {
         { jobKey: `sync:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
       ).then((ok) => {
         if (ok) logger.info("Realtime", `Enqueued full sync for server ${label} (${trigger})`);
+        else this.requeueLibraryChanges(serverId, changedIds, removedIds);
       });
       return;
     }
@@ -400,6 +447,8 @@ export class RealtimeManager {
           "Realtime",
           `Enqueued incremental sync for server ${label} (${changedIds.length} changed, ${removedIds.length} removed)`,
         );
+      } else {
+        this.requeueLibraryChanges(serverId, changedIds, removedIds);
       }
     });
   }
@@ -450,6 +499,11 @@ export class RealtimeManager {
                 "Realtime",
                 `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
               );
+            } else if (this.connections.has(serverId)) {
+              // Not queued (a queue or database error): re-arm, so the refresh
+              // is retried after a quiet window instead of lost. Not for a
+              // server removed or disabled meanwhile.
+              this.getWatchDebouncer(serverId).trigger();
             }
           });
         },
@@ -458,6 +512,12 @@ export class RealtimeManager {
       this.watchDebouncers.set(serverId, debouncer);
     }
     return debouncer;
+  }
+
+  /** Fire the server's armed library sync and watch refresh now. */
+  private flushPendingWork(serverId: string): void {
+    this.syncDebouncers.get(serverId)?.flush();
+    this.watchDebouncers.get(serverId)?.flush();
   }
 
   private disposeDebouncers(serverId: string): void {
@@ -473,17 +533,11 @@ export class RealtimeManager {
     this.suppressedSelfWrites.delete(serverId);
   }
 
+  /** Throws when the setting cannot be read — never "disabled" (see `runReconcile`). */
   private async isRealtimeEnabled(): Promise<boolean> {
-    try {
-      const settings = await prisma.appSettings.findFirst({ select: { realtimeSync: true } });
-      // Default on when no settings row exists yet (pre-setup: no servers anyway).
-      return settings?.realtimeSync ?? true;
-    } catch (error) {
-      logger.debug("Realtime", "Could not read realtime setting; treating as disabled", {
-        error: String(error),
-      });
-      return false;
-    }
+    const settings = await prisma.appSettings.findFirst({ select: { realtimeSync: true } });
+    // Default on when no settings row exists yet (pre-setup: no servers anyway).
+    return settings?.realtimeSync ?? true;
   }
 
   private async loadServers(): Promise<RealtimeServerConfig[]> {

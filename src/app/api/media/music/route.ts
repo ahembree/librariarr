@@ -12,6 +12,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
+import { ARTIST_KEY_SQL, UNKNOWN_ARTIST, albumArtistKeySql, albumTitleKeySql } from "@/lib/media/music-sql";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -62,18 +63,15 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // artist, read here (`loadDetailScope`) so the page need not wait for the
   // record. It replaces `parentTitle` and `albumTitle`.
   const itemId = searchParams.get("itemId");
+  let album: { artist: string | null; album: string | null } | null = null;
   if (itemId) {
     const scope = await loadDetailScope(session.userId, itemId, "MUSIC");
     if (!scope) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    // A track with no artist or no album belongs to no album list (the page
-    // listed nothing for one).
-    if (!scope.parentTitle || !scope.albumTitle) {
-      return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
-    }
-    parentTitle = scope.parentTitle;
-    albumTitle = scope.albumTitle;
+    album = { artist: scope.parentTitle, album: scope.albumTitle };
+    parentTitle = null;
+    albumTitle = null;
   }
 
   const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
@@ -88,6 +86,31 @@ const listGet = withSession(async (session, request: NextRequest) => {
 
   if (parentTitle) where.parentTitle = parentTitle;
   if (albumTitle) where.albumTitle = albumTitle;
+  if (album) {
+    // The album as the card that opens this page groups it (`artist::album`,
+    // each lower-cased and trimmed, a missing title in its placeholder group —
+    // see `albumTitleKeySql`), resolved to the stored spellings so the where
+    // stays exact. Matching the record's own spellings listed fewer tracks than
+    // a card merged from "Abbey Road" and "abbey road ", and nothing at all for
+    // the "Unknown Album" card of tracks with no album. The artist is matched
+    // as `ARTIST_KEY_SQL` (plus the NULL artist for "Unknown Artist") — the same
+    // test as `albumArtistKeySql` on both sides, in the form the expression
+    // index on `LOWER(TRIM("parentTitle"))` serves.
+    const spellings = await prisma.$queryRawUnsafe<{ parentTitle: string | null; albumTitle: string | null }[]>(
+      `SELECT DISTINCT mi."parentTitle", mi."albumTitle"
+       FROM "MediaItem" mi
+       JOIN "Library" l ON mi."libraryId" = l.id
+       WHERE mi.type = 'MUSIC'::"LibraryType"
+         AND l."mediaServerId" = ANY($1::text[])
+         AND (${ARTIST_KEY_SQL} = ${albumArtistKeySql(`$2::text`)}
+           OR (mi."parentTitle" IS NULL AND ${albumArtistKeySql(`$2::text`)} = '${UNKNOWN_ARTIST.toLowerCase()}'))
+         AND ${albumTitleKeySql(`mi."albumTitle"`)} = ${albumTitleKeySql(`$3::text`)}`,
+      sf.serverIds,
+      album.artist,
+      album.album,
+    );
+    where.AND = [{ OR: spellings.map((s) => ({ parentTitle: s.parentTitle, albumTitle: s.albumTitle })) }];
+  }
   // `escapeLike`: `search` becomes a LIKE pattern, and nothing else escapes
   // `%` / `_` / `\` — live, `?search=1_ Things` matched "10 Things I Hate
   // About You" and `?search=%` matched everything (see escape-like.ts).

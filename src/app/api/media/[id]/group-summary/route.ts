@@ -5,6 +5,7 @@ import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceForGroup } from "@/lib/dedup/server-presence";
+import { albumTitleKey } from "@/lib/media/music-sql";
 
 type GroupType = "SERIES" | "MUSIC";
 
@@ -213,7 +214,10 @@ async function computeGroupSummary(
       const resLabel = normalizeResolutionLabel(item.resolution);
       qualityCounts[resLabel] = (qualityCounts[resLabel] ?? 0) + 1;
     } else {
-      if (item.albumTitle) albumSet.add(item.albumTitle);
+      // The artist page's album cards, as the artist listing counts them
+      // (`albumTitleKey`): case and surrounding spaces ignored, no album one
+      // "Unknown Album".
+      albumSet.add(albumTitleKey(item.albumTitle));
       const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
       audioCodecCounts[codec] = (audioCodecCounts[codec] ?? 0) + 1;
     }

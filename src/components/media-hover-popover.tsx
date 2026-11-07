@@ -8,7 +8,7 @@ import { qualityChips } from "@/lib/media/quality-chips";
 import { getRatingLabel } from "@/lib/rating-labels";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import { QualityChips } from "@/components/quality-chips";
 import { ColorChip } from "@/components/color-chip";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";

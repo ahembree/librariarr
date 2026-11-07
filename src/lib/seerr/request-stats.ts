@@ -14,8 +14,56 @@ import {
 import { appCache } from "@/lib/cache/memory-cache";
 import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { invalidateSeerrMetadataCache } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
+import { completedPlaySql } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
+
+/** One account's completed play of one title, by the title's dedupKey. */
+export interface CompletedPlayPair {
+  serverUsername: string;
+  dedupKey: string;
+}
+
+/**
+ * Which of `usernames` completed a play of an item whose `dedupKey` is in
+ * `dedupKeys`: one row per (account, dedupKey), so every copy of a title on
+ * every server counts. Shared by the request stats and the requester
+ * drill-down, which must agree.
+ *
+ * Raw SQL with the keys as ONE array parameter (`= ANY($1::text[])`): the list
+ * is every requested episode of every requested show, as long as the library.
+ * As a Prisma `in` inside the WatchHistory -> MediaItem relation filter it went
+ * out as ~32,766 bind parameters per statement, and under some planner
+ * statistics Postgres compared every row against that whole list (over 15 s
+ * for one dashboard load at 33k requested episodes). The completed-play
+ * predicate is the shared one (`completedPlaySql`).
+ */
+export async function completedPlaysByDedupKey(options: {
+  dedupKeys: string[];
+  usernames: string[];
+  type?: "MOVIE" | "SERIES";
+  episodesOnly?: boolean;
+}): Promise<CompletedPlayPair[]> {
+  const { dedupKeys, usernames, type, episodesOnly } = options;
+  if (dedupKeys.length === 0 || usernames.length === 0) return [];
+  const params: unknown[] = [dedupKeys, usernames];
+  const conditions = [
+    `mi."dedupKey" = ANY($1::text[])`,
+    `wh."serverUsername" = ANY($2::text[])`,
+    completedPlaySql("wh"),
+  ];
+  if (type) {
+    params.push(type);
+    conditions.push(`mi."type" = $${params.length}::"LibraryType"`);
+  }
+  if (episodesOnly) conditions.push(`mi."episodeNumber" IS NOT NULL`);
+  return prisma.$queryRawUnsafe<CompletedPlayPair[]>(
+    `SELECT DISTINCT wh."serverUsername" AS "serverUsername", mi."dedupKey" AS "dedupKey"
+       FROM "WatchHistory" wh
+       JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"
+      WHERE ${conditions.join(" AND ")}`,
+    ...params,
+  );
+}
 
 const STATS_TTL_MS = 60_000;
 const STATS_CACHE_KEY = "seerr-request-stats";
@@ -372,23 +420,13 @@ async function buildWatchMaps(
         tmdbByDedupKey.set(k, tmdb);
       }
     }
-    const rows = await prisma.watchHistory.findMany({
-      where: {
-        ...COMPLETED_PLAY_FILTER,
-        serverUsername: { in: usernameList },
-        mediaItem: {
-          type: "MOVIE",
-          dedupKey: { in: Array.from(movieDedupKeys) },
-        },
-      },
-      select: {
-        serverUsername: true,
-        mediaItem: { select: { dedupKey: true } },
-      },
+    const rows = await completedPlaysByDedupKey({
+      dedupKeys: Array.from(movieDedupKeys),
+      usernames: usernameList,
+      type: "MOVIE",
     });
     for (const row of rows) {
-      const dk = row.mediaItem.dedupKey;
-      if (!dk) continue;
+      const dk = row.dedupKey;
       const tmdb = tmdbByDedupKey.get(dk);
       if (tmdb == null) continue;
       let set = watchedMoviesByUser.get(row.serverUsername);
@@ -405,24 +443,14 @@ async function buildWatchMaps(
     for (const show of shows.shows.values()) {
       for (const ep of show.episodes) if (ep.dedupKey) showByDedupKey.set(ep.dedupKey, show.seriesKey);
     }
-    const rows = showByDedupKey.size === 0 ? [] : await prisma.watchHistory.findMany({
-      where: {
-        ...COMPLETED_PLAY_FILTER,
-        serverUsername: { in: usernameList },
-        mediaItem: {
-          type: "SERIES",
-          episodeNumber: { not: null },
-          dedupKey: { in: Array.from(showByDedupKey.keys()) },
-        },
-      },
-      select: {
-        serverUsername: true,
-        mediaItem: { select: { dedupKey: true } },
-      },
+    const rows = showByDedupKey.size === 0 ? [] : await completedPlaysByDedupKey({
+      dedupKeys: Array.from(showByDedupKey.keys()),
+      usernames: usernameList,
+      type: "SERIES",
+      episodesOnly: true,
     });
     for (const row of rows) {
-      const dk = row.mediaItem.dedupKey;
-      if (!dk) continue;
+      const dk = row.dedupKey;
       const seriesKey = showByDedupKey.get(dk);
       if (seriesKey == null) continue;
       let perUser = watchedEpisodesByUser.get(row.serverUsername);

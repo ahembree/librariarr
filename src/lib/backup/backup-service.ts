@@ -5,7 +5,11 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
-import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import {
+  invalidateServersWithoutWatchHistory,
+  restartTracearrBackfillWithoutPlays,
+} from "@/lib/media/watch-evidence";
+import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
 import { compareSemver } from "@/lib/version/semver";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
@@ -279,6 +283,9 @@ export async function restoreBackup(
 
   logger.info("Backup", `Restoring from backup: ${filename}`);
 
+  /** Tracearr-mapped servers whose archive walk the restore restarted. */
+  let tracearrRestarted = 0;
+
   // Wrap truncate + insert in a transaction so a mid-restore failure rolls back cleanly
   await prisma.$transaction(async (tx) => {
     // The highest session version in use, read before the rows are dropped —
@@ -364,23 +371,51 @@ export async function restoreBackup(
           });
         }
       } catch (error) {
-        logger.error("Backup", `Failed to restore table ${table}`, { error: String(error) });
-        throw new Error(`Failed to restore table ${table}: ${error instanceof Error ? error.message : String(error)}`);
+        // Never the error's own message: see `describeRestoreInsertError`.
+        const message = `Failed to restore table ${table}: ${describeRestoreInsertError(error, table)}`;
+        logger.error("Backup", message);
+        throw new Error(message);
       }
 
       // Force GC after large tables to reclaim row arrays
       if (rows.length > 1000) global.gc?.();
     }
+
+    // Every `MediaServer` row came back verbatim, Tracearr walk state included,
+    // but its plays only if the file held them — and a config-only backup holds
+    // none. A row saved part-way through the server's first archive walk then
+    // carries a cursor deep in the archive over no rows: the next slice resumes
+    // there and never reads the newer stretch again, and with no rows the
+    // forward pass has nothing to catch up from. So a mapped server left with
+    // no Tracearr plays walks again from the newest one. In this transaction,
+    // not after it: a crash in between would strand that state for good, and a
+    // backfill slice that read it in between and stored a page would leave the
+    // server holding rows, and so never restarted.
+    tracearrRestarted = await restartTracearrBackfillWithoutPlays(tx);
   }, { timeout: 300000 }); // 5 min timeout for large restores
+
+  if (tracearrRestarted > 0) {
+    logger.info(
+      "Backup",
+      `Restarted the Tracearr history import of ${tracearrRestarted} media server(s) ` +
+        `the restore left without Tracearr plays — the next walk starts from the newest play`,
+    );
+  }
+
+  // A full backup from an earlier version brings its media rows back with the
+  // keys of that version — a track's dedupKey without the album, say — and
+  // the startup repair has already run in this process, so nothing else would
+  // re-key them before the next restart. The same repair, now. It never
+  // throws: whatever it cannot finish is resumed at the next start.
+  onProgress?.({ phase: "restore", message: "Updating media keys..." });
+  await runBackfillIfNeeded();
 
   // Restore TRUNCATEs every table in `TABLE_ORDER` — `MediaItem` and
   // `WatchHistory` included — and then re-inserts only what the file actually
   // holds. A config-only backup holds neither, so it empties both and refills
   // neither: the media comes back on the next sync, and so does the history —
-  // native history is re-fetched, and a Tracearr server's row, restored
-  // verbatim with `tracearrBackfillComplete` still true, is recognised by the
-  // importer as "complete with no rows", which resets that state and walks the
-  // archive again.
+  // native history is re-fetched, and a Tracearr server's archive walk was
+  // restarted above.
   //
   // An empty `WatchHistory` reads as "nobody watched anything", so without this
   // the first detection run after a restore-plus-resync matches the WHOLE
@@ -545,6 +580,47 @@ function knownFieldsFor(table: string): Set<string> | null {
   return fields;
 }
 const knownFieldCache = new Map<string, Set<string> | null>();
+
+/**
+ * What a failed restore insert may say about itself, in the log and in the
+ * restore's NDJSON. Never the error's message: a Prisma validation error
+ * renders the whole `createMany` argument — up to a batch of rows, every
+ * column, so the Plex token, password hash, OIDC client secret and Discord
+ * webhook among them — and `sanitizeErrorDetail` strips none of it; a
+ * database error can quote a value too. What it does say: the error's class,
+ * its Prisma code, and the names its last line quotes in backticks that are
+ * this table's own columns, or constraints named from them (`User_pkey`,
+ * `AppSettings_userId_fkey`) — checked against the schema, so a value from a
+ * row can never pass for one.
+ */
+function describeRestoreInsertError(error: unknown, table: string): string {
+  const errorClass = error instanceof Error && /^\w{1,64}$/.test(error.name) ? error.name : "UnknownError";
+  const code =
+    error instanceof Prisma.PrismaClientKnownRequestError && /^P\d{4}$/.test(error.code) ? error.code : null;
+
+  const columns = knownFieldsFor(table) ?? new Set<string>();
+  const dbName = tableToDbName(table);
+  const isSchemaName = (name: string) => {
+    if (columns.has(name)) return true;
+    const constraint = name.match(/^([A-Za-z0-9]+)_(?:(.+)_)?(pkey|fkey|key)$/);
+    if (!constraint || constraint[1] !== dbName) return false;
+    const parts = constraint[2]?.split("_") ?? [];
+    return constraint[3] === "pkey" ? parts.length === 0 : parts.length > 0 && parts.every((part) => columns.has(part));
+  };
+  const lastLine = (error instanceof Error ? error.message : "").trimEnd().split("\n").pop() ?? "";
+  const names = [...new Set([...lastLine.matchAll(/`(\w{1,64})`/g)].map((match) => match[1]))]
+    .filter(isSchemaName)
+    .slice(0, 5);
+
+  const what =
+    error instanceof Prisma.PrismaClientValidationError
+      ? "a row in the backup does not match the current schema"
+      : error instanceof Prisma.PrismaClientKnownRequestError
+        ? "the database refused a row"
+        : "the insert failed";
+  const detail = [code ? `${errorClass} ${code}` : errorClass, ...names.map((name) => `\`${name}\``)].join(", ");
+  return `${what} (${detail})`;
+}
 
 /** Columns already reported as dropped, so one restore logs each table once. */
 const droppedFieldsReported = new Set<string>();

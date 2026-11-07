@@ -114,7 +114,7 @@ The preroll enforcer checks every 30 seconds:
 
 1. Evaluates which preroll schedules are currently active
 2. Selects the highest-priority active schedule
-3. Sets that schedule's preroll path on the media server
+3. Sets that schedule's preroll path on every enabled Plex server — including one added or turned back on while the schedule is active
 4. When no schedule is active, clears the preroll — including when no enabled schedule remains (the last one was deleted or turned off) after it had set one
 
 The **Active** badge on the Preroll page uses the same rules, so it shows exactly the schedules the enforcer is applying.

@@ -5,6 +5,7 @@ import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
 import { serverSyncSchema, validateOptionalRequest } from "@/lib/validation";
+import { closeDeadSyncJobs } from "@/lib/sync/cleanup-orphaned-syncs";
 
 export const POST = withSession(async (
   session,
@@ -69,6 +70,10 @@ export const POST = withSession(async (
   // the first row was left PENDING with nothing to claim it — answering 409
   // here and shrinking every Tracearr backfill slice to one page until a
   // scheduled sync happened to adopt it.
+  //
+  // A RUNNING row whose run has died (its terminal write threw) is closed
+  // first; counted as active, it answered 409 here until a restart.
+  await closeDeadSyncJobs(server.id);
   const syncJob = await prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,

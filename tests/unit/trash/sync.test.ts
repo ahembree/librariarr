@@ -55,8 +55,9 @@ const CATALOG = {
 vi.mock("@/lib/trash/catalog", () => ({ fetchTrashCatalog: vi.fn(async () => CATALOG) }));
 
 import { runTrashSync } from "@/lib/trash/sync";
+import { trashCfToArr, buildQualityProfile } from "@/lib/trash/translate";
 import { trashCfHash } from "@/lib/trash/signature";
-import type { TrashCustomFormat } from "@/lib/trash/types";
+import type { ArrQualityProfileSchema, TrashCustomFormat } from "@/lib/trash/types";
 
 const INST = { serviceType: "RADARR" as const, id: "r1", name: "R", url: "http://r", apiKey: "k", enabled: true };
 
@@ -91,8 +92,9 @@ describe("runTrashSync", () => {
   });
 
   it("a per-item preview finds a renamed managed item by its recorded id, as the apply does", async () => {
+    // The row last synced id 42 as "Amazon (old name)"; the guide has renamed it since.
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
-      { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null, arrId: 42 },
+      { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "Amazon (old name)", selection: null, arrId: 42 },
     ]);
     clientMock.getCustomFormats.mockResolvedValue([{ id: 42, name: "Amazon (old name)", specifications: [] }]);
     const report = await runTrashSync("u1", INST, {
@@ -135,6 +137,8 @@ describe("runTrashSync", () => {
       where: { id: "row1", userId: "u1" },
       data: {
         arrId: 500,
+        // The name the app's copy now carries, which identifies it at that id later.
+        name: "AMZN",
         lastSyncHash: trashCfHash(CATALOG.customFormats[0] as TrashCustomFormat),
         lastSyncedAt: expect.any(Date),
       },
@@ -247,8 +251,9 @@ describe("runTrashSync", () => {
   });
 
   it("finds a managed custom format renamed upstream by its recorded id instead of creating a duplicate", async () => {
+    // The row last synced id 42 as "Amazon (old name)"; the guide has renamed it since.
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
-      { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null, arrId: 42 },
+      { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "Amazon (old name)", selection: null, arrId: 42 },
     ]);
     clientMock.getCustomFormats.mockResolvedValue([
       { id: 42, name: "Amazon (old name)", includeCustomFormatWhenRenaming: true, specifications: [] },
@@ -283,13 +288,85 @@ describe("runTrashSync", () => {
     expect(report.items[0].applied).toBe(true);
   });
 
+  describe("a recorded id that names another app's resource", () => {
+    // The instance now reaches another app (or one restored from an older
+    // backup): the format the row recorded as id 1 is absent by name, and id 1
+    // is the user's own format there.
+    const MY_FORMAT = {
+      id: 1,
+      name: "My Release Group",
+      includeCustomFormatWhenRenaming: true,
+      specifications: [
+        { name: "Group", implementation: "ReleaseGroupSpecification", negate: false, required: true, fields: [{ name: "value", value: "^(GRP)$" }] },
+      ],
+    };
+
+    beforeEach(() => {
+      prismaMock.trashManagedResource.findMany.mockResolvedValue([
+        { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null, arrId: 1 },
+      ]);
+      clientMock.getCustomFormats.mockResolvedValue([MY_FORMAT]);
+    });
+
+    it("previews a create, as for a missing format", async () => {
+      for (const items of [undefined, [{ resourceType: "CUSTOM_FORMAT" as const, trashId: "cf1" }]]) {
+        const report = await runTrashSync("u1", INST, { dryRun: true, items });
+        expect(report.items[0].action).toBe("CREATE");
+      }
+    });
+
+    it("applies by creating the guide format, never updating the user's", async () => {
+      const report = await runTrashSync("u1", INST, { dryRun: false });
+      expect(report.items[0]).toMatchObject({ action: "CREATE", applied: true });
+      expect(clientMock.updateCustomFormat).not.toHaveBeenCalled();
+      expect(clientMock.createCustomFormat).toHaveBeenCalledWith(expect.not.objectContaining({ id: expect.anything() }));
+      expect(clientMock.createCustomFormat).toHaveBeenCalledWith(expect.objectContaining({ name: "AMZN" }));
+      expect(prismaMock.trashManagedResource.updateMany.mock.calls[0][0].data).toMatchObject({ arrId: 500, name: "AMZN" });
+    });
+
+    it("still follows the format when the user renamed it in the app and changed nothing else", async () => {
+      const renamed = { ...trashCfToArr(CATALOG.customFormats[0] as TrashCustomFormat, 1), name: "Amazon (mine)" };
+      clientMock.getCustomFormats.mockResolvedValue([renamed]);
+      clientMock.updateCustomFormat.mockResolvedValue({});
+      const report = await runTrashSync("u1", INST, { dryRun: false });
+      expect(report.items[0].action).toBe("UPDATE");
+      expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
+      expect(clientMock.updateCustomFormat).toHaveBeenCalledWith(1, expect.objectContaining({ name: "AMZN" }));
+    });
+
+    it("PROFILE_CF skips rather than scoring another profile at the recorded id", async () => {
+      prismaMock.trashManagedResource.findMany.mockResolvedValue([
+        { id: "pcf", resourceType: "PROFILE_CF", trashId: "HD", name: "HD", arrId: 9, selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] } },
+      ]);
+      clientMock.getQualityProfiles.mockResolvedValue([
+        { id: 9, name: "SD", formatItems: [{ format: 55, name: "AMZN", score: 0 }] },
+      ]);
+      const report = await runTrashSync("u1", INST, { dryRun: false });
+      expect(report.items[0]).toMatchObject({ action: "SKIP", warnings: ['Quality profile "HD" was not found on this instance.'] });
+      expect(clientMock.updateQualityProfile).not.toHaveBeenCalled();
+    });
+
+    it("PROFILE_CF follows a profile renamed in the app that still carries its scores, and records the new name", async () => {
+      prismaMock.trashManagedResource.findMany.mockResolvedValue([
+        { id: "pcf", resourceType: "PROFILE_CF", trashId: "HD", name: "HD", arrId: 9, selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] } },
+      ]);
+      clientMock.getQualityProfiles.mockResolvedValue([
+        { id: 9, name: "HD (mine)", formatItems: [{ format: 55, name: "AMZN", score: 500 }] },
+      ]);
+      const report = await runTrashSync("u1", INST, { dryRun: false });
+      expect(report.items[0]).toMatchObject({ action: "NOOP", applied: true });
+      expect(prismaMock.trashManagedResource.updateMany.mock.calls[0][0].data).toMatchObject({ arrId: 9, name: "HD (mine)" });
+    });
+  });
+
   it("PROFILE_CF resolves format names through the guide and finds a renamed profile by id", async () => {
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
       {
         id: "pcf",
         resourceType: "PROFILE_CF",
         trashId: "Old Profile Name",
-        name: "Old Profile Name",
+        // An earlier sync followed profile 9 through its rename and recorded its new name.
+        name: "New Profile Name",
         arrId: 9,
         // Stored name is stale — the guide calls cf1 "AMZN" now.
         selection: { formats: [{ trashId: "cf1", name: "Amazon", score: 500 }] },
@@ -379,6 +456,55 @@ describe("runTrashSync — quality profiles", () => {
     expect(report.items).toHaveLength(1);
     // The guide would score AMZN 100; the overlay's 7 wins, so nothing changes.
     expect(report.items[0].action).toBe("NOOP");
+  });
+
+  it("creates the guide profile rather than overwriting another profile at a stale recorded id", async () => {
+    rows();
+    // The new app's own profile 3; the managed "HD" is not there by name.
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 3,
+        name: "Any",
+        upgradeAllowed: false,
+        cutoff: 7,
+        minFormatScore: 0,
+        cutoffFormatScore: 0,
+        items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }],
+        formatItems: [
+          { format: 55, name: "AMZN", score: 0 },
+          { format: 56, name: "Mine", score: 0 },
+        ],
+        language: { id: 1, name: "English" },
+      },
+    ]);
+    clientMock.createQualityProfile.mockResolvedValue({ id: 600 });
+    const preview = await runTrashSync("u1", INST, { dryRun: true, items: [{ resourceType: "QUALITY_PROFILE", trashId: "qp1" }] });
+    expect(preview.items[0].action).toBe("CREATE");
+
+    const report = await runTrashSync("u1", INST, { dryRun: false });
+    expect(report.items[0]).toMatchObject({ action: "CREATE", applied: true });
+    expect(clientMock.updateQualityProfile).not.toHaveBeenCalled();
+    expect(clientMock.createQualityProfile).toHaveBeenCalledWith(expect.objectContaining({ name: "HD" }));
+    expect(prismaMock.trashManagedResource.updateMany.mock.calls[0][0].data).toMatchObject({ arrId: 600, name: "HD" });
+  });
+
+  it("follows a profile renamed in the app that is otherwise as the last sync left it", async () => {
+    rows();
+    const { payload } = buildQualityProfile(
+      QP,
+      SCHEMA as unknown as ArrQualityProfileSchema,
+      "RADARR",
+      new Map([["cf1", CATALOG.customFormats[0] as TrashCustomFormat]]),
+      undefined,
+      [{ id: 1, name: "English" }],
+      { resetUnmatchedScores: true },
+    );
+    clientMock.getQualityProfiles.mockResolvedValue([{ ...payload, id: 3, name: "My HD" }]);
+    const report = await runTrashSync("u1", INST, { dryRun: false });
+    expect(report.items[0].action).toBe("UPDATE");
+    expect(report.items[0].diff.map((d) => d.path)).toEqual(["name"]);
+    expect(clientMock.createQualityProfile).not.toHaveBeenCalled();
+    expect(clientMock.updateQualityProfile).toHaveBeenCalledWith(3, expect.objectContaining({ name: "HD" }));
   });
 
   it("does not record the guide hash when a referenced format is missing from the app", async () => {

@@ -1602,10 +1602,23 @@ describe("syncMediaServer claims the row created at request time", () => {
     // was waiting for.
     mockClaimDb({ unclaimed: { id: "route-row", status: "PENDING" } });
 
-    await syncMediaServer("server-1");
+    await syncMediaServer("server-1", undefined, { adoptUnclaimedRow: true });
 
     expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(0);
     expect(runningFlip()?.[3]).toBe("route-row");
+  });
+
+  it("never adopts another request's PENDING row for an inline caller", async () => {
+    // The post-delete re-check calls the sync inline. Taking the user's
+    // Settings Sync row (or a library job's) completed that request before
+    // its own job ran.
+    mockClaimDb({ unclaimed: { id: "route-row", status: "PENDING" } });
+
+    await syncMediaServer("server-1", "1", { trigger: "post-delete" });
+
+    expect(findDbCalls('"status"=\'PENDING\' ORDER BY').length).toBe(0);
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(1);
+    expect(runningFlip()?.[3]).toBe("inserted-job");
   });
 
   it("still runs a retry whose requested row a previous attempt marked FAILED", async () => {
@@ -1616,6 +1629,20 @@ describe("syncMediaServer claims the row created at request time", () => {
     expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(1);
     expect(runningFlip()?.[3]).toBe("inserted-job");
     expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBe(1);
+  });
+
+  it("gives a retry of a FAILED requested row a fresh row even when another is unclaimed", async () => {
+    // The unclaimed row belongs to another job still queued (a library page's
+    // Sync queues one per library); the retry taking it shifted every job's row.
+    mockClaimDb({
+      requested: { id: "route-row", status: "FAILED" },
+      unclaimed: { id: "other-library-row", status: "PENDING" },
+    });
+
+    await syncMediaServer("server-1", "1", { syncJobId: "route-row" });
+
+    expect(findDbCalls('INSERT INTO "SyncJob"').length).toBe(1);
+    expect(runningFlip()?.[3]).toBe("inserted-job");
   });
 
   it("does no work when Stop ends the row between the claim and the RUNNING flip", async () => {

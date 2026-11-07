@@ -76,7 +76,40 @@ describe("executeActionsForItems", () => {
     expect(result.notAttempted).toBe(2);
     // Every item still gets its FAILED history row, carrying the host error.
     expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(3);
-    for (const f of result.failures) expect(f.error).toMatch(/Radarr unreachable/);
+    for (const f of result.failures) expect(f.error).toMatch(/Radarr did not answer in time/);
+  });
+
+  it("stops where beforeEach answers a reason, leaving that item and the rest untouched", async () => {
+    // The rule-set Execute route re-checks before each item that the rule set
+    // is still the version it judged the items under.
+    m.executeAction.mockResolvedValue({});
+    const asked: string[] = [];
+    const beforeEach = vi.fn(async (it: { id: string }) => {
+      asked.push(it.id);
+      return it.id === "m2" ? "The rule set was edited" : null;
+    });
+
+    const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY, undefined, { beforeEach });
+
+    expect(asked).toEqual(["m1", "m2"]);
+    expect(m.executeAction).toHaveBeenCalledTimes(1);
+    expect(m.executeAction.mock.calls[0][0]).toMatchObject({ mediaItem: { id: "m1" } });
+    expect(result).toMatchObject({ executed: 1, failed: 0, stopped: { reason: "The rule set was edited", remaining: 2 } });
+    // Only the item that ran is recorded.
+    expect(m.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(1);
+    expect(m.prisma.lifecycleAction.create.mock.calls[0][0]).toMatchObject({ data: { mediaItemId: "m1", status: "COMPLETED" } });
+  });
+
+  it("runs every item and reports no stop without beforeEach, or while it answers null", async () => {
+    m.executeAction.mockResolvedValue({});
+    const plain = await executeActionsForItems("u1", [item(1), item(2)], CONFIG, new Map(), HISTORY);
+    expect(plain.stopped).toBeUndefined();
+    const checked = await executeActionsForItems("u1", [item(1), item(2)], CONFIG, new Map(), HISTORY, undefined, {
+      beforeEach: async () => null,
+    });
+    expect(checked).toMatchObject({ executed: 2 });
+    expect(checked.stopped).toBeUndefined();
   });
 
   it("keeps going after a write times out — a slow write is not a dead host", async () => {
@@ -92,6 +125,23 @@ describe("executeActionsForItems", () => {
 
     expect(m.executeAction).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({ executed: 2, failed: 1, notAttempted: 0 });
+  });
+
+  it("collects the members each action left alone, listing at most the limit and counting them all", async () => {
+    const { NOT_ACTED_ON_LIMIT } = await import("@/lib/lifecycle/action-report");
+    const many = Array.from({ length: NOT_ACTED_ON_LIMIT + 5 }, (_, i) => ({ title: `E${i}`, reason: "Sonarr has no such episode" }));
+    m.executeAction
+      .mockResolvedValueOnce({ notActedOn: [{ title: "Show S01E01", reason: "file shared" }] })
+      .mockResolvedValueOnce({ notActedOn: many })
+      .mockResolvedValueOnce({});
+
+    const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
+
+    expect(result.executed).toBe(3);
+    expect(result.failed).toBe(0);
+    expect(result.notActedOnCount).toBe(NOT_ACTED_ON_LIMIT + 6);
+    expect(result.notActedOn).toHaveLength(NOT_ACTED_ON_LIMIT);
+    expect(result.notActedOn[0]).toEqual({ title: "Show S01E01", reason: "file shared" });
   });
 
   it("keeps going after an item-specific failure", async () => {
@@ -139,6 +189,25 @@ describe("executeActionsForItems", () => {
       externalIds: [],
     });
     const SERIES_HISTORY = { ruleSetId: null, ruleSetName: "Query", ruleSetType: "SERIES" };
+
+    it("passes a step's share of the item through to the progress", async () => {
+      m.executeAction.mockImplementation(async (_action: unknown, onStep?: (label: string, fraction?: number) => void) => {
+        onStep?.("Delete Files Only (Sonarr) — 25 of 100 files deleted", 0.25);
+        return {};
+      });
+      const seen: Array<{ step: string; fraction?: number }> = [];
+
+      await executeActionsForItems(
+        "u1",
+        [episode(1)],
+        { ...CONFIG, actionType: "DELETE_FILES_SONARR", arrInstanceId: "sonarr-1" },
+        new Map([["ep1", ["ep1"]]]),
+        SERIES_HISTORY,
+        ({ current }) => { if (current) seen.push({ step: current.step, fraction: current.fraction }); },
+      );
+
+      expect(seen).toContainEqual({ step: "Delete Files Only (Sonarr) — 25 of 100 files deleted", fraction: 0.25 });
+    });
 
     it("names a whole-series action by the show in its progress, errors and failures", async () => {
       m.executeAction.mockRejectedValue(new Error("Series not found in Sonarr"));

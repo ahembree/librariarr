@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, syncCancelSchema } from "@/lib/validation";
 import { eventBus } from "@/lib/events/event-bus";
+import { closeDeadSyncJobs } from "@/lib/sync/cleanup-orphaned-syncs";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, syncCancelSchema);
@@ -20,6 +21,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
 
+  // A RUNNING row whose run has died (its terminal write threw) has nothing
+  // left to notice a flag: flagging it, Stop did nothing. End it here
+  // (`closeDeadSyncJobs` announces it); only live runs are flagged below.
+  const closedDead = await closeDeadSyncJobs(serverId);
+
   // Every active row for the server: the library pages' Sync queues behind a
   // running sync, so a server can hold a RUNNING row and a PENDING one at once,
   // and Stop must end both rather than whichever one a lookup returned first.
@@ -32,6 +38,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
   });
 
   if (jobs.length === 0) {
+    if (closedDead > 0) return NextResponse.json({ success: true });
     return NextResponse.json({ error: "No active sync to cancel" }, { status: 404 });
   }
 

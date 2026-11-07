@@ -6,7 +6,11 @@ import { apiLogger } from "@/lib/logger";
 import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
-import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
+import {
+  hasForwardAuthSecret,
+  isForwardAuthCredentialHeader,
+  FORWARD_AUTH_PROXY_HEADER,
+} from "@/lib/sso/forward-secret";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
@@ -56,6 +60,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login?sso_error=untrusted_proxy", baseUrl));
   }
 
+  // A header the proxy uses for credentials is never read (forward-secret.ts).
+  // The settings schema refuses one; this covers a value stored before that
+  // or restored from a backup. As the subject it would also be logged below.
+  if (isForwardAuthCredentialHeader(settings.forwardAuthUserHeader)) {
+    apiLogger.warn(
+      "Auth",
+      "Forward-auth login refused: the configured user header is one that carries a credential",
+    );
+    return NextResponse.redirect(new URL("/login?sso_error=sso_not_configured", baseUrl));
+  }
+
   const rawSubject = request.headers.get(settings.forwardAuthUserHeader);
   // Trim — proxies that emit `Remote-User: alice ` (trailing space) would
   // otherwise fail to match the stored ssoSubject="alice".
@@ -101,9 +116,13 @@ export async function GET(request: NextRequest) {
   // sanitizer (rejects control chars, oversize values, bogus emails) —
   // these headers come from an external trust boundary and a hostile or
   // misconfigured proxy could otherwise write log-injecting strings or
-  // multi-MB blobs into the User row.
-  const email = sanitizeEmail(request.headers.get(settings.forwardAuthEmailHeader));
-  const name = sanitizeUsername(request.headers.get(settings.forwardAuthNameHeader));
+  // multi-MB blobs into the User row. A setting that names a credential
+  // header is skipped: the account's username and email are read back by
+  // any signed-in session.
+  const claim = (header: string) =>
+    isForwardAuthCredentialHeader(header) ? null : request.headers.get(header);
+  const email = sanitizeEmail(claim(settings.forwardAuthEmailHeader));
+  const name = sanitizeUsername(claim(settings.forwardAuthNameHeader));
   const updateData: { email?: string; username?: string } = {};
   if (email && email !== user.email) updateData.email = email;
   if (name && name !== user.username) updateData.username = name;

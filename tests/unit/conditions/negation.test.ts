@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { buildGroupConditions } from "@/lib/conditions/group-composition";
+import { ruleToWhere } from "@/lib/conditions/where-builder";
 import { evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
 import type { Condition, ConditionGroup } from "@/lib/conditions/types";
 
@@ -121,8 +122,8 @@ describe("pushDownGroupNegation — structure", () => {
     expect(g.groups[0].rules[0].negate).toBe(true);
   });
 
-  it("maps stream-query NOT onto the quantifier (any ↔ none), leaving 'all' alone", () => {
-    const sq = (quantifier: "any" | "none" | "all" | undefined) =>
+  it("maps stream-query NOT onto the quantifier (any ↔ none)", () => {
+    const sq = (quantifier: "any" | "none" | undefined) =>
       pushDownGroupNegation([
         makeGroup([makeRule({ field: "sqCodec", operator: "equals", value: "aac" })], {
           negate: true,
@@ -132,9 +133,79 @@ describe("pushDownGroupNegation — structure", () => {
     expect(sq("any").streamQuery?.quantifier).toBe("none");
     expect(sq(undefined).streamQuery?.quantifier).toBe("none"); // default is "any"
     expect(sq("none").streamQuery?.quantifier).toBe("any");
-    expect(sq("all").streamQuery?.quantifier).toBe("all");
-    // rules inside stream queries are never flipped by group NOT
+    // rules inside an any/none stream query are never flipped by group NOT
     expect(sq("any").rules[0].negate).toBeFalsy();
+  });
+
+  // NOT all(r1 AND r2) = some stream fails r1 or r2 = any(¬r1) OR any(¬r2).
+  // The NOT used to be dropped, leaving all(r1 AND r2).
+  it("rewrites a negated 'all' stream query as an OR of single-rule 'any' queries, each rule negated", () => {
+    const [g] = pushDownGroupNegation([
+      makeGroup(
+        [
+          makeRule({ id: "lang", field: "sqLanguage", operator: "equals", value: "English" }),
+          makeRule({ id: "codec", field: "sqCodec", operator: "equals", value: "aac", negate: true }),
+          makeRule({ id: "off", field: "sqChannels", operator: "equals", value: "2", enabled: false }),
+        ],
+        { id: "sq", negate: true, condition: "OR", streamQuery: { streamType: "audio", quantifier: "all" } },
+      ),
+    ]);
+    expect(g.negate).toBeFalsy();
+    expect(g.streamQuery).toBeUndefined();
+    expect(g.condition).toBe("OR"); // its own connective to its siblings is kept
+    expect(g.rules).toEqual([]);
+    expect(g.groups.map((b) => [b.condition, b.streamQuery, b.rules.map((r) => [r.id, r.negate])])).toEqual([
+      ["AND", { streamType: "audio", quantifier: "any" }, [["lang", true]]],
+      ["OR", { streamType: "audio", quantifier: "any" }, [["codec", false]]],
+    ]);
+    expect(g.groups.every((b) => !b.negate)).toBe(true);
+  });
+
+  it("leaves a negated 'all' stream query with no enabled rule matching nothing", () => {
+    const [g] = pushDownGroupNegation([
+      makeGroup([makeRule({ field: "sqCodec", operator: "equals", value: "aac", enabled: false })], {
+        negate: true,
+        streamQuery: { streamType: "audio", quantifier: "all" },
+      }),
+    ]);
+    expect(g.negate).toBeFalsy();
+    expect(g.streamQuery?.quantifier).toBe("all");
+    expect(evaluateAllRulesInMemory([g], { streams: [{ streamType: 2, codec: "dts" }] })).toBe(false);
+  });
+
+  it("negates an 'all' stream query nested in a NOT group exactly in both phases", () => {
+    // NOT (playCount = 0 AND all audio codec = aac)
+    const groups = [
+      makeGroup([makeRule({ field: "playCount", operator: "equals", value: "0" })], {
+        negate: true,
+        groups: [
+          makeGroup([makeRule({ field: "sqCodec", operator: "equals", value: "aac" })], {
+            streamQuery: { streamType: "audio", quantifier: "all" },
+          }),
+        ],
+      }),
+    ];
+    const aac = { playCount: 0, streams: [{ streamType: 2, codec: "aac" }] };
+    const dts = { playCount: 0, streams: [{ streamType: 2, codec: "aac" }, { streamType: 2, codec: "dts" }] };
+    const silent = { playCount: 0, streams: [] };
+    expect(evaluateAllRulesInMemory(groups, aac)).toBe(false);
+    expect(evaluateAllRulesInMemory(groups, dts)).toBe(true);
+    // No audio stream: no stream fails the rule, so NOT all matches nothing here.
+    expect(evaluateAllRulesInMemory(groups, silent)).toBe(false);
+    // Phase 1: NOT playCount = 0, OR some audio stream whose codec is not aac.
+    expect(buildGroupConditions(groups, ruleToWhere)).toEqual({
+      OR: [
+        { NOT: { playCount: 0 } },
+        {
+          streams: {
+            some: {
+              streamType: 2,
+              AND: [{ OR: [{ codec: null }, { NOT: { codec: { equals: "aac", mode: "insensitive" } } }] }],
+            },
+          },
+        },
+      ],
+    });
   });
 
   it("preserves enabled flags and ids", () => {

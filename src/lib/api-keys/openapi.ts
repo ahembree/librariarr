@@ -298,7 +298,18 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:read",
     tag: "Lifecycle",
     summary: "Actions by status",
-    description: `A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
+    description:
+      `Grouped by rule set. A series action's \`mediaItem.title\` is the show, or \`<Show> SxxExx\` when it acts on a single episode, and its \`parentTitle\` is null. ` +
+      `Each group's \`ruleSet.actionsHeldSince\` is the time its rules, servers or sticky matches were changed, or it was enabled again, while its actions wait for the next detection run ` +
+      `to re-check its matches (executing or retrying one answers 409 until then), and null otherwise. ` +
+      `Its \`ruleSet.scopeHoldReason\` is set, a sentence, while its actions are held because it uses per-episode or per-track criteria ` +
+      `with series or artist scope on, or follows them with an action on the whole show or artist (Delete from Sonarr or Lidarr, ` +
+      `Change Quality Profile, Arr tags, …) with the scope off (executing or retrying one answers 409 with that reason until the rule ` +
+      `set is edited), and null otherwise. ` +
+      `Its \`ruleSet.wholeSeasons\` is true when its Sonarr Unmonitor (Only, or & Delete Files) acts on the matched episodes on ` +
+      `criteria that decide per season (Season Number or Seasons Behind Latest), so a season every episode of which in the library ` +
+      `matched is unmonitored whole, the episodes the library does not hold included. ` +
+      `Each action's \`error\` is redacted of internal addresses and paths, and the owner is omitted. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.`,
     query: [{ name: "status", description: "Which actions.", schema: { type: "string", enum: ["PENDING", "COMPLETED", "FAILED", "ALL"], default: "PENDING" } }],
   },
   {
@@ -376,9 +387,14 @@ export const API_OPERATIONS: readonly Operation[] = [
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
       `Listed items that are not current matches, or are protected by an exception, are skipped and the rest run — compare ` +
       `\`executed\` + \`failed\` with what you sent (400 when nothing is left). Refused whole — nothing runs — when an item changed ` +
-      `identity since it matched (409: run detection again), or when a limit would be exceeded. A call naming an item that ` +
+      `identity since it matched, or the rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected (409: run ` +
+      `detection again), or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows ` +
+      `them with an action on the whole show or artist with the scope off (409: edit the rule set), or when a limit would be ` +
+      `exceeded. A call naming an item that ` +
       `another execution of the same rule set is acting on right now is refused (409) rather than repeating the deletion; ` +
-      `calls naming different items run side by side.`,
+      `calls naming different items run side by side. The answer lists \`failures\` (each failed item's \`title\` and \`error\`) ` +
+      `and \`notActedOn\` (each episode or track an action that ran left alone, with its \`title\` and \`reason\`; at most 200, ` +
+      `\`notActedOnCount\` counts them all).`,
     body: {
       description: "",
       required: true,
@@ -390,9 +406,9 @@ export const API_OPERATIONS: readonly Operation[] = [
       },
     },
     responses: {
-      "200": "`{ executed, failed, errors }`",
+      "200": "`{ executed, failed, errors, stopped? }` — `stopped`, a sentence, when the rule set was edited or held while the items ran: the items not yet reached were left untouched",
       "404": "No such rule set",
-      "409": "Another execution of this rule set is acting on one of the named items, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
+      "409": "Another execution of this rule set is acting on one of the named items, an item changed identity since it matched (a re-match on the media server), the rule set was edited (its rules, servers or sticky matches) or enabled again since its matches were detected, or the rule set uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off, or the rule set was edited before the first item ran; nothing was executed",
       "429": BUDGET_429,
     },
   },

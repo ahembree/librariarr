@@ -1,6 +1,12 @@
 import { prisma } from "@/lib/db";
 
 /**
+ * The client a helper below writes through: the shared one, or a transaction's
+ * — restore restarts the Tracearr walks inside its own transaction.
+ */
+type MediaServerDb = Pick<typeof prisma, "mediaServer">;
+
+/**
  * The write half of `MediaServer.watchHistorySyncedAt` — the marker recording
  * whether a server's play history has been ESTABLISHED. Its read half is
  * `checkWatchHistoryCompleteness` in `lifecycle/evaluability.ts`, which refuses
@@ -78,23 +84,68 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  * Restart the Tracearr archive walk for these servers from the newest play.
  *
  * The companion to `invalidateWatchHistoryEvidence` for a Tracearr-mapped
- * server, called from the same bulk-destruction paths. Destroying a server's
- * rows does not touch `tracearrBackfillComplete`, and once that is true only the
- * one-hour forward pass runs — so the purged items' plays, which Tracearr still
- * holds, were never imported again and the items read as never watched.
+ * server, called from the same bulk-destruction paths (restore through
+ * `restartTracearrBackfillWithoutPlays`). Destroying a server's rows does not
+ * touch `tracearrBackfillComplete`, and once that is true only the one-hour
+ * forward pass runs — so the purged items' plays, which Tracearr still holds,
+ * were never imported again and the items read as never watched.
  *
  * Moving the resume cursor to now (rather than clearing it) is what restarts
  * the walk from the top while other rows remain: with no cursor the walk
  * resumes below the OLDEST stored row, which after a partial purge is the far
  * end of the archive. It also makes a backfill slice that is running right now
  * discard its own progress write, which expects the cursor it started with.
- * Servers with no Tracearr mapping are untouched.
+ * An unfinished forward window is cleared with it: the restarted walk reads
+ * everything older than now, which covers it. Servers with no Tracearr mapping
+ * are untouched.
  */
-export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
+export async function restartTracearrBackfill(
+  serverIds: string[],
+  db: MediaServerDb = prisma,
+): Promise<number> {
   if (serverIds.length === 0) return 0;
-  const { count } = await prisma.mediaServer.updateMany({
+  const { count } = await db.mediaServer.updateMany({
     where: { id: { in: serverIds }, tracearrServerId: { not: null } },
-    data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: new Date() },
+    data: {
+      tracearrBackfillComplete: false,
+      tracearrBackfillCursorAt: new Date(),
+      tracearrForwardResumeAt: null,
+    },
   });
   return count;
+}
+
+/**
+ * Restart the Tracearr import of every mapped server that holds no Tracearr
+ * plays.
+ *
+ * For restore, which brings each `MediaServer` row back verbatim — its walk
+ * state included — but its plays only when the file holds them (a config-only
+ * backup never does). A row saved part-way through the server's first archive
+ * walk comes back with `tracearrBackfillComplete` false and a cursor deep in
+ * the archive over no rows: the next slice resumes at that cursor and never
+ * reads the newer stretch again, and with no rows the forward pass has no
+ * watermark to catch up from either. A row saved after the walk finished comes
+ * back "complete" over nothing. Either way the state describes rows that are
+ * not there, so the walk starts again from the newest play.
+ *
+ * Asked of the rows, like `invalidateServersWithoutWatchHistory`, and of
+ * TRACEARR rows only: a server whose restored history holds them keeps its
+ * state, which was saved alongside them, while NATIVE rows say nothing about
+ * how far a Tracearr walk got. Takes the restore's transaction so the restored
+ * state is never visible un-restarted: a crash before a later restart would
+ * strand it for good, and a slice that read it and stored a page would leave
+ * the server holding rows, and so never restarted.
+ */
+export async function restartTracearrBackfillWithoutPlays(
+  db: MediaServerDb = prisma,
+): Promise<number> {
+  const servers = await db.mediaServer.findMany({
+    where: { tracearrServerId: { not: null }, watchHistory: { none: { source: "TRACEARR" } } },
+    select: { id: true },
+  });
+  return restartTracearrBackfill(
+    servers.map((s) => s.id),
+    db,
+  );
 }

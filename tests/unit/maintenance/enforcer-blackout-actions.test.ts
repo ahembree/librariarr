@@ -379,7 +379,7 @@ describe("maintenance loop edge cases", () => {
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores a tick that starts while one is still running", async () => {
+  it("does not overlap a tick that starts while one is still running; it runs once the first ends", async () => {
     let release!: (v: never[]) => void;
     vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
     const first = runEnforcerTick();
@@ -387,6 +387,47 @@ describe("maintenance loop edge cases", () => {
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
     release([]);
     await first;
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("acts on a stream that starts mid-pass in a catch-up pass, coalescing every request into one", async () => {
+    // A realtime session-changed landing while a pass runs used to be dropped,
+    // so a stream that pass had not seen played on until the next 30 s tick.
+    setBlackouts([blackout({ excludedUsers: [] })]);
+    let release!: (v: never[]) => void;
+    const getSessions = vi
+      .fn()
+      .mockReturnValueOnce(new Promise((r) => (release = r)))
+      .mockResolvedValue([session("late")]);
+    const c = client({ getSessions });
+
+    const first = runEnforcerTick();
+    await vi.waitFor(() => expect(getSessions).toHaveBeenCalledTimes(1));
+    // The new stream's session-changed (and two more frames) arrive mid-pass.
+    await runEnforcerTick();
+    await runEnforcerTick();
+    await runEnforcerTick();
+    release([]);
+    await first;
+
+    expect(getSessions).toHaveBeenCalledTimes(2);
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("late", DEFAULT_BLACKOUT_MSG);
+
+    // Nothing left owed: the next tick is an ordinary single pass.
+    await runEnforcerTick();
+    expect(getSessions).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips the interval's own tick mid-pass instead of chaining a catch-up pass", async () => {
+    // A pass slower than the 30 s interval must not make passes run back to
+    // back; only a realtime tick is owed a catch-up.
+    let release!: (v: never[]) => void;
+    vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
+    const first = runEnforcerTick();
+    await runEnforcerTick({ catchUp: false });
+    release([]);
+    await first;
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -476,6 +517,99 @@ describe("preroll edge cases", () => {
     await processPrerollSchedules();
     await processPrerollSchedules();
     expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  describe("tracked per server", () => {
+    const A = { ...SERVER, id: "a", url: "http://plex-a" };
+    const B = { ...SERVER, id: "b", url: "http://plex-b" };
+
+    /** One client per server, told apart by URL. */
+    function clientsFor(...servers: (typeof SERVER)[]) {
+      let preroll: Record<string, string> = {};
+      const byUrl = Object.fromEntries(
+        servers.map((s) => [
+          s.url,
+          {
+            getPrerollSetting: vi.fn(async () => preroll[s.url] ?? ""),
+            setPrerollPath: vi.fn(async (path: string) => { preroll = { ...preroll, [s.url]: path }; }),
+            clearPreroll: vi.fn(async () => { preroll = { ...preroll, [s.url]: "" }; }),
+          },
+        ]),
+      );
+      vi.mocked(createMediaServerClient).mockImplementation(
+        (_type, url) => byUrl[url] as unknown as Client,
+      );
+      return byUrl;
+    }
+    const withServers = (...servers: (typeof SERVER)[]) =>
+      vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([
+        prerollSchedule({ user: { id: "u1", mediaServers: servers } }),
+      ] as never);
+
+    it("applies the active preroll to a Plex server added while the schedule runs", async () => {
+      const c = clientsFor(A, B);
+      withServers(A);
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledWith("/pre.mp4");
+
+      // Keyed per user, B was skipped: the user's path was "already applied".
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledExactlyOnceWith("/pre.mp4");
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-applies it to a server re-enabled mid-schedule, without touching it while disabled", async () => {
+      const c = clientsFor(A, B);
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(1);
+
+      withServers(A); // B disabled
+      await processPrerollSchedules();
+      expect(c[B.url].getPrerollSetting).not.toHaveBeenCalled();
+      expect(c[B.url].clearPreroll).not.toHaveBeenCalled();
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+
+      withServers(A, B); // B re-enabled
+      await processPrerollSchedules();
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(2);
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries only the server that failed", async () => {
+      const c = clientsFor(A, B);
+      c[B.url].setPrerollPath.mockRejectedValueOnce(new Error("down"));
+      withServers(A, B);
+      await processPrerollSchedules();
+      expect(vi.mocked(logger.error)).toHaveBeenCalledWith("Enforcer", "Preroll: could not update server", {
+        error: "Error: down",
+      });
+
+      await processPrerollSchedules();
+      expect(c[A.url].setPrerollPath).toHaveBeenCalledTimes(1);
+      expect(c[B.url].setPrerollPath).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears every server it set once no enabled schedule remains", async () => {
+      const c = clientsFor(A, B);
+      withServers(A, B);
+      await processPrerollSchedules();
+
+      vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({ mediaServers: [A, B] } as never);
+      await processPrerollSchedules();
+      expect(c[A.url].clearPreroll).toHaveBeenCalledTimes(1);
+      expect(c[B.url].clearPreroll).toHaveBeenCalledTimes(1);
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+
+      await processPrerollSchedules();
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("logs a failed run and does not overlap runs", async () => {
@@ -597,6 +731,17 @@ describe("initializers", () => {
     await vi.advanceTimersByTimeAsync(30000);
     expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.prerollSchedule.findMany).toHaveBeenCalledTimes(1);
+
+    // An interval tick that lands while a pass is still running is skipped,
+    // not queued as a catch-up pass.
+    let release!: (v: never[]) => void;
+    vi.mocked(prisma.appSettings.findMany).mockReturnValueOnce(new Promise((r) => (release = r)) as never);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30000);
+    release([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prisma.appSettings.findMany).toHaveBeenCalledTimes(2);
     vi.clearAllTimers();
     spy.mockRestore();
   });

@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
   executeRaw: vi.fn().mockResolvedValue(0),
+  closeDeadSyncJobs: vi.fn().mockResolvedValue(0),
 }));
 const {
   syncMediaServer, syncWatchHistory, syncMediaServerItems, enqueueJob, invalidateMediaCaches,
@@ -44,6 +45,7 @@ vi.mock("@/lib/backup/backup-service", () => ({
 }));
 vi.mock("@/lib/logs/archive", () => ({ archiveLogs: m.archiveLogs }));
 vi.mock("@/lib/jobs/dispatch", () => ({ dispatchScheduledJobs: m.dispatchScheduledJobs }));
+vi.mock("@/lib/sync/cleanup-orphaned-syncs", () => ({ closeDeadSyncJobs: m.closeDeadSyncJobs }));
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: m.emit } }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -88,6 +90,7 @@ describe("taskList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     syncJob.findFirst.mockResolvedValue(null);
+    m.closeDeadSyncJobs.mockResolvedValue(0);
     appSettings.findFirst.mockResolvedValue({ actionHistoryRetentionDays: 30, backupRetentionCount: 7 });
     syncMediaServerItems.mockResolvedValue({ status: "done", upserted: 1, deleted: 0 });
     enqueueJob.mockResolvedValue(true);
@@ -202,7 +205,7 @@ describe("taskList", () => {
       { serverId: "server-1", libraryKey: "lib-1", skipWatchHistory: true },
       helpers,
     );
-    expect(syncMediaServer).toHaveBeenCalledWith("server-1", "lib-1", { skipWatchHistory: true });
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", "lib-1", { skipWatchHistory: true, adoptUnclaimedRow: true });
   });
 
   it("sync task passes the job's trigger through to the sync", async () => {
@@ -212,7 +215,24 @@ describe("taskList", () => {
       { serverId: "server-1", trigger: "scheduled sync" },
       helpers,
     );
-    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { trigger: "scheduled sync" });
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { trigger: "scheduled sync", adoptUnclaimedRow: true });
+  });
+
+  it("sync task lets only a payload without a row adopt an unclaimed one", async () => {
+    // A payload naming its row lost nothing to a jobKey collision: it must
+    // never take another request's PENDING row.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncMediaServer).toHaveBeenLastCalledWith("server-1", undefined, { syncJobId: "route-row" });
+
+    // One without may have had its id replaced by a keyed enqueue.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncMediaServer).toHaveBeenLastCalledWith("server-1", undefined, { trigger: "scheduled sync", adoptUnclaimedRow: true });
   });
 
   it("sync task names the trigger when it skips an already-running sync", async () => {
@@ -240,6 +260,26 @@ describe("taskList", () => {
       expect.objectContaining({ where: { mediaServerId: "server-1", status: "RUNNING" } }),
     );
     expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { syncJobId: "route-row" });
+  });
+
+  it("sync task closes RUNNING rows whose run has died before its guard reads them", async () => {
+    // A run whose terminal write threw leaves its row RUNNING; read as a live
+    // sync, it skipped every later sync of the server until a restart.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(m.closeDeadSyncJobs).toHaveBeenCalledWith("server-1");
+    expect(m.closeDeadSyncJobs.mock.invocationCallOrder[0]).toBeLessThan(syncJob.findFirst.mock.invocationCallOrder[0]);
+  });
+
+  it("watch-history task closes RUNNING rows whose run has died before its guard reads them", async () => {
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    expect(m.closeDeadSyncJobs).toHaveBeenCalledWith("server-1");
+    expect(m.closeDeadSyncJobs.mock.invocationCallOrder[0]).toBeLessThan(syncJob.findFirst.mock.invocationCallOrder[0]);
   });
 
   it("sync task skips when a sync is already running", async () => {

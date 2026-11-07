@@ -8,6 +8,7 @@ import {
   type LifecycleExecutionPayload,
 } from "@/lib/jobs/constants";
 import { logger } from "@/lib/logger";
+import { closeDeadSyncJobs } from "@/lib/sync/cleanup-orphaned-syncs";
 
 /**
  * Run a scheduled job now — the Settings "Run now" buttons and the public
@@ -49,6 +50,8 @@ export async function runJobNow(
       // abort syncing the rest (the worker retries each job independently).
       for (const server of user.mediaServers) {
         if (!server.enabled) continue;
+        // A RUNNING row whose run has died is not a sync in progress.
+        await closeDeadSyncJobs(server.id);
         const activeJob = await prisma.syncJob.findFirst({
           where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
           select: { id: true },

@@ -121,11 +121,13 @@ describe("custom format helpers", () => {
 
   it("finds a managed resource by exact name, then loose name, then id", () => {
     const resources = [{ id: 1, name: "x265 (HD)" }, { id: 2, name: " Repack " }, { id: 3, name: "Old" }];
-    expect(findManagedArrResource(resources, "x265 (HD)", 3)?.id).toBe(1);
+    // The row last synced id 3 as "Old" (names compare trimmed, any case).
+    const recorded = { arrId: 3, name: " old " };
+    expect(findManagedArrResource(resources, "x265 (HD)", recorded)?.id).toBe(1);
     expect(findManagedArrResource(resources, "repack", null)?.id).toBe(2);
-    expect(findManagedArrResource(resources, "Renamed", 3)?.id).toBe(3);
+    expect(findManagedArrResource(resources, "Renamed", recorded)?.id).toBe(3);
     expect(findManagedArrResource(resources, "Renamed", null)).toBeUndefined();
-    expect(findManagedArrResource(resources, "Renamed", 99)).toBeUndefined();
+    expect(findManagedArrResource(resources, "Renamed", { ...recorded, arrId: 99 })).toBeUndefined();
   });
 });
 

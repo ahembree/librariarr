@@ -60,8 +60,10 @@ export type AppEventType =
    * `meta.connected`).
    *
    * Bridged from `realtimeBus`, which is server-side only. The connection layer
-   * knows the instant a socket drops or recovers, but until this existed the
-   * browser could only infer it from the sidebar's 30s session poll failing.
+   * knows the instant a socket drops or recovers; without this the browser
+   * could only infer it from the sidebar's session poll failing, and that poll
+   * (5 minutes, `use-sidebar-data.ts`) runs only while the event stream is not
+   * delivering (`useFallbackPoll`).
    *
    * Emitted only on an actual state transition, so a server that is simply
    * down does not produce one browser event per failed reconnect attempt.
@@ -71,8 +73,10 @@ export type AppEventType =
    * An active playback session started, stopped or changed (`meta.serverId`).
    *
    * Bridged from `realtimeBus`, throttled to 2s per server. Exists so the
-   * sidebar's stream badge updates on a push instead of a 30s poll that
-   * round-trips to every media server just to count sessions.
+   * sidebar's stream badge updates on a push; its session poll, which
+   * round-trips to every media server just to count sessions, is a 5-minute
+   * fallback that runs only while the event stream is not delivering
+   * (`useFallbackPoll` in `use-sidebar-data.ts`).
    *
    * Carries no session data — the receiver refetches the route that owns it.
    */

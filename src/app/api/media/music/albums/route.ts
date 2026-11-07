@@ -9,6 +9,7 @@ import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { albumTitleDisplay, albumTitleKey } from "@/lib/media/music-sql";
 
 export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -144,8 +145,11 @@ export const GET = withSession(async (session, request: NextRequest) => {
   >();
 
   for (const item of items) {
-    const album = item.albumTitle ?? "Unknown Album";
-    const normalizedKey = album.toLowerCase().trim();
+    const album = albumTitleDisplay(item.albumTitle);
+    // The key the album page lists its tracks by (`albumTitleKeySql`); its JS
+    // twin trims spaces only, as SQL `TRIM` does, so the two agree on a title
+    // ending in a tab or newline.
+    const normalizedKey = albumTitleKey(item.albumTitle);
     let albumGroup = albumMap.get(normalizedKey);
     if (!albumGroup) {
       albumGroup = {

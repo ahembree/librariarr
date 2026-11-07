@@ -142,6 +142,42 @@ describe("OpenAPI document", () => {
     expect(execute.description).toMatch(/calls naming different items run side by side/);
   });
 
+  it("tells a client an execute waits for detection after the rule set's rules change", () => {
+    // A save that changes what a rule set matches holds its actions until
+    // detection re-checks them (`RuleSet.actionsHeldSince`); the route answers 409.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    // Turning sticky matches off or enabling the rule set again holds them too.
+    expect(execute.description).toMatch(/edited \(its rules, servers or sticky matches\) or enabled again since its matches were detected \(409: run detection again\)/);
+    expect(execute.responses?.["409"]).toMatch(/edited \(its rules, servers or sticky matches\) or enabled again since its matches were detected/);
+  });
+
+  it("tells a client an execute stops when the rule set is edited while it runs", () => {
+    // Each item is acted on only while the rule set is still the version the
+    // route judged it under: the rest are left, and `stopped` says why.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    expect(execute.responses?.["200"]).toMatch(/`\{ executed, failed, errors, stopped\? \}` — `stopped`, a sentence, when the rule set was edited or held while the items ran/);
+    expect(execute.responses?.["409"]).toMatch(/or the rule set was edited before the first item ran; nothing was executed/);
+  });
+
+  it("tells a client an execute is refused while the rule set uses per-episode criteria at series scope", () => {
+    // Such a rule set (saved before it was refused, or restored) is skipped by
+    // detection and its actions are held until it is edited.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    expect(execute.description).toMatch(/uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off \(409: edit the rule set\)/);
+    expect(execute.responses?.["409"]).toMatch(/uses per-episode or per-track criteria with series or artist scope on, or follows them with an action on the whole show or artist with the scope off/);
+    const listing = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/lifecycle/actions")!;
+    expect(listing.description).toMatch(/`ruleSet\.scopeHoldReason` is set, a sentence, while its actions are held/);
+    expect(listing.description).toMatch(/or follows them with an action on the whole show or artist .* with the scope off/);
+  });
+
+  it("tells a client the actions listing says which rule sets are held", () => {
+    // The listing returns the hold per rule set group, so a client can tell
+    // before it executes that the request would be refused.
+    const listing = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/lifecycle/actions")!;
+    expect(listing.description).toMatch(/`ruleSet\.actionsHeldSince` is the time its rules, servers or sticky matches were changed, or it was enabled again/);
+    expect(listing.description).toMatch(/answers 409 until then\), and null otherwise/);
+  });
+
   it("names only registry scopes", () => {
     for (const op of API_OPERATIONS) {
       if (op.scope !== null) expect(API_SCOPES).toContain(op.scope);

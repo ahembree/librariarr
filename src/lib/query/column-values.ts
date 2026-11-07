@@ -9,6 +9,7 @@ import {
   type AggregableEpisode,
 } from "@/lib/conditions/series-aggregates";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
 import { lookupSeerrMeta } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -101,6 +102,8 @@ const DIRECT_FIELDS = new Set([
   "videoBitrate", "videoFrameRate", "aspectRatio", "scanType",
   "audioCodec", "audioProfile", "audioChannels", "audioSamplingRate", "audioBitrate",
   "container", "duration",
+  // Per-episode: NULL on a grouped show row and on non-episode rows (below).
+  "seasonNumber", "episodeNumber", "seasonsBehindLatest",
   "latestEpisodeViewDate", "seriesLastPlayedAt", "availableEpisodeCount",
   "watchedEpisodeCount", "watchedEpisodePercentage", "lastEpisodeAddedAt", "lastEpisodeAiredAt",
 ]);
@@ -261,6 +264,8 @@ export async function computeQueryColumnValues(
   // type list as "every type".
   if (rows.length === 0) return { values, warnings };
   const byId = new Map(rows.map((r) => [r.id as string, r]));
+  // Seasons Behind Latest has no column: measured as the engines measure it.
+  if (fields.includes("seasonsBehindLatest")) await attachSeasonsBehindLatest(rows);
 
   // Grouped series rows: answer from the show's aggregate over every one of
   // its episodes in the representative's library — the same per-library
@@ -358,6 +363,8 @@ export async function computeQueryColumnValues(
     for (const def of fieldDefs) {
       if (def.invalidForLibraryType?.includes(type as "MOVIE" | "SERIES" | "MUSIC") ||
           (def.isSeriesAggregate && !evalItems.has(id)) ||
+          // Season/episode numbers belong to one episode; a music track's are its disc and track.
+          (def.episodeLevel && (grouped || type !== "SERIES")) ||
           (grouped && (EPISODE_ONLY_SECTIONS.has(def.section) || EPISODE_ONLY_FIELDS.has(def.value)))) {
         out[def.value] = null;
         continue;

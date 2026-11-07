@@ -202,4 +202,106 @@ describe("POST /api/lifecycle/rules/test-item — real engine", () => {
       }),
     ).toBe(true);
   });
+
+  // "Artist / Series" names the show or the artist, so a group answers it with
+  // its own name — as detection evaluates it. Read as NULL it matched nothing
+  // with equals and everything with Not Equals.
+  it("answers Artist / Series with the group's name in series and artist scope", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const shows = await createTestLibrary(server.id, { type: "SERIES" });
+    const episode = await createTestMediaItem(shows.id, {
+      title: "Pilot", parentTitle: "Alpha Show", type: "SERIES", seasonNumber: 1, episodeNumber: 1,
+    });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    const track = await createTestMediaItem(music.id, {
+      title: "Opening", parentTitle: "Alpha Band", type: "MUSIC", albumTitle: "First",
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const show = { type: "SERIES", seriesScope: true, mediaItemId: episode.id, serverIds: [server.id] };
+    expect(await testItem({ ...show, rules: group("parentTitle", "equals", "Alpha Show") })).toBe(true);
+    expect(await testItem({ ...show, rules: group("parentTitle", "notEquals", "Alpha Show") })).toBe(false);
+
+    const artist = { type: "MUSIC", seriesScope: true, mediaItemId: track.id, serverIds: [server.id] };
+    expect(await testItem({ ...artist, rules: group("parentTitle", "equals", "Alpha Band") })).toBe(true);
+    expect(await testItem({ ...artist, rules: group("parentTitle", "notEquals", "Alpha Band") })).toBe(false);
+  });
+});
+
+describe("POST /api/lifecycle/rules/test-item — season and episode criteria", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+  });
+
+  async function seedShow() {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps: Record<number, string> = {};
+    for (let s = 1; s <= 3; s++) {
+      const ep = await createTestMediaItem(library.id, {
+        title: `S${s}E1`, parentTitle: "Show", type: "SERIES", seasonNumber: s, episodeNumber: 1, playCount: 1,
+      });
+      eps[s] = ep.id;
+    }
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    return { serverId: server.id, eps };
+  }
+
+  it("measures an episode's season against the show's newest season", async () => {
+    const { serverId, eps } = await seedShow();
+    const base = { type: "SERIES", seriesScope: false, serverIds: [serverId] };
+    const rules = group("seasonsBehindLatest", "greaterThanOrEqual", 2);
+    expect(await testItem({ ...base, mediaItemId: eps[1], rules })).toBe(true);
+    expect(await testItem({ ...base, mediaItemId: eps[2], rules })).toBe(false);
+  });
+
+  it("judges the episode, not the show, when a series aggregate is in the rule", async () => {
+    const { serverId, eps } = await seedShow();
+    const rules = [{
+      id: "g1",
+      condition: "AND",
+      rules: [
+        { id: "r1", field: "watchedEpisodePercentage", operator: "greaterThan", value: 50, condition: "AND" },
+        { id: "r2", field: "seasonNumber", operator: "equals", value: 3, condition: "AND" },
+      ],
+      groups: [],
+    }];
+    const base = { type: "SERIES", seriesScope: false, serverIds: [serverId], rules };
+    expect(await testItem({ ...base, mediaItemId: eps[3] })).toBe(true);
+    expect(await testItem({ ...base, mediaItemId: eps[1] })).toBe(false);
+  });
+
+  it("refuses them in series scope", async () => {
+    const { serverId, eps } = await seedShow();
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/test-item",
+      method: "POST",
+      body: {
+        type: "SERIES", seriesScope: true, serverIds: [serverId], mediaItemId: eps[1],
+        rules: group("seasonNumber", "equals", 1),
+      },
+    });
+    expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(
+      /per-episode criteria \(Season Number\) with "Match against entire series" on.*turn series scope off/,
+    );
+  });
+
+  it("refuses them with series scope off under an action on the whole series", async () => {
+    const { serverId, eps } = await seedShow();
+    const response = await callRoute(POST, {
+      url: "/api/lifecycle/rules/test-item",
+      method: "POST",
+      body: {
+        type: "SERIES", seriesScope: false, serverIds: [serverId], mediaItemId: eps[1],
+        rules: group("seasonsBehindLatest", "greaterThanOrEqual", 2),
+        actionEnabled: true, actionType: "MONITOR_DELETE_FILES_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false,
+      },
+    });
+    expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(
+      /"Monitor & Delete Files"\) acts on the whole show but follows per-episode criteria \(Seasons Behind Latest\)/,
+    );
+  });
 });

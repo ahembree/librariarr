@@ -129,8 +129,15 @@ describe("evaluateSeriesScope — member restriction for seriesScope=false + agg
 
   it("keeps every episode as a member when seriesScope is true", async () => {
     const { serverId, allIds } = await seedShow();
+    // Year describes one episode, which a whole-series rule may not use: in
+    // series scope the engine matches nothing for it. The show's own name does.
+    const showLevelRule: LifecycleRuleGroup[] = [{
+      ...mixedRule[0],
+      rules: [mixedRule[0].rules[0], { id: "r2", field: "title", operator: "equals", value: "ShowX", condition: "AND" }],
+    }];
 
-    const matched = await evaluateSeriesScope(mixedRule, [serverId], undefined, undefined, false);
+    expect(await evaluateSeriesScope(mixedRule, [serverId], undefined, undefined, false)).toEqual([]);
+    const matched = await evaluateSeriesScope(showLevelRule, [serverId], undefined, undefined, false);
 
     expect(matched).toHaveLength(1);
     const members = (matched[0] as unknown as { memberIds: string[] }).memberIds;

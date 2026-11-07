@@ -4,8 +4,9 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
-import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionCanScopeToEpisodes, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { executeActionsForItems, executePhaseUpdate } from "@/lib/lifecycle/run-actions";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { unmonitorsWholeSeasons, type SeasonScope } from "@/lib/lifecycle/episode-scope";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -27,6 +28,7 @@ import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 import { collapseActionItems } from "@/lib/query/collapse-actions";
+import { queryActionEpisodeScope, queryActionScopeError, queryActionScopeViolation } from "@/lib/query/action-scope";
 import { actedRecords, markRecordsActed } from "@/lib/query/run-records";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
@@ -126,6 +128,26 @@ export const POST = withSession(async (session, request: NextRequest) => {
   }
   const resolvedType: MediaType = targetType;
 
+  const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
+
+  // ONE EPISODE NEVER DECIDES FOR A WHOLE SHOW. The query judges each episode
+  // and track on its own, so an action on the whole Sonarr series or Lidarr
+  // artist (a whole-record delete, a quality profile, tags, Lidarr's unmonitor
+  // and search, Sonarr's in the grouped view, …) may follow only what every
+  // member of a show or artist answers alike — "Resolution = 4K" with Delete
+  // from Sonarr deleted every show with one 4K episode. The predicate and
+  // field list of a rule set with the scope off and this action
+  // (`groupScopeViolation`); actions on the matched members only stay free.
+  const scopeViolation = queryActionScopeViolation(resolvedType, queryGroups, query.includeEpisodes, {
+    actionType,
+    addArrTags,
+    removeArrTags,
+    searchAfterAction,
+  });
+  if (scopeViolation) {
+    return NextResponse.json({ error: queryActionScopeError(scopeViolation) }, { status: 400 });
+  }
+
   // MATCH-ALL SAFETY: Arr/Seerr criteria the engine cannot actually evaluate
   // are treated as "not found / never requested", which makes negative rules
   // like `foundInArr = false` vacuously TRUE for every item of the affected
@@ -137,7 +159,6 @@ export const POST = withSession(async (session, request: NextRequest) => {
   //  - Seerr rules can never be evaluated for MUSIC (Seerr has no music
   //    requests), and otherwise require at least one enabled instance
   //    (fetchSeerrDataForQuery reads all of them).
-  const queryGroups = (query.groups ?? []) as unknown as ConditionGroup[];
   if (hasArrRules(queryGroups)) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
     const selectedArrId = query.arrServerIds?.[familyKey];
@@ -358,10 +379,19 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // Whole-record series actions (DELETE_SONARR, CHANGE_QUALITY_PROFILE_SONARR,
     // …) hit the ENTIRE series and ignore the member list; member-scoped
     // actions (DELETE_FILES_SONARR, …) act only on the named episodes, as do
-    // Unmonitor and Search in episode view (`episodeScope`).
-    const episodeScope =
-      resolvedType === "SERIES" && !!query.includeEpisodes && actionCanScopeToEpisodes(actionType);
+    // Unmonitor and Search in episode view (`episodeScope`) — and in the
+    // grouped view of a query with a season/episode criterion, whose show row
+    // stands for the episodes it matched (the rule set it converts to has
+    // series scope off): "Unmonitor seasons 1–3" must not unmonitor the show.
+    // As the scope gate above read it (`queryActionEpisodeScope`).
+    const episodeScope = queryActionEpisodeScope(resolvedType, query.includeEpisodes, actionType, queryGroups);
     const isMemberScoped = actsOnMembers(actionType, episodeScope);
+    // On criteria that decide per season, an episode-scoped Unmonitor also
+    // unmonitors each season every episode of which the library holds is one
+    // it acts on — what the user selected in episode view, every matched
+    // episode of the show grouped by show (`SeasonScope`, episode-scope.ts).
+    const seasonScope: SeasonScope | undefined =
+      episodeScope && unmonitorsWholeSeasons(actionType, queryGroups) ? "selected" : undefined;
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
     // Group a show's episodes by the SAME series identity the query engine
@@ -586,7 +616,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
-    const { executed, failed, errors } = await executeActionsForItems(
+    const { executed, failed, errors, failures, notActedOn, notActedOnCount } = await executeActionsForItems(
       userId,
       items,
       {
@@ -598,6 +628,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
         addArrTags,
         removeArrTags,
         episodeScope,
+        seasonScope,
       },
       actionMembers,
       {
@@ -606,17 +637,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
         ruleSetType: resolvedType,
         cleanupMatches: false,
       },
-      ({ done, total, current }) =>
-        emit({
-          type: "phase",
-          key: "execute",
-          fraction: total > 0 ? done / total : 1,
-          // Per-item count plus the item + sub-step currently in flight.
-          // `current` is only reported pre-increment, so done < total here.
-          detail: current
-            ? `${done + 1} / ${total} · ${current.title} — ${current.step}`
-            : `${done} / ${total}`,
-        }),
+      // Per-item count plus the item + sub-step in flight; a file delete
+      // reports the share of its files gone within the item.
+      (progress) => emit(executePhaseUpdate(progress)),
     );
 
     // A batch can outlast the TTL both run stores were given when it started;
@@ -638,6 +661,8 @@ export const POST = withSession(async (session, request: NextRequest) => {
       });
     }
 
-    return { executed, failed, skipped, errors };
+    // Each failed item with its reason, and the episodes or tracks of actions
+    // that ran but were left alone: the Query page's results dialog lists them.
+    return { executed, failed, skipped, errors, failures, notActedOn, notActedOnCount };
   }
 });

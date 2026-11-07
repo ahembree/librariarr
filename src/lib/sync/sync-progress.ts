@@ -13,8 +13,9 @@ const SYNC_PROGRESS_THROTTLE_MS = 2_000;
 /**
  * Last emit per server. Module-level rather than per-run so a sync that starts
  * immediately after another finishes cannot let its first batch through
- * unthrottled — the same reason the Tracearr importer keeps its map at module
- * scope.
+ * unthrottled — the same reason the Tracearr importer's map outlives a run
+ * (that one is pinned to `globalThis`, because its route and job-worker copies
+ * must share it).
  */
 const lastEmit = new Map<string, number>();
 

@@ -95,6 +95,16 @@ import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-
 import { EmptyState } from "@/components/empty-state";
 import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dialog";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
+import {
+  addActionResult,
+  emptyActionResult,
+  hasActionResultDetails,
+  summarizeActionResult,
+  toastActionResult,
+  useActionResultDialog,
+  type ActionResultReport,
+} from "@/components/action-result-dialog";
+import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
 import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup } from "@/lib/query/batch";
@@ -426,6 +436,9 @@ export default function QueryPage() {
   const [executingAction, setExecutingAction] = useState(false);
   // Live progress for the in-flight action (mirrors the query progress bar).
   const { state: actionProgress, handleUpdate: onActionProgress, reset: resetActionProgress } = useStreamProgress();
+  // Each failed item and each episode or track left alone, opened from the
+  // completion toast.
+  const { showDetails: showActionResult, dialog: actionResultDialog } = useActionResultDialog();
   const [arrMeta, setArrMeta] = useState<Record<ArrFamily, ArrFamilyMeta>>({
     radarr: { qualityProfiles: [], tags: [] },
     sonarr: { qualityProfiles: [], tags: [] },
@@ -1013,6 +1026,10 @@ export default function QueryPage() {
   // must validate against THIS (not the live builder state, which the user may
   // have edited without re-running), so the selection matches what's on screen.
   const lastRunDefinitionRef = useRef<QueryDefinition | null>(null);
+  // The same, for the action bar to check an action against the criteria of
+  // the results on screen (an action on a whole show can't follow a
+  // criterion of one episode).
+  const [lastRunDefinition, setLastRunDefinition] = useState<QueryDefinition | null>(null);
 
   const runQuery = useCallback(
     async () => {
@@ -1022,6 +1039,7 @@ export default function QueryPage() {
       resetQueryProgress();
       const definition = buildDefinition();
       lastRunDefinitionRef.current = definition;
+      setLastRunDefinition(definition);
       try {
         const resp = await fetch("/api/query", {
           method: "POST",
@@ -1199,7 +1217,12 @@ export default function QueryPage() {
       // seed `skipped` with them — the confirmation dialog already counted them, so
       // the completion summary must match.
       const targeted = batches.reduce((n, b) => n + b.length, 0);
-      const totals = { executed: 0, failed: 0, skipped: selectedItems.length - targeted, errors: [] as string[] };
+      // Every batch's counts, failed items and members left alone, for the
+      // completion toast and its details dialog.
+      let report: ActionResultReport = {
+        ...emptyActionResult(targetType === "SERIES" ? "episode" : targetType === "MUSIC" ? "track" : "item"),
+        skipped: selectedItems.length - targeted,
+      };
       const multi = batches.length > 1;
       // Share one run id across a multi-batch run so the server memoizes the
       // deletion-safety re-query (+ Arr/Seerr fetch) instead of repeating it per
@@ -1214,15 +1237,16 @@ export default function QueryPage() {
 
       // "Did real work happen?" — skips don't count (an all-skipped batch changed
       // nothing), so they must not tip the partial-vs-total-failure decisions.
-      const didWork = () => totals.executed + totals.failed > 0;
-      const summarize = () => {
-        const parts = [`${totals.executed} executed`];
-        if (totals.failed > 0) parts.push(`${totals.failed} failed`);
-        if (totals.skipped > 0) parts.push(`${totals.skipped} skipped`);
-        return parts.join(", ");
-      };
+      const didWork = () => report.executed + report.failed > 0;
+      const summarize = () => summarizeActionResult(report);
       // First per-item failure reason (if any), so a failure isn't a bare count.
-      const reasonSuffix = () => (totals.errors.length ? ` — ${totals.errors[0]}` : "");
+      const reasonSuffix = () => (report.failures.length ? ` — ${report.failures[0].title}: ${report.failures[0].error}` : "");
+      // A toast about the run so far opens the details dialog when there is
+      // anything to list (failed items, members left alone).
+      const detailsAction = (note?: string) =>
+        hasActionResultDetails(report)
+          ? { duration: 20_000, action: { label: "View Details", onClick: () => showActionResult({ ...report, note }) } }
+          : {};
       const refresh = () => {
         clearSelection();
         runQuery();
@@ -1256,6 +1280,7 @@ export default function QueryPage() {
               // (fail-closed), report the partial result, and refresh.
               toast.warning("Action stopped part-way", {
                 description: `Batch ${b + 1}/${batches.length} failed: ${reason}. Completed so far: ${summarize()}. Re-run to finish the rest.`,
+                ...detailsAction(`Batch ${b + 1}/${batches.length} failed: ${reason}`),
               });
               refresh();
             } else {
@@ -1267,26 +1292,22 @@ export default function QueryPage() {
           }
 
           // The result is streamed as NDJSON with live phase progress.
-          const data = await consumeProgressStream<{
-            executed: number;
-            failed: number;
+          const data = await consumeProgressStream<ActionRunDetails & {
             skipped: number;
-            errors: string[];
             /** The server refused the rest of the run (the deletion ceiling). */
             stopped?: boolean;
           }>(resp, forward);
-          totals.executed += data.executed;
-          totals.failed += data.failed;
-          totals.skipped += data.skipped;
-          if (data.errors?.length) totals.errors.push(...data.errors);
-
           if (data.stopped) {
+            // The refusal's reason is its one error, not an item that failed.
+            report = addActionResult(report, { executed: data.executed, failed: data.failed, skipped: data.skipped });
             toast.error(didWork() ? "Action stopped part-way" : "Action refused", {
               description: `${data.errors?.[0] ?? "The server refused the run."}${didWork() ? ` Completed so far: ${summarize()}.` : ""}`,
+              ...detailsAction(data.errors?.[0]),
             });
             if (didWork()) refresh();
             return;
           }
+          report = addActionResult(report, data);
 
           // Circuit-breaker: a batch where failures DOMINATE and nothing executed
           // signals a systemic downstream failure (e.g. the Arr instance is down).
@@ -1300,18 +1321,16 @@ export default function QueryPage() {
             const remaining = batches.length - b - 1;
             toast.error("Action stopped", {
               description: `Batch ${b + 1}/${batches.length} failed entirely${reasonSuffix()}. Skipped ${remaining} remaining batch${remaining === 1 ? "" : "es"} — check the Arr instance, then re-run.`,
+              ...detailsAction(`Batch ${b + 1}/${batches.length} failed entirely; the ${remaining} remaining were not sent.`),
             });
             refresh();
             return;
           }
         }
 
-        const suffix = multi ? ` across ${batches.length} batches` : "";
-        if (totals.failed > 0) {
-          toast.warning("Action completed with errors", { description: `${summarize()}${suffix}${reasonSuffix()}` });
-        } else {
-          toast.success("Action complete", { description: `${summarize()}${suffix}` });
-        }
+        // Green only when nothing failed and nothing was left alone; otherwise
+        // the toast (and its View Details) opens the list of reasons.
+        toastActionResult(report, showActionResult, { suffix: multi ? ` across ${batches.length} batches` : "" });
         refresh();
       } catch {
         // Reached on a network failure OR an in-band stream error event. Keep
@@ -1321,7 +1340,8 @@ export default function QueryPage() {
           // Earlier batches finished and are recorded server-side; refresh so
           // the results reflect them and let the user re-run for the rest.
           toast.error("Action stopped part-way", {
-            description: "Some items were processed before the error — re-run to finish the rest.",
+            description: `Some items were processed before the error (${summarize()}) — re-run to finish the rest.`,
+            ...detailsAction("The run stopped on an error part-way."),
           });
           refresh();
         } else {
@@ -1334,7 +1354,7 @@ export default function QueryPage() {
         resetActionProgress();
       }
     },
-    [buildDefinition, results, selectedIds, clearSelection, runQuery, onActionProgress, resetActionProgress],
+    [buildDefinition, results, selectedIds, clearSelection, runQuery, onActionProgress, resetActionProgress, showActionResult],
   );
 
   // Table columns with a leading selection checkbox column.
@@ -1950,6 +1970,8 @@ export default function QueryPage() {
                 executing={executingAction}
                 onExecute={executeAction}
                 onClear={clearSelection}
+                criteria={lastRunDefinition?.groups ?? []}
+                episodeMode={!!lastRunDefinition?.includeEpisodes}
               />
               {executingAction && actionProgress.phases.length > 0 && (
                 <div className="rounded-xl border border-border/60 bg-card/40 px-4 py-3">
@@ -1998,6 +2020,7 @@ export default function QueryPage() {
 
       {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
+      {actionResultDialog}
       <ConvertQueryToRuleDialog
         open={convertDialogOpen}
         onOpenChange={setConvertDialogOpen}

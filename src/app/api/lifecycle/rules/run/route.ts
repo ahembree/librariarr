@@ -12,6 +12,8 @@ import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import { HOLD_ACTION_SELECT } from "@/lib/lifecycle/held-actions";
+import type { GroupScopeAction } from "@/lib/conditions/group-scope";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 /**
@@ -46,7 +48,10 @@ async function explainSkippedRuleSets(
   // deliberately turned off.
   const candidates = await prisma.ruleSet.findMany({
     where: namedRuleSetId ? { id: namedRuleSetId, userId } : { userId, enabled: true },
-    select: { id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true },
+    select: {
+      id: true, name: true, type: true, rules: true, enabled: true, serverIds: true, arrInstanceId: true, seriesScope: true,
+      ...HOLD_ACTION_SELECT,
+    },
   });
 
   const enabledServers = await prisma.mediaServer.findMany({
@@ -74,7 +79,8 @@ async function explainSkip(
     enabled: boolean;
     serverIds: string[];
     arrInstanceId: string | null;
-  },
+    seriesScope: boolean;
+  } & GroupScopeAction,
   enabledServerIds: Set<string>,
 ): Promise<string | null> {
   if (!ruleSet.enabled) return "The rule set is disabled.";
@@ -89,7 +95,9 @@ async function explainSkip(
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
   if (!hasAnyActiveRules(rules)) return "The rule set has no active rules.";
 
-  const evaluability = await checkLifecycleRuleEvaluability(userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(
+    userId, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId, ruleSet.seriesScope, ruleSet,
+  );
   return evaluability.evaluable ? null : evaluability.reason;
 }
 
@@ -132,7 +140,10 @@ export const POST = withSession(async (session, request: NextRequest) => {
           }
         }
 
-        await scheduleActionsForRuleSet(ruleSet, result.items, episodeIdMap);
+        // Only while the rule set is still at the version detection
+        // evaluated: `ruleSet` was read after the run, and a save since must
+        // not get the old rules' matches scheduled with its config.
+        await scheduleActionsForRuleSet(ruleSet, result.items, episodeIdMap, { expectedVersion: result.version });
       }
     }
   }

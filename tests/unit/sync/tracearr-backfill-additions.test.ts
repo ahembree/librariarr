@@ -79,14 +79,35 @@ const JOIN_INDEX = { serverId: SERVER_ID, itemCount: 3 };
  * lives (`sync-tracearr-history.test.ts`). Casting keeps that boundary visible
  * rather than pretending this pass inspects the full shape.
  */
-function play(id: string, serverId = TRACEARR_SERVER_ID): TracearrHistoryRecord {
-  return { id, server_id: serverId } as TracearrHistoryRecord;
+function play(
+  id: string,
+  serverId = TRACEARR_SERVER_ID,
+  startedAt?: Date,
+): TracearrHistoryRecord {
+  return {
+    id,
+    server_id: serverId,
+    ...(startedAt ? { started_at: startedAt.toISOString() } : {}),
+  } as TracearrHistoryRecord;
 }
+
+/**
+ * When every candidate was added — "before it was added" is measured against
+ * it. The default candidate's server reported no add time, so this is its
+ * row's `createdAt`.
+ */
+const ADDED_AT = new Date("2026-10-30T12:00:00.000Z");
+/** A play from before the item was (re-)added: one of the plays it lost. */
+const EARLIER = new Date("2026-08-01T20:00:00.000Z");
+/** A play from after it was added: the forward pass imports those itself. */
+const LATER = new Date("2026-11-01T20:00:00.000Z");
 
 function candidate(n: number) {
   return {
     id: `item-${n}`,
     ratingKey: `${1000 + n}`,
+    addedAt: null as Date | null,
+    createdAt: ADDED_AT,
     title: `Item ${n}`,
     type: "MOVIE",
     parentTitle: null as string | null,
@@ -102,6 +123,8 @@ function candidate(n: number) {
 let candidates: Array<{
   id: string;
   ratingKey: string;
+  addedAt?: Date | null;
+  createdAt?: Date;
   title: string;
   type?: string;
   parentTitle?: string | null;
@@ -154,15 +177,24 @@ describe("recoverHistoryForNewItems", () => {
   });
 
   describe("candidate selection", () => {
-    it("asks only about items with no Tracearr plays of their own", async () => {
+    it("asks only about items with no Tracearr play from before they were added", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
-      // An item that already has Tracearr rows was never missing its history,
-      // and re-querying it would spend a request to learn nothing.
+      // An item holding a Tracearr play from before it was added had its
+      // history found by the archive walk or an earlier recovery, and asking
+      // again would spend a request to learn nothing. A play from AFTER is not
+      // that evidence: a re-added film played again before this pass reaches
+      // it holds only that new play, and its earlier ones are still missing —
+      // so it stays a candidate until Tracearr has answered for it.
       expect(sql).toContain("NOT EXISTS");
       expect(sql).toContain('"WatchHistory"');
       expect(sql).toContain("'TRACEARR'");
+      // Added by the media server, not when the row was created: a re-added
+      // film played before Librariarr synced it holds a new play older than
+      // its row. The row's time only when the server reported none.
+      expect(sql).toContain('wh."watchedAt" < COALESCE(mi."addedAt", mi."createdAt")');
+      expect(sql).toContain('SELECT mi."id", mi."ratingKey", mi."addedAt"');
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
     });
@@ -652,15 +684,117 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.importTracearrRecords).toHaveBeenCalled();
     });
 
-    it("does not fall back when the rating key already found plays", async () => {
+    it("does not fall back when the rating key already found plays from before the item was added", async () => {
+      // The key survived (a library rescan rather than a re-add): its answer
+      // already holds the lost plays, so a second request learns nothing.
       candidates = [
-        { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
+        { id: "item-1", ratingKey: "1001", createdAt: ADDED_AT, title: "Film", tmdbId: "603", imdbId: null },
       ];
-      m.getHistoryForItem.mockResolvedValueOnce([play("chain-1")]);
+      m.getHistoryForItem.mockResolvedValueOnce([
+        play("chain-new", TRACEARR_SERVER_ID, LATER),
+        play("chain-old", TRACEARR_SERVER_ID, EARLIER),
+      ]);
 
       await recoverHistoryForNewItems(SERVER_ID);
 
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back when the rating key found only plays from after the item was added", async () => {
+      // The common re-add: a film deleted by a rule, re-downloaded under a new
+      // rating key and watched again before this pass ran. The new key holds
+      // that one new play; the earlier plays — and earlier watchers — are only
+      // reachable by provider id.
+      candidates = [
+        { id: "item-1", ratingKey: "9999", createdAt: ADDED_AT, title: "Re-added Film", tmdbId: "603", imdbId: null },
+      ];
+      const newPlay = play("chain-new", TRACEARR_SERVER_ID, LATER);
+      const oldPlay = play("chain-old", TRACEARR_SERVER_ID, EARLIER);
+      m.getHistoryForItem
+        .mockResolvedValueOnce([newPlay])
+        // The provider lookup returns the new key's play as well.
+        .mockResolvedValueOnce([newPlay, oldPlay]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 1, skipped: 0, mediaItemIds: ["item-1"] });
+
+      await expect(recoverHistoryForNewItems(SERVER_ID)).resolves.toEqual({ checked: 1, imported: 2 });
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+      expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({ tmdbId: "603", imdbId: null });
+      // Everything goes to the shared importer, which de-duplicates the chain
+      // both answers carry.
+      const imported = m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[];
+      expect(imported.map((r) => r.id).sort()).toEqual(["chain-new", "chain-new", "chain-old"]);
+    });
+
+    it("measures 'before it was added' from the server's add time, not the row's", async () => {
+      // Re-added on the server, watched again, and only then synced: the new
+      // play is older than the row but newer than the add, so it is not one
+      // of the plays the item kept.
+      const createdAt = new Date(LATER.getTime() + 24 * 60 * 60 * 1000);
+      candidates = [
+        { id: "item-1", ratingKey: "9999", addedAt: ADDED_AT, createdAt, title: "Re-added Film", tmdbId: "603", imdbId: null },
+      ];
+      const newPlay = play("chain-new", TRACEARR_SERVER_ID, LATER);
+      m.getHistoryForItem
+        .mockResolvedValueOnce([newPlay])
+        .mockResolvedValueOnce([newPlay, play("chain-old", TRACEARR_SERVER_ID, EARLIER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+      expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({ tmdbId: "603", imdbId: null });
+    });
+
+    it("measures from the row's creation when the server reported no add time", async () => {
+      // `addedAt` NULL: the same play is from before the row, so the key's
+      // answer already holds the item's history.
+      const createdAt = new Date(LATER.getTime() + 24 * 60 * 60 * 1000);
+      candidates = [
+        { id: "item-1", ratingKey: "9999", addedAt: null, createdAt, title: "Film", tmdbId: "603", imdbId: null },
+      ];
+      m.getHistoryForItem.mockResolvedValueOnce([play("chain-new", TRACEARR_SERVER_ID, LATER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not count another server's earlier play as one the item kept", async () => {
+      // A rating key is unique only within one media server: an old play of a
+      // different server under the same key says nothing about this item.
+      candidates = [
+        { id: "item-1", ratingKey: "9999", createdAt: ADDED_AT, title: "Re-added Film", tmdbId: "603", imdbId: null },
+      ];
+      m.getHistoryForItem
+        .mockResolvedValueOnce([play("chain-foreign", "some-other-server", EARLIER)])
+        .mockResolvedValueOnce([play("chain-old", TRACEARR_SERVER_ID, EARLIER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+    });
+
+    it("never asks by provider id for an episode, even with only later plays", async () => {
+      candidates = [
+        {
+          id: "item-1",
+          ratingKey: "9001",
+          createdAt: ADDED_AT,
+          title: "Pilot",
+          type: "SERIES",
+          parentTitle: "Show",
+          seasonNumber: 1,
+          episodeNumber: 1,
+          tmdbId: "1396",
+          imdbId: "tt0903747",
+        },
+      ];
+      m.getHistoryForItem.mockResolvedValue([play("chain-new", TRACEARR_SERVER_ID, LATER)]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      expect(m.getHistoryForItem.mock.calls[0][1]).toEqual({ ratingKey: "9001" });
     });
 
     it("asks a shared provider identity only once across a run", async () => {
@@ -724,7 +858,7 @@ describe("recoverHistoryForNewItems", () => {
   describe("account-name map", () => {
     // The rows this pass writes are the ONE case where a degraded username is
     // permanent. `findCandidates` excludes any item that already has a TRACEARR
-    // row, the forward pass reaches back only an hour, and
+    // row from before it was added, the forward pass reaches back only an hour, and
     // `tracearrBackfillComplete` is already true by the time recovery runs — so
     // nothing ever re-delivers these records to correct them. A row stored as
     // "Nick W" sits beside the rest of the server's history stored as

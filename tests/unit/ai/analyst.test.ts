@@ -5,6 +5,7 @@ const mockExecute = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/ai/provider", () => ({
   createProvider: () => ({ chat: mockChat, testConnection: vi.fn() }),
+  REQUEST_TIMEOUT_MS: 600_000,
 }));
 vi.mock("@/lib/ai/system-prompt", () => ({ buildSystemPrompt: () => "SYS" }));
 vi.mock("@/lib/ai/tools", () => {

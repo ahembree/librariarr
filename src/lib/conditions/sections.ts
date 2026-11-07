@@ -13,5 +13,6 @@ export const CONDITION_SECTIONS: ConditionSectionDef[] = [
   { key: "arrMedia", label: "Arr: Media" },
   { key: "arrEpisodes", label: "Arr: Episodes" },
   { key: "seerr", label: "Seerr" },
+  { key: "episode", label: "Episode" },
   { key: "series", label: "Series" },
 ];

@@ -49,6 +49,27 @@ describe("Debouncer", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("flush() runs a pending fire at once, and only once", () => {
+    const fn = vi.fn();
+    const d = new Debouncer(fn, { quietMs: 1000, maxWaitMs: 3000 });
+    d.trigger();
+    d.flush();
+    expect(fn).toHaveBeenCalledOnce();
+    // Neither the quiet window nor the max-wait timer fires it again.
+    vi.advanceTimersByTime(5000);
+    expect(fn).toHaveBeenCalledOnce();
+  });
+
+  it("flush() does nothing when no fire is pending", () => {
+    const fn = vi.fn();
+    const d = new Debouncer(fn, { quietMs: 1000 });
+    d.flush();
+    d.trigger();
+    vi.advanceTimersByTime(1000);
+    d.flush();
+    expect(fn).toHaveBeenCalledOnce();
+  });
+
   it("can fire again after a previous fire", () => {
     const fn = vi.fn();
     const d = new Debouncer(fn, { quietMs: 1000 });

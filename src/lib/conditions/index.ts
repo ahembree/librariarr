@@ -48,6 +48,7 @@ export * from "./stream-query";
 export * from "./constants";
 export * from "./wildcard";
 export * from "./series-aggregates";
+export * from "./group-scope";
 export * from "./library-type-guard";
 export * from "./negation";
 export * from "./array-field-eval";

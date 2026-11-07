@@ -35,6 +35,7 @@ import {
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import { recoverHistoryForNewItems } from "@/lib/sync/tracearr-backfill-additions";
 import { watchForCancel } from "@/lib/sync/cancel-watch";
+import { closeDeadSyncJobs } from "@/lib/sync/cleanup-orphaned-syncs";
 
 /** Remove completed/failed lifecycle actions older than the retention window. */
 export async function cleanupOldActions(): Promise<void> {
@@ -147,6 +148,9 @@ const syncServer: Task = async (payload) => {
   // RUNNING only: a PENDING row is a queued sync waiting for its job — usually
   // this very job, whose row the sync route created at enqueue time — and the
   // run below claims it. Counting PENDING here made every such job skip itself.
+  // A RUNNING row whose run has died (its terminal write threw) is closed
+  // first: counted, it skipped every later sync of the server until a restart.
+  await closeDeadSyncJobs(serverId);
   const running = await prisma.syncJob.findFirst({
     where: { mediaServerId: serverId, status: "RUNNING" },
     select: { id: true },
@@ -176,11 +180,13 @@ const syncServer: Task = async (payload) => {
 
   // The trigger rides along so the sync's own "Starting sync" line says why it
   // ran — the job payload is the only place that knowledge survives the hop
-  // through the queue.
+  // through the queue. A payload without a `syncJobId` may have replaced a
+  // requested sync's under the same jobKey, so only this queued run may adopt
+  // the row that request left unclaimed (see `claimSyncJob`).
   await syncMediaServer(serverId, libraryKey, {
     ...(skipWatchHistory ? { skipWatchHistory: true } : {}),
     ...(trigger ? { trigger } : {}),
-    ...(syncJobId ? { syncJobId } : {}),
+    ...(syncJobId ? { syncJobId } : { adoptUnclaimedRow: true }),
   });
 };
 
@@ -198,7 +204,9 @@ const syncWatchHistoryTask: Task = async (payload) => {
   const { serverId, incremental = false } = payload as SyncWatchHistoryPayload;
 
   // A full sync already refreshes watch history — if one is running/queued for
-  // this server, skip the standalone refresh to avoid redundant work.
+  // this server, skip the standalone refresh to avoid redundant work. A
+  // RUNNING row whose run has died covers nothing, so it is closed first.
+  await closeDeadSyncJobs(serverId);
   const running = await prisma.syncJob.findFirst({
     where: { mediaServerId: serverId, status: { in: ["RUNNING", "PENDING"] } },
     select: { id: true },
@@ -317,10 +325,7 @@ const tracearrBackfill: Task = async (payload) => {
   // pages the play data moved. `tracearr:import-progress` fires per page but
   // only drives the "still importing" notice; this is what makes the rows,
   // stats and dashboard actually reflect an import in flight.
-  await emitWatchHistoryUpdated(serverId, {
-    imported: result.count,
-    backfillPending: result.backfillPending,
-  });
+  await emitWatchHistoryUpdated(serverId);
 
   if (!result.backfillPending) {
     logger.info(

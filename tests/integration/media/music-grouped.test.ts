@@ -967,13 +967,15 @@ describe("GET /api/media/music/grouped", () => {
       expect(bowie.audioCodecCounts).toEqual({ FLAC: 2, MP3: 1, Unknown: 2 });
     });
 
-    it("sums sizes, takes the latest dates, and does not count a blank album", async () => {
+    it("sums sizes, takes the latest dates, and counts a blank album as the Unknown Album card", async () => {
       const { lib } = await musicLibrary();
       await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Low", albumTitle: "Things We Lost", fileSize: BigInt(1000), lastPlayedAt: new Date("2024-01-01"), addedAt: new Date("2023-01-01") });
       await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Low", albumTitle: "", fileSize: BigInt(500), lastPlayedAt: new Date("2025-06-01"), addedAt: new Date("2022-01-01") });
 
       const [low] = await artists();
-      expect(low.albumCount).toBe(1);
+      // "Things We Lost" and the "Unknown Album" card the artist page shows the
+      // blank-titled track on — not an album of its own.
+      expect(low.albumCount).toBe(2);
       expect(low.totalSize).toBe("1500");
       expect(low.lastPlayed).toBe(new Date("2025-06-01").toISOString());
       expect(low.addedAt).toBe(new Date("2023-01-01").toISOString());

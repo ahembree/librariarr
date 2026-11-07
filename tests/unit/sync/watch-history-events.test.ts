@@ -38,13 +38,13 @@ describe("emitWatchHistoryUpdated", () => {
     // read the owner from — it has to come from the server row.
     h.findUnique.mockResolvedValue({ userId: "user-1" });
 
-    await emitWatchHistoryUpdated("srv-1", { imported: 42 });
+    await emitWatchHistoryUpdated("srv-1");
 
     expect(h.findUnique).toHaveBeenCalledWith({ where: { id: "srv-1" }, select: { userId: true } });
     expect(h.emit).toHaveBeenCalledWith({
       type: "watch-history:updated",
       userId: "user-1",
-      meta: { serverId: "srv-1", imported: 42 },
+      meta: { serverId: "srv-1" },
     });
   });
 
@@ -62,12 +62,16 @@ describe("emitWatchHistoryUpdated", () => {
     expect(h.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed" }));
   });
 
-  it("emits with no extra meta when none is given", async () => {
+  it("carries the server id and no figures", async () => {
+    // Events carry no figures: the receiver refetches the route that owns the
+    // number, so nothing a page renders can come from the event.
     h.findUnique.mockResolvedValue({ userId: "user-1" });
 
     await emitWatchHistoryUpdated("srv-1");
 
     expect(h.emit.mock.calls[0][0].meta).toEqual({ serverId: "srv-1" });
+    // The signature takes the server id alone, so a caller cannot attach one.
+    expect(emitWatchHistoryUpdated).toHaveLength(1);
   });
 
   it("stays silent for a server that no longer exists", async () => {

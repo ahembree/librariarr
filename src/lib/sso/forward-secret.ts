@@ -20,6 +20,32 @@ import { timingSafeEqual } from "node:crypto";
  */
 export const FORWARD_AUTH_PROXY_HEADER = "x-librariarr-proxy-secret";
 
+/**
+ * Request headers that carry a credential once the proxy has handled the
+ * request: the proxy secret above, HTTP and proxy authentication (a proxy doing
+ * Basic auth passes it on), and the browser's cookies. None may be named as a
+ * forward-auth user, email or name header. The login copies the email and name
+ * headers into the account, where a signed-in session reads them back
+ * (`/api/auth/me`, `/api/settings/auth`), so naming the proxy secret there
+ * would hand it to anyone holding a cookie, who could then forge forward-auth
+ * sign-ins and confirmations against a directly reachable port. Lower-case, as
+ * `Headers` compares names.
+ */
+export const FORWARD_AUTH_CREDENTIAL_HEADERS: readonly string[] = [
+  FORWARD_AUTH_PROXY_HEADER,
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+];
+
+/**
+ * Whether a forward-auth header setting names one of
+ * `FORWARD_AUTH_CREDENTIAL_HEADERS`, ignoring case and surrounding whitespace.
+ */
+export function isForwardAuthCredentialHeader(name: string): boolean {
+  return FORWARD_AUTH_CREDENTIAL_HEADERS.includes(name.trim().toLowerCase());
+}
+
 /** Whether `FORWARD_AUTH_SECRET` is set to a non-empty value. */
 export function isForwardAuthSecretConfigured(): boolean {
   return !!process.env.FORWARD_AUTH_SECRET;

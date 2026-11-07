@@ -6,7 +6,10 @@ import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-t
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
+import type { SeasonScope } from "@/lib/lifecycle/episode-scope";
+import { NOT_ACTED_ON_LIMIT, type ActionFailure, type NotActedOn } from "@/lib/lifecycle/action-report";
 import type { Prisma } from "@/generated/prisma/client";
+import type { ProgressUpdate } from "@/lib/progress/types";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -22,6 +25,8 @@ interface ActionConfig {
   removeArrTags: string[];
   /** Unmonitor/Search act on the item's episodes, not the series (see `ActionRecord.episodeScope`). */
   episodeScope?: boolean;
+  /** How an episode-scoped Unmonitor judges a season whole (see `ActionRecord.seasonScope`). */
+  seasonScope?: SeasonScope;
 }
 
 /**
@@ -62,17 +67,57 @@ interface RunActionsResult {
   executed: number;
   failed: number;
   errors: string[];
-  failures: { title: string; error: string }[];
+  failures: ActionFailure[];
+  /**
+   * Episodes or tracks of actions that ran but were left alone, and why
+   * (`ActionOutcome.notActedOn`) — at most `NOT_ACTED_ON_LIMIT` of them;
+   * `notActedOnCount` counts every one.
+   */
+  notActedOn: NotActedOn[];
+  notActedOnCount: number;
   /**
    * Of `failed`, the items failed without contacting the Arr app at all — its
    * instance had already failed at the host level this run — so nothing was
    * sent for them. The public API gives these back to its destructive budget.
    */
   notAttempted: number;
+  /**
+   * Set when `beforeEach` stopped the run: why, and how many items were left
+   * without being attempted (the one it stopped at included). They are in
+   * neither `executed` nor `failed`.
+   */
+  stopped?: { reason: string; remaining: number };
+}
+
+/**
+ * One run's progress as the `execute` phase event of a progress stream: the
+ * share of items done (a file delete's share of the item in flight added), and
+ * "3 / 12 · <item> — <step>" while an item is in flight. The Query page's and
+ * the Pending page's action runs both stream it.
+ */
+export function executePhaseUpdate({ done, total, current }: ActionRunProgress): ProgressUpdate {
+  return {
+    type: "phase",
+    key: "execute",
+    fraction: total > 0 ? (done + Math.min(1, current?.fraction ?? 0)) / total : 1,
+    // `current` is only reported pre-increment, so done < total here.
+    detail: current ? `${done + 1} / ${total} · ${current.title} — ${current.step}` : `${done} / ${total}`,
+  };
+}
+
+interface RunActionsOptions {
+  /**
+   * Asked right before each item is acted on. A reason stops the run there:
+   * that item and every later one are left untouched. The rule-set Execute
+   * route re-checks here that the rule set is still the one it judged the
+   * items under — a save landing mid-run must not be followed by actions on
+   * the matches and members its old rules made.
+   */
+  beforeEach?: (item: ActionItem) => Promise<string | null>;
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
-interface ActionRunProgress {
+export interface ActionRunProgress {
   /** Items fully processed so far (success or failure). */
   done: number;
   /** Total items in this run. */
@@ -82,7 +127,12 @@ interface ActionRunProgress {
    * sub-step within it, present only while an item is mid-flight. Absent on the
    * boundary updates fired before the first item and after each completes.
    */
-  current?: { title: string; step: string };
+  current?: {
+    title: string;
+    step: string;
+    /** The share of this item done (a file delete's files gone), when the step knows it. */
+    fraction?: number;
+  };
 }
 
 /**
@@ -127,8 +177,10 @@ export async function executeActionsForItems(
   episodeIdMap: Map<string, string[]>,
   history: HistoryContext,
   onProgress?: (progress: ActionRunProgress) => void,
+  opts: RunActionsOptions = {},
 ): Promise<RunActionsResult> {
   const actionType = config.actionType;
+  let stopped: RunActionsResult["stopped"];
 
   // SAFETY: log the bounded execution count before any destructive operation.
   logger.info(
@@ -140,7 +192,9 @@ export async function executeActionsForItems(
   let failed = 0;
   let notAttempted = 0;
   const errors: string[] = [];
-  const failures: { title: string; error: string }[] = [];
+  const failures: ActionFailure[] = [];
+  const notActedOn: NotActedOn[] = [];
+  let notActedOnCount = 0;
 
   const total = items.length;
   let processed = 0;
@@ -156,12 +210,18 @@ export async function executeActionsForItems(
   );
 
   for (const item of items) {
+    const stopReason = opts.beforeEach ? await opts.beforeEach(item) : null;
+    if (stopReason) {
+      stopped = { reason: stopReason, remaining: total - processed };
+      logger.warn("Lifecycle", `Stopped ${actionType} with ${stopped.remaining} of ${total} item(s) left — ${stopReason}`);
+      break;
+    }
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
     const target = { actionType, matchedMediaItemIds, episodeScope: config.episodeScope, mediaItem: item, memberEpisodes };
     const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
-      ? (step: string) => onProgress({ done: processed, total, current: { title, step } })
+      ? (step: string, fraction?: number) => onProgress({ done: processed, total, current: { title, step, fraction } })
       : undefined;
     reportStep?.("Starting");
     try {
@@ -181,6 +241,7 @@ export async function executeActionsForItems(
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
         episodeScope: config.episodeScope,
+        seasonScope: config.seasonScope,
         targetTitle: title,
         mediaItem: item,
       }, reportStep, arrContext);
@@ -232,6 +293,10 @@ export async function executeActionsForItems(
       }
 
       executed++;
+      for (const left of outcome?.notActedOn ?? []) {
+        notActedOnCount++;
+        if (notActedOn.length < NOT_ACTED_ON_LIMIT) notActedOn.push(left);
+      }
     } catch (error) {
       unreachable.record(config.arrInstanceId, error);
       const msg = extractActionError(error);
@@ -270,5 +335,5 @@ export async function executeActionsForItems(
   // records themselves); a preview must not explain matches from before it.
   if (executed > 0 || failed > notAttempted) invalidateArrMetadataCache();
 
-  return { executed, failed, errors, failures, notAttempted };
+  return { executed, failed, errors, failures, notActedOn, notActedOnCount, notAttempted, ...(stopped ? { stopped } : {}) };
 }
