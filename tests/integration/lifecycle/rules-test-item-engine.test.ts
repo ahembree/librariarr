@@ -297,11 +297,11 @@ describe("POST /api/lifecycle/rules/test-item — season and episode criteria", 
       body: {
         type: "SERIES", seriesScope: false, serverIds: [serverId], mediaItemId: eps[1],
         rules: group("seasonsBehindLatest", "greaterThanOrEqual", 2),
-        actionEnabled: true, actionType: "UNMONITOR_DELETE_FILES_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false,
+        actionEnabled: true, actionType: "MONITOR_DELETE_FILES_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false,
       },
     });
     expect((await expectJson<{ error: string }>(response, 400)).error).toMatch(
-      /"Unmonitor & Delete Files"\) acts on the whole show but follows per-episode criteria \(Seasons Behind Latest\)/,
+      /"Monitor & Delete Files"\) acts on the whole show but follows per-episode criteria \(Seasons Behind Latest\)/,
     );
   });
 });

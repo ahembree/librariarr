@@ -32,6 +32,19 @@ describe("IntegrationError", () => {
     expect(ie.method).toBe("GET");
   });
 
+  it("says a timeout is an answer that did not come in time, not an unreachable host", () => {
+    for (const code of ["ECONNABORTED", "ETIMEDOUT"]) {
+      const ie = new IntegrationError("Sonarr", makeAxiosError({
+        code,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        config: { url: "/api/v3/episodefile/bulk", method: "delete" } as any,
+      }));
+      expect(ie.message).toBe(`Sonarr did not answer in time (/api/v3/episodefile/bulk): ${code}`);
+      expect(ie.code).toBe(code);
+      expect(ie.status).toBeNull();
+    }
+  });
+
   it("falls back to ERR when no code is present", () => {
     const err = makeAxiosError({ message: "boom" });
     const ie = new IntegrationError("Sonarr", err);

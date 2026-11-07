@@ -48,12 +48,21 @@ export function progressStreamResponse<T>(
 ): Response {
   const encoder = new TextEncoder();
   const abort = new AbortController();
+  // Set when no one is reading any more (the client went, or the caller's
+  // signal said so) — not by the lifetime cap, which only asks the run to
+  // stop: a run that ignores it and fails later still has a reader waiting
+  // for the reason.
+  let readerGone = false;
+  const readerLeft = () => {
+    readerGone = true;
+    abort.abort();
+  };
 
   // Link the request's signal (client disconnect at the fetch layer) to ours.
   for (const external of [options?.signal, options?.request?.signal]) {
     if (!external) continue;
-    if (external.aborted) abort.abort();
-    else external.addEventListener("abort", () => abort.abort(), { once: true });
+    if (external.aborted) readerLeft();
+    else external.addEventListener("abort", readerLeft, { once: true });
   }
 
   const gzipped = !!options?.request && acceptsGzip(options.request.headers.get("accept-encoding"));
@@ -121,9 +130,11 @@ export function progressStreamResponse<T>(
           resultLineOpen = false;
           write("\n");
         } catch (err) {
-          // If we aborted (client gone / lifetime cap), there's no one to read
-          // an error line — skip it.
-          if (!abort.signal.aborted) {
+          // With the client gone there's no one to read an error line — skip
+          // it. Past the lifetime cap the client is still reading (a run that
+          // does not stop on the signal, like a lifecycle Execute, goes on), so
+          // the reason is still sent.
+          if (!readerGone) {
             // End the broken result line, so the error event is a line of its
             // own the reader can still parse.
             if (resultLineOpen) write("\n", false);
@@ -156,7 +167,7 @@ export function progressStreamResponse<T>(
       cancel() {
         // Client disconnected — abort so the underlying work stops instead of
         // running to completion.
-        abort.abort();
+        readerLeft();
         gzip?.destroy();
       },
     }),

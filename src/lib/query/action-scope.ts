@@ -8,11 +8,12 @@
  * view lists the episodes each show matched through — so it judges like a
  * rule set with series or artist scope off. An action that acts on the whole
  * Sonarr series or Lidarr artist (Delete from Sonarr or Lidarr, Change Quality
- * Profile, Unmonitor & Delete Files, Monitor & Delete Files, Lidarr's
+ * Profile, Monitor & Delete Files, Lidarr's Unmonitor & Delete Files,
  * Unmonitor Only and Search for New Copy, tags, a Lidarr file delete's search
  * after — and, in the grouped series view of a query without a per-episode
  * criterion, Sonarr's Unmonitor Only and Search for New Copy, which act on the
- * whole series there) may then follow only the
+ * whole series there, as does Sonarr's Unmonitor & Delete Files) may then
+ * follow only the
  * criteria every member of a show or artist answers alike. "Resolution = 4K"
  * and Delete from Sonarr deleted every show with a single 4K episode.
  *
@@ -20,7 +21,8 @@
  * action: `POST /api/query/actions` refuses such a run (400, the reason from
  * `queryActionScopeError`) and the Query page's action bar offers the actions
  * disabled with that reason. Actions on the matched members only — the file
- * deletes, and Sonarr's Unmonitor and Search in episode view or on a query
+ * deletes, and Sonarr's Unmonitor, Unmonitor & Delete Files and Search in
+ * episode view or on a query
  * with a per-episode criterion (`queryActionEpisodeScope`) — stay allowed.
  *
  * Client-safe.
@@ -46,7 +48,8 @@ export interface QueryActionScopeConfig {
 
 /**
  * Whether the action runs on the matched episodes rather than the whole
- * series: Sonarr's Unmonitor Only and Search for New Copy in the episode view
+ * series: Sonarr's Unmonitor Only, Search for New Copy and Unmonitor & Delete
+ * Files in the episode view
  * (`includeEpisodes`), as `POST /api/query/actions` runs them — and in the
  * grouped view of a query with a per-episode criterion (Season Number,
  * Episode Number, Seasons Behind Latest), whose show row stands for the
@@ -90,7 +93,7 @@ export function queryActionScopeViolation(
 
 /** The Query page's actions that act only on the matched episodes or tracks. */
 const QUERY_MEMBER_ACTIONS: Record<GroupScopeType, string> = {
-  SERIES: 'Delete Files Only, or Unmonitor Only or Search for New Copy with "Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — without tags',
+  SERIES: 'Delete Files Only, or Unmonitor Only, Unmonitor & Delete Files or Search for New Copy with "Include individual episodes" on or a Season Number, Episode Number or Seasons Behind Latest criterion — without tags',
   MUSIC: "Delete Files Only, without Search after or tags",
 };
 

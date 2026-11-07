@@ -12,7 +12,8 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionHonorsMemberIds, actsOnMembers, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, actsOnMembers, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope, type SeasonScope } from "@/lib/lifecycle/episode-scope";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld, notifyDeletionHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
@@ -85,6 +86,11 @@ interface ActionSchedulingRuleSet {
   name: string;
   type: string;
   seriesScope: boolean;
+  /**
+   * Its rules, which `ruleSetActsOnEpisodes` reads for Unmonitor & Delete
+   * Files — a delete, which per-episode coverage (the one use here) skips.
+   */
+  rules?: unknown;
   actionEnabled: boolean;
   actionType: string | null;
   actionDelayDays: number;
@@ -242,7 +248,7 @@ async function scheduleWithin(
       select: ACTION_SIGNATURE_SELECT,
     }),
   );
-  const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet);
+  const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, { ...ruleSet, rules: ruleSet.rules });
   const existingItemIds = new Set<string | null>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
@@ -537,13 +543,18 @@ export function resetApiHoldNotices(): void {
  * happens here.
  */
 async function recordVanishedAction(
-  action: Prisma.LifecycleActionGetPayload<object> & { mediaItem?: unknown; ruleSet?: unknown; episodeScope?: boolean },
+  action: Prisma.LifecycleActionGetPayload<object> & {
+    mediaItem?: unknown;
+    ruleSet?: unknown;
+    episodeScope?: boolean;
+    seasonScope?: SeasonScope;
+  },
   result: Omit<Prisma.LifecycleActionUncheckedCreateInput, "userId" | "actionType" | "scheduledFor">,
 ): Promise<void> {
-  // The relations and the run's own `episodeScope` are not columns: Prisma
-  // refuses a create carrying them.
+  // The relations and the run's own `episodeScope`/`seasonScope` are not
+  // columns: Prisma refuses a create carrying them.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id, createdAt, updatedAt, mediaItem, ruleSet, episodeScope, ...scalars } = action;
+  const { id, createdAt, updatedAt, mediaItem, ruleSet, episodeScope, seasonScope, ...scalars } = action;
   const data: Prisma.LifecycleActionUncheckedCreateInput = { ...scalars, ...result };
   try {
     await prisma.lifecycleAction.create({ data });
@@ -644,6 +655,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   const pendingActions = loadedActions.map((a) => ({
     ...a,
     episodeScope: !!a.ruleSet && ruleSetActsOnEpisodes(a.actionType, a.ruleSet),
+    // Whether it unmonitors the seasons of its episodes whole (criteria that
+    // decide per season), judged from the rules pass 2 re-checks the version of.
+    seasonScope: a.ruleSet ? ruleSetSeasonScope(a.actionType, a.ruleSet) : undefined,
   }));
 
   // SAFETY: Batch-validate that each pending action's item still exists in

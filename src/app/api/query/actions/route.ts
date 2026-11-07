@@ -4,8 +4,9 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
-import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
+import { executeActionsForItems, executePhaseUpdate } from "@/lib/lifecycle/run-actions";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actsOnMembers, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { unmonitorsWholeSeasons, type SeasonScope } from "@/lib/lifecycle/episode-scope";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -385,6 +386,12 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // As the scope gate above read it (`queryActionEpisodeScope`).
     const episodeScope = queryActionEpisodeScope(resolvedType, query.includeEpisodes, actionType, queryGroups);
     const isMemberScoped = actsOnMembers(actionType, episodeScope);
+    // On criteria that decide per season, an episode-scoped Unmonitor also
+    // unmonitors each season every episode of which the library holds is one
+    // it acts on — what the user selected in episode view, every matched
+    // episode of the show grouped by show (`SeasonScope`, episode-scope.ts).
+    const seasonScope: SeasonScope | undefined =
+      episodeScope && unmonitorsWholeSeasons(actionType, queryGroups) ? "selected" : undefined;
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
     // Group a show's episodes by the SAME series identity the query engine
@@ -609,7 +616,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
-    const { executed, failed, errors } = await executeActionsForItems(
+    const { executed, failed, errors, failures, notActedOn, notActedOnCount } = await executeActionsForItems(
       userId,
       items,
       {
@@ -621,6 +628,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
         addArrTags,
         removeArrTags,
         episodeScope,
+        seasonScope,
       },
       actionMembers,
       {
@@ -629,17 +637,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
         ruleSetType: resolvedType,
         cleanupMatches: false,
       },
-      ({ done, total, current }) =>
-        emit({
-          type: "phase",
-          key: "execute",
-          fraction: total > 0 ? done / total : 1,
-          // Per-item count plus the item + sub-step currently in flight.
-          // `current` is only reported pre-increment, so done < total here.
-          detail: current
-            ? `${done + 1} / ${total} · ${current.title} — ${current.step}`
-            : `${done} / ${total}`,
-        }),
+      // Per-item count plus the item + sub-step in flight; a file delete
+      // reports the share of its files gone within the item.
+      (progress) => emit(executePhaseUpdate(progress)),
     );
 
     // A batch can outlast the TTL both run stores were given when it started;
@@ -661,6 +661,8 @@ export const POST = withSession(async (session, request: NextRequest) => {
       });
     }
 
-    return { executed, failed, skipped, errors };
+    // Each failed item with its reason, and the episodes or tracks of actions
+    // that ran but were left alone: the Query page's results dialog lists them.
+    return { executed, failed, skipped, errors, failures, notActedOn, notActedOnCount };
   }
 });
