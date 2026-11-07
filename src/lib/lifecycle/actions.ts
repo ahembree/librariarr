@@ -688,7 +688,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * season/episode numbers. The numbers alone are not an identity: a show the
  * media server orders differently from Sonarr (absolute or DVD order, common
  * for anime) puts a different episode at the same S/E. Two days of slack covers
- * a local date against a UTC one. Silence on either side proves nothing.
+ * a local date against a UTC one. Silence on either side proves nothing, and
+ * the same real title on both overrides it (`episodeTitlesAgree`).
  */
 function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined): boolean {
   if (!ours || !sonarrAirDate) return false;
@@ -697,12 +698,30 @@ function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined
   return Math.abs(ours.getTime() - theirs) > 2 * DAY_MS;
 }
 
+/** A title that names only a position ("Episode 10", "Part 2", "TBA"): it says nothing about which episode. */
+const PLACEHOLDER_EPISODE_TITLE = /^(?:(?:episode|ep|chapter|part)\s*)?\d+$|^tb[ad]$/;
+
+/**
+ * Whether our episode and the Sonarr episode at the same season/episode number
+ * carry the same real title (`normalizeTitle`). That outweighs air dates that
+ * disagree: two sources often date an episode differently (a pre-emption, a
+ * repeat recorded as the premiere), while a different episode at the same
+ * number has a different title. A placeholder title proves nothing.
+ */
+function episodeTitlesAgree(ours: string | null | undefined, theirs: string | undefined): boolean {
+  if (!ours || !theirs) return false;
+  const a = normalizeTitle(ours);
+  return a.length > 0 && a === normalizeTitle(theirs) && !PLACEHOLDER_EPISODE_TITLE.test(a);
+}
+
 const formatSE = (season: number, episode: number) =>
   `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
 
 /** One of our episodes as `resolveSonarrEpisodes` reads it. */
 interface ResolvedMember {
   id: string;
+  /** The episode's own title (`title` on an episode row). */
+  title: string;
   libraryId: string;
   seriesKey: string | null;
   parentTitle: string | null;
@@ -733,7 +752,7 @@ async function resolveSonarrEpisodes(
   const episodes: ResolvedMember[] = await prisma.mediaItem.findMany({
     where: { id: { in: matchedMediaItemIds } },
     select: {
-      id: true, seasonNumber: true, episodeNumber: true, originallyAvailableAt: true,
+      id: true, title: true, seasonNumber: true, episodeNumber: true, originallyAvailableAt: true,
       // What a season-scoped Unmonitor reads (`wholeSeasonsOf`), so it needs no second lookup.
       libraryId: true, seriesKey: true, parentTitle: true, dedupKey: true,
     },
@@ -773,12 +792,19 @@ async function resolveSonarrEpisodes(
       continue;
     }
     if (airDatesContradict(e.originallyAvailableAt, sonarrEp.airDate)) {
-      logger.warn(
-        "Lifecycle",
-        `Skipping ${formatSE(e.seasonNumber, e.episodeNumber)} of Sonarr series ${seriesId}: the media server's air date (${e.originallyAvailableAt!.toISOString().slice(0, 10)}) does not match Sonarr's (${sonarrEp.airDate}) — the two number the show differently`,
-      );
-      unresolved++;
-      continue;
+      const se = formatSE(e.seasonNumber, e.episodeNumber);
+      const dates = `the media server's air date (${e.originallyAvailableAt!.toISOString().slice(0, 10)}) does not match Sonarr's (${sonarrEp.airDate})`;
+      if (!episodeTitlesAgree(e.title, sonarrEp.title)) {
+        logger.warn(
+          "Lifecycle",
+          `Skipping ${se} of Sonarr series ${seriesId}: ${dates}, and the titles ("${e.title}" / "${sonarrEp.title ?? ""}") do not confirm it is the same episode — the two may number the show differently`,
+        );
+        unresolved++;
+        continue;
+      }
+      // Same numbers and the same title: one source has the date wrong (a
+      // week's pre-emption, say), not a different episode at that number.
+      logger.info("Lifecycle", `Matching ${se} of Sonarr series ${seriesId} by its title "${e.title}" although ${dates}`);
     }
     memberBySonarrId.set(sonarrEp.id, e.id);
   }

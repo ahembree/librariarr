@@ -760,6 +760,29 @@ describe("Sonarr member-scoped file deletes", () => {
     expect(mockSonarr.triggerEpisodeSearch).toHaveBeenCalledWith([501, 504]);
   });
 
+  it("matches an episode whose air dates disagree when both sources give it the same real title", async () => {
+    // A week apart (a pre-emption), same episode: the title settles it.
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "e10", title: "Going Down With the Ship", seasonNumber: 15, episodeNumber: 10, originallyAvailableAt: new Date("2007-11-29T00:00:00Z") },
+      { id: "e11", title: "The Unhappy Tribe", seasonNumber: 15, episodeNumber: 11, originallyAvailableAt: new Date("2007-12-06T00:00:00Z") },
+      // A placeholder title proves nothing.
+      { id: "e12", title: "Episode 12", seasonNumber: 15, episodeNumber: 12, originallyAvailableAt: new Date("2007-12-13T00:00:00Z") },
+    ]);
+    mockSonarr.getEpisodes.mockResolvedValue([
+      { id: 1510, seasonNumber: 15, episodeNumber: 10, episodeFileId: 10, airDate: "2007-11-22", title: "Going Down with the Ship!" },
+      { id: 1511, seasonNumber: 15, episodeNumber: 11, episodeFileId: 11, airDate: "2007-11-29", title: "Another Episode Entirely" },
+      { id: 1512, seasonNumber: 15, episodeNumber: 12, episodeFileId: 12, airDate: "2007-12-06", title: "Episode 12" },
+    ]);
+
+    const outcome = await executeAction(showAction({ actionType: "DELETE_FILES_SONARR", matchedMediaItemIds: ["e10", "e11", "e12"] }));
+
+    expect(mockSonarr.deleteEpisodeFiles).toHaveBeenCalledWith([10]);
+    expect(outcome.deletedMemberIds).toEqual(["e10"]);
+    expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Matching S15E10 of Sonarr series 2 by its title "Going Down With the Ship"'));
+    expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining('Skipping S15E11 of Sonarr series 2: the media server\'s air date (2007-12-06) does not match Sonarr\'s (2007-11-29), and the titles ("The Unhappy Tribe" / "Another Episode Entirely")'));
+    expect(mockLogger.warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("Skipping S15E12"));
+  });
+
   it("deletes nothing (without throwing) when every matched episode is file-less", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValue([
       { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
