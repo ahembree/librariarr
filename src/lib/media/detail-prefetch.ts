@@ -20,6 +20,8 @@
  * status or a failed request is dropped, so the reader asks again.
  */
 
+import { LIST_PAGE_SIZE } from "@/lib/media/paged-list";
+
 export interface PrefetchedJson<T = unknown> {
   ok: boolean;
   status: number;
@@ -160,19 +162,22 @@ export type DetailChildList = "seasons" | "episodes" | "tracks" | "albums";
  * routes read the series, season, album or artist from that record
  * themselves, so the list is asked for beside the record instead of after it
  * arrives — the pages built the URL from the record's fields and so waited a
- * whole round trip. The episode and track lists keep the order and the
- * `limit=0` the pages always sent (a parent bounds them; there is nothing to
- * page).
+ * whole round trip. A season's episodes and an album's tracks are read in
+ * pages of `LIST_PAGE_SIZE` (`offset` past the first; `useDetailChildren`
+ * reads on while the route says `hasMore`), so no answer is larger than one
+ * page however long the season; a show's seasons and an artist's albums are
+ * one aggregate answer each.
  */
-export function detailChildrenUrl(kind: DetailChildList, id: string): string {
+export function detailChildrenUrl(kind: DetailChildList, id: string, offset = 0): string {
   const itemId = encodeURIComponent(id);
+  const page = `limit=${LIST_PAGE_SIZE}${offset > 0 ? `&offset=${offset}` : ""}`;
   switch (kind) {
     case "seasons":
       return `/api/media/series/seasons?itemId=${itemId}`;
     case "episodes":
-      return `/api/media/series?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&limit=0`;
+      return `/api/media/series?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&${page}`;
     case "tracks":
-      return `/api/media/music?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&limit=0`;
+      return `/api/media/music?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&${page}`;
     case "albums":
       return `/api/media/music/albums?itemId=${itemId}`;
   }

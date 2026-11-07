@@ -12,6 +12,7 @@ import { filterIdsByStreamCounts, parseStreamCountFilters } from "@/lib/filters/
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
+import { letterOffsets, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -69,10 +70,15 @@ const listGet = withSession(async (session, request: NextRequest) => {
   const sortOrder = searchParams.get("sortOrder") === "desc" ? "desc" : "asc";
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
+  const withIndex = wantsListIndex(searchParams);
 
   const sf = await resolveServerFilter(session.userId, serverId, "MOVIE");
   if (!sf) {
-    return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
+    return NextResponse.json({
+      items: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: { total: 0, letters: {} } }),
+    });
   }
 
   const where: Prisma.MediaItemWhereInput = {
@@ -145,40 +151,56 @@ const listGet = withSession(async (session, request: NextRequest) => {
   }
 
   // `id` is the tiebreaker, not decoration: without a total order Postgres is
-  // free to return tied rows in any order, and the two passes of a progressive
-  // load are planned differently (bounded top-N heapsort vs full quicksort or
-  // external merge). The tie block straddling the page boundary then permutes
-  // between the passes, so the stitched list shows some rows twice and drops
-  // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+  // free to return tied rows in any order, and the pages of a listing are
+  // planned differently (bounded top-N heapsort vs full quicksort or external
+  // merge). The tie block straddling a page boundary then permutes between
+  // the requests, so the paged list shows some rows twice and drops others
+  // entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
   const orderBy: Prisma.MediaItemOrderByWithRelationInput[] =
     sortBy === "title"
       ? [{ titleSort: { sort: sortOrder, nulls: "last" } }, { title: sortOrder }, { id: "asc" }]
       : [{ [sortBy]: sortOrder }, { id: "asc" }];
 
+  // The index (`?index=1`, the Movies page's first page): the count and the
+  // A–Z offsets of the whole listing, read from its titles in list order —
+  // two short columns, never the rows themselves.
+  const titleOf = (row: { title: string; titleSort: string | null }) => row.titleSort || row.title;
+  let index: ListIndex | undefined;
   let items;
   if (streamCounts) {
     // A track count is not something a Prisma filter can express, so the
     // candidates are listed in order, the counts checked in one SQL statement
     // over them, and the page cut from what is left — never as an `id IN (…)`
     // over every match, which runs out of bind parameters on a large library.
-    const candidates = await prisma.mediaItem.findMany({ where, orderBy, select: { id: true } });
+    const candidates = await prisma.mediaItem.findMany({
+      where,
+      orderBy,
+      select: { id: true, title: withIndex, titleSort: withIndex },
+    });
     const matching = await filterIdsByStreamCounts(
       prisma,
       candidates.map((c) => c.id),
       streamCounts,
     );
-    const ordered = candidates.map((c) => c.id).filter((id) => matching.has(id));
+    const kept = candidates.filter((c) => matching.has(c.id));
+    if (withIndex) index = { total: kept.length, letters: letterOffsets(kept.map((c) => titleOf(c))) };
+    const ordered = kept.map((c) => c.id);
     const pageIds = limit > 0 ? ordered.slice(skip, skip + limit + 1) : ordered.slice(skip);
     items = await findInOrder(pageIds, (chunk) =>
       prisma.mediaItem.findMany({ where: { id: { in: chunk } }, select: selectBase }),
     );
   } else {
-    items = await prisma.mediaItem.findMany({
-      where,
-      ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
-      orderBy,
-      select: selectBase,
-    });
+    const [pageRows, titles] = await Promise.all([
+      prisma.mediaItem.findMany({
+        where,
+        ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
+        orderBy,
+        select: selectBase,
+      }),
+      withIndex ? prisma.mediaItem.findMany({ where, orderBy, select: { title: true, titleSort: true } }) : null,
+    ]);
+    items = pageRows;
+    if (titles) index = { total: titles.length, letters: letterOffsets(titles.map(titleOf)) };
   }
 
   const hasMore = limit > 0 && items.length > limit;
@@ -206,6 +228,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
   return jsonResponse(request, {
     items: serializedItems,
     pagination: { page, limit, hasMore },
+    ...(index && { index }),
   });
 });
 

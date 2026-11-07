@@ -186,7 +186,8 @@ if (error) return error;
 
 ### API Pagination
 
-- Params: `page` (1-based, default 1), `limit` (default 50, capped at 100–200; `0` = all), `offset`, `sortBy`, `sortOrder`, parsed by `parseListPagination` (`src/lib/api/pagination.ts`).
+- Params: `page` (1-based, default 1), `limit` (default 50, capped at 100–200; `0` = all, kept for the public API), `offset`, `sortBy`, `sortOrder`, parsed by `parseListPagination` (`src/lib/api/pagination.ts`); `index=1` adds the listing's index (`total`, A–Z `letters`, header `sums`; `src/lib/media/list-index.ts`).
+- **Library pages never load a whole list** (`limit=0`): `useLibraryList` reads a listing a page (`LIST_PAGE_SIZE`) at a time as the virtualizers scroll (`requestRange`), the index with the first page, and every whole-list feature (counts, sums, the A–Z jump, sorting) comes from the server. Detail and rules in the `frontend` and `library-listings` skills.
 - **Every pageable list route orders by a total order** — append `{ id: "asc" }` after the user's sort.
 - N+1 trick: fetch `limit + 1`; if over, pop and set `hasMore: true`. Response: `{ items: [...], pagination: { page, limit, hasMore } }`.
 - `startsWith` for server-side alphabet filtering (A–Z, or `#` for non-alpha). List payloads exclude `summary` (list state is typed `MediaListItem`).
@@ -257,7 +258,7 @@ In a production build the job worker and the realtime manager (started from `ins
 
 - `get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?, { shouldCache? })` — single-flight; an `invalidate`/`invalidatePrefix`/`clear` hitting a key mid-compute keeps that result out of the cache. Use `shouldCache(value)` to keep a bad result (a `partial` Seerr walk) out while still answering waiters — never cache-then-`invalidate`.
 - `invalidate(key)`, `invalidatePrefix(prefix)`, `clear()`. Default TTL 60 s; bounded (`maxEntries`, expired-then-oldest).
-- **Library listing responses** are cached under `media-list:` by `withListResponseCache` (`src/lib/api/cached-list-response.ts`); see the `library-listings` skill.
+- **Library listing responses** are cached under `media-list:` by `withListResponseCache` (`src/lib/api/cached-list-response.ts`), and the grouped listings' sorted rows between page requests by `memoListRows` (`src/lib/api/list-rows-memo.ts`, same prefix); see the `library-listings` skill.
 - **Always call `invalidateMediaCaches()`** (`src/lib/cache/invalidate.ts`) after any mutation that changes media items, server membership, dedup canonical selection, or title/artwork preference — sync, purge, server CRUD, the library enable/disable route (`PUT /api/servers/[id]/libraries`), the dedup/title-preference settings routes. It drops every media-derived prefix: `server-filter:`, `stats:`, `group-summary:`, `cross-tab:`, `custom-stats:`, `timeline:`, `distinct-values` (incl. `distinct-values:genres`), `watch-history-filters:`, `recently-added:`, `image-meta:`, `query-action-live:`, `query-distinct-values`, `media-list:` (`tests/unit/cache/invalidate.test.ts`). Never hand-roll partial invalidation. Rule set create/rename/delete calls `invalidateRuleSetNameCaches()`.
 
 ### Filter Utilities

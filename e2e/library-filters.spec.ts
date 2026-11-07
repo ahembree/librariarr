@@ -60,15 +60,20 @@ async function searchFilterPanel(page: Page, label: string) {
 test.describe("library — Series page filters", () => {
   test("sends the title search to the server and lists what it returns", async ({ page }) => {
     await page.route(isPath("/api/media/series/grouped"), (route) => {
-      const search = new URL(route.request().url()).searchParams.get("search");
+      const params = new URL(route.request().url()).searchParams;
+      // The route's answer for the search, whatever its titles say: the
+      // page must list it as given rather than filter it again.
+      const series = params.get("search")
+        ? [show("Server Answer", "tvdb:81189")]
+        : [show("Unfiltered One", "tvdb:79168"), show("Unfiltered Two", "tvdb:73255")];
       return route.fulfill({
         json: {
-          // The route's answer for the search, whatever its titles say: the
-          // page must list it as given rather than filter it again.
-          series: search
-            ? [show("Server Answer", "tvdb:81189")]
-            : [show("Unfiltered One", "tvdb:79168"), show("Unfiltered Two", "tvdb:73255")],
-          pagination: { page: 1, limit: 0, hasMore: false },
+          series,
+          pagination: { page: 1, limit: Number(params.get("limit")), hasMore: false },
+          // The page reads the listing a page at a time, the index with the first.
+          ...(params.get("index") === "1" && {
+            index: { total: series.length, letters: {}, sums: { seasons: series.length, episodes: 10 * series.length } },
+          }),
         },
       });
     });

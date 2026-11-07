@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
@@ -58,8 +58,9 @@ const SORT_OPTIONS = [
   { value: "totalSize", label: "Size" },
 ];
 
-// Module-level: built inline, the columns were new on every render and the
-// table re-sorted the whole list each time.
+// Module-level: built inline, the columns were new on every render. Each
+// sortable column's id is a sort the route answers: the table shows the
+// server's order, since the page holds only the pages read.
 const ALBUM_TABLE_COLUMNS: DataTableColumn<AlbumEntry>[] = [
   {
     id: "albumTitle",
@@ -106,6 +107,7 @@ const ALBUM_TABLE_COLUMNS: DataTableColumn<AlbumEntry>[] = [
 const ALBUMS_FROM = `?from=${encodeURIComponent("/library/music/albums")}`;
 
 const albumKey = (a: AlbumEntry) => `${a.artistName}::${a.albumTitle}`;
+const SQUARE_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="square" />;
 
 // The same popover, with the album art as its hero, in both views.
 function albumHover(album: AlbumEntry) {
@@ -123,7 +125,7 @@ const selectAlbums = (body: { albums?: AlbumEntry[] }) => body.albums;
 export default function AllAlbumsPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, filters, onFilterChange, clearFilters, hasFilters } =
+  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, setSort, filters, onFilterChange, clearFilters, hasFilters } =
     useLibraryListState("albums", "albumTitle");
   const filterPanel = useFilterPanelReset(undefined, clearFilters);
 
@@ -131,7 +133,6 @@ export default function AllAlbumsPage() {
   const { show: showCardBadge, showServers, prefs: cardDisplayPrefs, setVisible: setCardDisplayVisible } = useCardDisplay("MUSIC_ALBUMS");
   const { servers, selectedServerId, setSelectedServerId } = useServers();
   const listParams = new URLSearchParams();
-  listParams.set("limit", "0");
   listParams.set("sortBy", sortBy);
   listParams.set("sortOrder", sortOrder);
   if (selectedServerId !== "all") {
@@ -140,10 +141,9 @@ export default function AllAlbumsPage() {
   for (const [key, value] of Object.entries(filters)) {
     if (value) listParams.set(key, value);
   }
-  const { items: albums, loading } = useLibraryList({
+  const { items: albums, loading, requestRange } = useLibraryList({
     url: "/api/media/music/albums/all",
     params: listParams,
-    mode: "grouped",
     select: selectAlbums,
     syncScope: { types: "MUSIC", serverId: selectedServerId },
   });
@@ -246,7 +246,7 @@ export default function AllAlbumsPage() {
       ) : (
         <>
           <p className="mb-3 text-sm text-muted-foreground">
-            {albums.length} {albums.length === 1 ? "album" : "albums"}
+            {albums.length.toLocaleString()} {albums.length === 1 ? "album" : "albums"}
           </p>
 
           {viewMode === "table" ? (
@@ -254,13 +254,23 @@ export default function AllAlbumsPage() {
               columns={ALBUM_TABLE_COLUMNS}
               data={albums}
               keyExtractor={albumKey}
-              defaultSortId="albumTitle"
+              defaultSortId={sortBy}
+              defaultSortOrder={sortOrder}
+              onSortChange={setSort}
               resizeStorageKey="dt-widths-albums"
               onRowClick={openAlbum}
               renderHoverContent={albumHover}
+              onVisibleRange={requestRange}
             />
           ) : (
-            <VirtualCardGrid grid={grid} items={albums} getKey={albumKey} renderItem={renderCard} />
+            <VirtualCardGrid
+              grid={grid}
+              items={albums}
+              getKey={albumKey}
+              renderItem={renderCard}
+              placeholder={SQUARE_PLACEHOLDER}
+              onVisibleRange={requestRange}
+            />
           )}
         </>
       )}

@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
@@ -28,6 +28,7 @@ import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
 import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
+import { selectListItems } from "@/lib/media/paged-list";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Name" },
@@ -40,6 +41,9 @@ const SORT_OPTIONS = [
 ];
 
 const movieKey = (movie: MediaListItem) => movie.id;
+// The title the server reads the A–Z rail's letters from.
+const movieTitleOf = (movie: MediaListItem) => movie.titleSort || movie.title;
+const POSTER_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="poster" />;
 
 // The table's popover: the poster as its hero, since a row shows none. The
 // card's passes the same fields (the card already shows the poster).
@@ -81,10 +85,10 @@ export default function MoviesPage() {
   if (selectedServerId !== "all") {
     listParams.set("serverId", selectedServerId);
   }
-  const { items, loading, loadingRest, refetch: fetchMovies } = useLibraryList<MediaListItem>({
+  const { items, index, loading, requestRange, refetch: fetchMovies } = useLibraryList({
     url: "/api/media/movies",
     params: listParams,
-    mode: "progressive",
+    select: selectListItems<MediaListItem>,
     syncScope: { types: "MOVIE", serverId: selectedServerId },
     // No debounce on changes: this page has always refetched at once.
     debounceMs: 0,
@@ -100,13 +104,12 @@ export default function MoviesPage() {
     layoutKey: `${viewMode}:${loading}`,
   });
 
-  const { markChildNavigation } = useScrollRestoration("/library/movies", !loadingRest && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/movies", !loading && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabetItems = useMemo(() => items.map((m) => ({ title: m.titleSort || m.title })), [items]);
-  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
+  const alphabet = useLibraryAlphabet({ letters: index?.letters, items, titleOf: movieTitleOf, grid, viewMode });
 
   const openMovie = useCallback(
     (item: MediaListItem) => {
@@ -150,7 +153,7 @@ export default function MoviesPage() {
         className="mb-6"
         title="Movies"
         meta={
-          !loadingRest && items.length > 0 && (
+          !loading && items.length > 0 && (
             <span className="font-mono text-xs text-faint">
               {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
             </span>
@@ -202,9 +205,17 @@ export default function MoviesPage() {
           scrollToIndexRef={alphabet.tableScrollToIndexRef}
           hideServers={servers.length <= 1}
           renderHoverContent={movieTableHover}
+          onVisibleRange={requestRange}
         />
       ) : (
-        <VirtualCardGrid grid={grid} items={items} getKey={movieKey} renderItem={renderCard} />
+        <VirtualCardGrid
+          grid={grid}
+          items={items}
+          getKey={movieKey}
+          renderItem={renderCard}
+          placeholder={POSTER_PLACEHOLDER}
+          onVisibleRange={requestRange}
+        />
       )}
 
       <AlphabetFilter

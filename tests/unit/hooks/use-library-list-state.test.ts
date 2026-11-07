@@ -42,6 +42,17 @@ describe("useLibraryListState", () => {
     expect(desc.result.current.sortOrder).toBe("desc");
   });
 
+  it("takes a server-sorted table's sort and order together", () => {
+    const { result } = renderHook(() => useLibraryListState("series", "parentTitle"));
+    const setSort = result.current.setSort;
+    act(() => result.current.setSort("episodeCount", "desc"));
+    expect([result.current.sortBy, result.current.sortOrder]).toEqual(["episodeCount", "desc"]);
+    act(() => result.current.setSort("episodeCount", "asc"));
+    expect([result.current.sortBy, result.current.sortOrder]).toEqual(["episodeCount", "asc"]);
+    // Stable, for the table's `onSortChange`.
+    expect(result.current.setSort).toBe(setSort);
+  });
+
   it("starts from the saved filters and keeps them across a visit", () => {
     sessionStorage.setItem("filters-/library/movies", JSON.stringify({ resolution: "4K" }));
     const { result } = renderHook(() => useLibraryListState("movies", "title", { filtersKey: "filters-/library/movies" }));

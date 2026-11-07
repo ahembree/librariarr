@@ -12,6 +12,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
+import { wantsListIndex } from "@/lib/media/list-index";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -51,6 +52,7 @@ const SORT_COLUMNS = new Set([
 const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
+  const withIndex = wantsListIndex(searchParams);
   const search = searchParams.get("search");
   // `seriesKey` (series identity) is preferred; `parentTitle` stays as a
   // backward-compatible fallback (ambiguous across same-titled shows).
@@ -74,7 +76,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
     // An episode with no show title belongs to no season list (the page
     // listed nothing for one).
     if (!scope.parentTitle) {
-      return NextResponse.json({ items: [], pagination: { page, limit, total: 0, pages: 0, hasMore: false } });
+      return NextResponse.json({ items: [], pagination: { page, limit, total: 0, pages: 0, hasMore: false }, ...(withIndex && { index: { total: 0 } }) });
     }
     seriesKey = scope.seriesKey;
     parentTitle = scope.parentTitle;
@@ -83,7 +85,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
 
   const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
-    return NextResponse.json({ items: [], pagination: { page, limit, total: 0, pages: 0, hasMore: false } });
+    return NextResponse.json({ items: [], pagination: { page, limit, total: 0, pages: 0, hasMore: false }, ...(withIndex && { index: { total: 0 } }) });
   }
 
   const where: Prisma.MediaItemWhereInput = {
@@ -175,16 +177,16 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // filtered scan of the largest table in the schema. It is only *needed* when a
   // page size is set (to derive `pages`); when the caller asked for everything
   // after `skip`, the total is exactly `skip + items.length`. Deriving it there
-  // removes one of the two counts a progressive page load used to pay.
+  // spares a `limit=0` read (the public API's whole listing) a second scan.
   const items = await prisma.mediaItem.findMany({
     where,
     ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
     // `id` is the tiebreaker, not decoration: without a total order Postgres is
-    // free to return tied rows in any order, and the two passes of a progressive
-    // load are planned differently (bounded top-N heapsort vs full quicksort or
-    // external merge). The tie block straddling the page boundary then permutes
-    // between the passes, so the stitched list shows some rows twice and drops
-    // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+    // free to return tied rows in any order, and the pages of a listing are
+    // planned differently (bounded top-N heapsort vs full quicksort or external
+    // merge). The tie block straddling a page boundary then permutes between
+    // the requests, so the paged list shows some rows twice and drops others
+    // entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
     // By show, a show's episodes run in SxxExx order — the order a list headed
     // "<Show> SxxExx" reads in, rather than whatever their ids happen to be.
     orderBy: [
@@ -224,6 +226,8 @@ const listGet = withSession(async (session, request: NextRequest) => {
   return jsonResponse(request, {
     items: serializedItems,
     pagination: { page, limit, total, pages: limit > 0 ? Math.ceil(total / limit) : 1, hasMore },
+    // The All Episodes tab's first page: the count it sizes its list with.
+    ...(withIndex && { index: { total } }),
   });
 });
 

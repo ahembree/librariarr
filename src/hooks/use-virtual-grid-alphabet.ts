@@ -2,10 +2,17 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import type { Virtualizer } from "@tanstack/react-virtual";
-import { getLetterForTitle } from "@/lib/utils";
 
 interface UseVirtualGridAlphabetOptions {
-  items: { title: string }[];
+  /**
+   * The first item index of each starting letter, over the whole list — the
+   * listing's `index.letters` (`src/lib/media/list-index.ts`), sent by the
+   * server: a paged list holds only the pages scrolled to, so the rail cannot
+   * read the letters off the rows it has.
+   */
+  letters: Record<string, number> | undefined;
+  /** The letter of the item at `index` (its title when loaded), for the active letter. */
+  letterAt: (index: number) => string | null;
   columns: number;
   virtualizer: Virtualizer<HTMLElement, Element>;
   scrollElement: HTMLElement | null;
@@ -14,14 +21,16 @@ interface UseVirtualGridAlphabetOptions {
 }
 
 /**
- * Data-driven alphabet navigation for virtualized grids.
- * Replaces useAlphabetScroll for grids where most items are not in the DOM.
+ * Alphabet navigation for virtualized grids, where most items are not in the
+ * DOM — and, on a paged listing, not loaded either.
  *
- * Computes letter positions from the data array and virtualizer state
- * instead of querying DOM elements.
+ * Letters and their positions come from the listing's index; the jump scrolls
+ * the virtualizer to the letter's row (its page loads as the rows come into
+ * view), and the active letter follows the row at 40% of the viewport.
  */
 export function useVirtualGridAlphabet({
-  items,
+  letters,
+  letterAt,
   columns,
   virtualizer,
   scrollElement,
@@ -31,53 +40,21 @@ export function useVirtualGridAlphabet({
   const scrollingRef = useRef(false);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const availableLetters = useMemo(() => {
-    const letters = new Set<string>();
-    for (const item of items) {
-      if (item.title) letters.add(getLetterForTitle(item.title));
-    }
-    return letters;
-  }, [items]);
-
-  // Letter → first row index containing that letter
-  const letterRowIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    for (let i = 0; i < items.length; i++) {
-      const letter = getLetterForTitle(items[i].title);
-      if (!map.has(letter)) {
-        map.set(letter, Math.floor(i / columns));
-      }
-    }
-    return map;
-  }, [items, columns]);
-
-  // Row index → letter of first item in that row
-  const rowLetters = useMemo(() => {
-    const totalRows = Math.ceil(items.length / columns);
-    const result: string[] = new Array(totalRows);
-    for (let row = 0; row < totalRows; row++) {
-      const itemIndex = row * columns;
-      if (itemIndex < items.length) {
-        result[row] = getLetterForTitle(items[itemIndex].title);
-      }
-    }
-    return result;
-  }, [items, columns]);
+  const availableLetters = useMemo(() => new Set(Object.keys(letters ?? {})), [letters]);
 
   const scrollToLetter = useCallback(
     (letter: string) => {
-      const rowIndex = letterRowIndex.get(letter);
-      if (rowIndex !== undefined) {
-        scrollingRef.current = true;
-        setActiveLetter(letter);
-        virtualizer.scrollToIndex(rowIndex, { align: "start" });
-        clearTimeout(scrollTimerRef.current);
-        scrollTimerRef.current = setTimeout(() => {
-          scrollingRef.current = false;
-        }, 100);
-      }
+      const itemIndex = letters?.[letter];
+      if (itemIndex === undefined) return;
+      scrollingRef.current = true;
+      setActiveLetter(letter);
+      virtualizer.scrollToIndex(Math.floor(itemIndex / Math.max(1, columns)), { align: "start" });
+      clearTimeout(scrollTimerRef.current);
+      scrollTimerRef.current = setTimeout(() => {
+        scrollingRef.current = false;
+      }, 100);
     },
-    [letterRowIndex, virtualizer]
+    [letters, columns, virtualizer],
   );
 
   // Track active letter from scroll position
@@ -101,7 +78,7 @@ export function useVirtualGridAlphabet({
       let currentLetter: string | null = null;
       for (const vItem of virtualItems) {
         if (vItem.start <= viewportTarget) {
-          currentLetter = rowLetters[vItem.index] ?? null;
+          currentLetter = letterAt(vItem.index * Math.max(1, columns));
         } else {
           break;
         }
@@ -126,7 +103,7 @@ export function useVirtualGridAlphabet({
       scrollElement.removeEventListener("scroll", throttledScroll);
       clearTimeout(scrollTimerRef.current);
     };
-  }, [virtualizer, rowLetters, scrollElement, enabled]);
+  }, [virtualizer, letterAt, columns, scrollElement, enabled]);
 
   return { activeLetter, availableLetters, scrollToLetter };
 }

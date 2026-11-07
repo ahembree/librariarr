@@ -6,12 +6,15 @@ import { test, expect, type Page } from "@playwright/test";
  * 100 rows, then the whole library again, so every sync that added a movie
  * flashed the whole page.
  *
+ * The page reads its list a page at a time (`limit` + `offset`, the listing's
+ * index with the first page) — never the whole library with `limit=0`.
+ *
  * `/api/media/movies` is stubbed so the spec controls the library and can hold
  * the first-page answer, and `/api/events/stream` is held open until the test
  * releases one `sync:completed`, as `dashboard-refresh.spec.ts` does.
  */
 
-const FIRST_CHUNK = 100;
+const PAGE_SIZE = 100;
 const isPath = (path: string) => (url: URL) => url.pathname === path;
 
 function movie(n: number, title = `Movie ${String(n).padStart(3, "0")}`) {
@@ -40,7 +43,7 @@ interface Harness {
 }
 
 async function setup(page: Page): Promise<Harness> {
-  let movies = Array.from({ length: FIRST_CHUNK + 20 }, (_, i) => movie(i + 1));
+  let movies = Array.from({ length: PAGE_SIZE + 20 }, (_, i) => movie(i + 1));
   const requests: string[] = [];
   let gate: Promise<void> | null = null;
   let releaseStream: ((event: string) => void) | null = null;
@@ -48,13 +51,16 @@ async function setup(page: Page): Promise<Harness> {
   await page.route(isPath("/api/media/movies"), async (route) => {
     const url = new URL(route.request().url());
     requests.push(url.search);
-    const offset = url.searchParams.get("offset");
+    const start = Number(url.searchParams.get("offset") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 0);
-    if (offset === null && gate) await gate;
-    const start = offset ? Number(offset) : 0;
+    if (start === 0 && gate) await gate;
     const items = limit > 0 ? movies.slice(start, start + limit) : movies.slice(start);
     await route.fulfill({
-      json: { items, pagination: { page: 1, limit, hasMore: limit > 0 && start + limit < movies.length } },
+      json: {
+        items,
+        pagination: { page: 1, limit, hasMore: limit > 0 && start + limit < movies.length },
+        ...(url.searchParams.get("index") === "1" && { index: { total: movies.length, letters: { M: 0 } } }),
+      },
     });
   });
   await page.route(isPath("/api/events/stream"), async (route) => {
@@ -108,7 +114,9 @@ test.describe("library refresh", () => {
     await expect(page.locator(GRID_SKELETON).first()).toBeVisible();
     releaseInitialLoad();
     await expect(card(page, "Movie 001")).toBeVisible();
-    await expect(page.getByText(`${FIRST_CHUNK + 20} movies`)).toBeVisible();
+    // The count is the listing's whole length, from the index, before the
+    // rows past the first page are read.
+    await expect(page.getByText(`${PAGE_SIZE + 20} movies`)).toBeVisible();
 
     // Mark a card that stays in its row, and watch for the grid skeleton.
     await card(page, "Movie 001").evaluate((el) => el.setAttribute("data-e2e-kept", "1"));
@@ -121,23 +129,27 @@ test.describe("library refresh", () => {
     }, GRID_SKELETON);
     const before = h.requests.length;
 
-    h.setMovies([movie(0, "AAA New Movie"), ...Array.from({ length: FIRST_CHUNK + 20 }, (_, i) => movie(i + 1))]);
+    h.setMovies([movie(0, "AAA New Movie"), ...Array.from({ length: PAGE_SIZE + 20 }, (_, i) => movie(i + 1))]);
     const releaseFirstPage = h.holdFirstPage();
     await h.fireSyncCompleted();
 
-    // The refresh asks for the rest without waiting for the first screenful.
+    // The refresh reads the first page and the index again.
     await expect
-      .poll(() => h.requests.slice(before).filter((q) => q.includes(`offset=${FIRST_CHUNK}`)).length)
+      .poll(() => h.requests.slice(before).filter((q) => q.includes("offset=0") && q.includes("index=1")).length)
       .toBe(1);
-    // Until the whole list is in, the old one stays.
+    // Until it answers, the list on screen stays.
     await expect(card(page, "AAA New Movie")).toHaveCount(0);
-    await expect(page.getByText(`${FIRST_CHUNK + 20} movies`)).toBeVisible();
+    await expect(page.getByText(`${PAGE_SIZE + 20} movies`)).toBeVisible();
     releaseFirstPage();
 
     await expect(card(page, "AAA New Movie")).toBeVisible();
-    await expect(page.getByText(`${FIRST_CHUNK + 21} movies`)).toBeVisible();
+    await expect(page.getByText(`${PAGE_SIZE + 21} movies`)).toBeVisible();
     // No skeleton at any point, and the existing card was never remounted.
     expect(await page.evaluate(() => (window as unknown as { __skeletonSeen: boolean }).__skeletonSeen)).toBe(false);
     await expect(card(page, "Movie 001")).toHaveAttribute("data-e2e-kept", "1");
+    // Every request was one page: none asked for the whole library.
+    for (const query of h.requests) {
+      expect(new URLSearchParams(query).get("limit")).toBe(String(PAGE_SIZE));
+    }
   });
 });

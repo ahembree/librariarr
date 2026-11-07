@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
 import type { VirtualPosterGrid } from "@/hooks/use-virtual-poster-grid";
 import type { LibraryViewMode } from "@/hooks/use-library-list-state";
+import { letterAt as letterAtOffset } from "@/lib/media/list-index";
+import { getLetterForTitle } from "@/lib/utils";
 
 /** The quality bar under a library card's artwork: the 4px bar plus its 8px padding. */
 const QUALITY_BAR_HEIGHT = 12;
@@ -28,29 +30,60 @@ export interface LibraryAlphabet {
   tableScrollToIndexRef: React.RefObject<((index: number) => void) | null>;
 }
 
+export interface LibraryAlphabetOptions<T> {
+  /** The listing's `index.letters` — the first row of each starting letter over the whole list. */
+  letters: Record<string, number> | undefined;
+  /** The rows (`useLibraryList().items`; `undefined` where a page has not loaded). */
+  items: readonly (T | undefined)[];
+  /** The title a row's letter comes from — the one the server's letters are read from. */
+  titleOf: (item: T) => string | null | undefined;
+  grid: VirtualPosterGrid;
+  viewMode: LibraryViewMode;
+}
+
 /**
- * The A–Z rail of a library page with a card grid and a table: the grid's
- * letters come from its virtualizer (most cards are not in the DOM), the
- * table's from its own index scroller, and only the view on screen listens
- * for scrolling. `items` must be memoised (one entry per row, in list order).
+ * The A–Z rail of a library page with a card grid and a table. The letters
+ * and where each starts come from the listing's index (the server's, since a
+ * paged list holds only the pages scrolled to); the grid jumps through its
+ * virtualizer, the table through its own index scroller, and only the view on
+ * screen listens for scrolling. The active letter is a loaded row's own title,
+ * or — for a row not loaded yet — the letter whose run it falls in.
  */
-export function useLibraryAlphabet(
-  items: { title: string }[],
-  grid: VirtualPosterGrid,
-  viewMode: LibraryViewMode,
-): LibraryAlphabet {
+export function useLibraryAlphabet<T>({
+  letters,
+  items,
+  titleOf,
+  grid,
+  viewMode,
+}: LibraryAlphabetOptions<T>): LibraryAlphabet {
   const tableScrollToIndexRef = useRef<((index: number) => void) | null>(null);
   const cards = viewMode === "cards";
+  const titleOfRef = useRef(titleOf);
+  useEffect(() => {
+    titleOfRef.current = titleOf;
+  });
+
+  const letterAt = useCallback(
+    (index: number) => {
+      const item = items[index];
+      if (item === undefined) return letterAtOffset(letters, index);
+      const title = titleOfRef.current(item);
+      return title ? getLetterForTitle(title) : null;
+    },
+    [items, letters],
+  );
 
   const gridAlphabet = useVirtualGridAlphabet({
-    items,
+    letters,
+    letterAt,
     columns: grid.columns,
     virtualizer: grid.virtualizer,
     scrollElement: grid.scrollElement,
     enabled: cards,
   });
   const tableAlphabet = useTableAlphabet({
-    items,
+    letters,
+    letterAt,
     enabled: !cards,
     scrollToIndexRef: tableScrollToIndexRef,
     scrollElement: grid.scrollElement,

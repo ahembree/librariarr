@@ -15,13 +15,12 @@ import type { ServerPresence } from "./deduplicate";
  * badges to each item.
  *
  * One statement with the keys as a single array parameter. The keys are every
- * listed row's, so the remainder of a progressive load (`limit=0&offset=100`)
- * passes one per canonical row of the library. As a Prisma `in` list that was
+ * listed row's, so a whole listing (`limit=0`, the public API) passes one per
+ * canonical row of the library. As a Prisma `in` list that was
  * a bind parameter per key, and Prisma (7.10) splits an over-long list into
  * several statements only for an unordered, unpaged `findMany` — this one was
- * ordered (oldest copy first) — so past 32,767 the Movies, Episodes and Tracks
- * remainder requests answered 500 (P2029) and the pages silently stopped at
- * their first 100 rows.
+ * ordered (oldest copy first) — so past 32,767 a whole Movies, Episodes or
+ * Tracks listing answered 500 (P2029).
  */
 export async function getServerPresenceByDedupKey(
   dedupKeys: string[],

@@ -1,11 +1,9 @@
 /**
- * The library pages' last-loaded lists, kept for the rest of the tab's life so
- * coming back to a page — from an item's detail page, or another library page
- * — paints the list at once instead of re-downloading the whole library.
- *
- * Before it every visit fetched everything again (a 40k-track library, a
- * 28k-episode one) and scroll restoration waited for all of it to arrive, so
- * "back" from a detail page showed a skeleton for as long as a cold load.
+ * The library pages' last-read lists — each listing's index and every page
+ * read so far (`PagedListSnapshot`, `src/lib/media/paged-list.ts`) — kept for
+ * the rest of the tab's life so coming back to a page — from an item's detail
+ * page, or another library page — paints the list at once, at the row the user
+ * left, instead of reading it again page by page behind a skeleton.
  *
  * - An entry younger than `LIST_FRESH_MS` is shown and nothing is fetched —
  *   while pushes are arriving. With the event stream down (or held back by a
@@ -105,30 +103,6 @@ export function clearLibraryListCache(): void {
 /** `url?params` with the parameters sorted, so their order never splits an entry. */
 export function listCacheKeyFor(url: string, params: URLSearchParams): string {
   return `${url}?${sortedQueryString(params)}`;
-}
-
-/**
- * GET `url?params` as JSON through the cache: `onData` runs with the cached
- * answer when there is one, and again with the server's when the entry was
- * missing or past fresh. Rejects on a failed request (an error status
- * included), after any cached answer was already handed over.
- */
-export async function loadCachedList<T>(
-  url: string,
-  params: URLSearchParams,
-  onData: (data: T) => void,
-  cache: ListCache = libraryListCache,
-): Promise<void> {
-  const key = listCacheKeyFor(url, params);
-  const generation = cache.generation();
-  const cached = cache.get<T>(key);
-  if (cached) {
-    onData(cached.value);
-    if (cached.fresh) return;
-  }
-  const data = await fetchJson<T>(`${url}?${params}`);
-  cache.set(key, data, generation);
-  onData(data);
 }
 
 /** GET `href` as JSON; rejects on an error status. A `signal` aborts the request. */

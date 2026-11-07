@@ -75,4 +75,43 @@ describe("useDetailChildren", () => {
     await act(async () => answers.get(seasonsUrl("a"))!());
     expect(result.current.items).toEqual([{ n: seasonsUrl("bb").length }]);
   });
+
+  describe("a paged child list (a season's episodes)", () => {
+    const pickItems = (body: Record<string, unknown>) => body.items as { n: number }[] | undefined;
+    const page = (count: number, from: number, hasMore: boolean) =>
+      ok({ items: Array.from({ length: count }, (_, i) => ({ n: from + i })), pagination: { hasMore } });
+
+    it("reads page after page while the route says there is more, and hands the list over whole", async () => {
+      fetchMock.mockImplementation((url: string) => {
+        if (url === detailChildrenUrl("episodes", "s1")) return Promise.resolve(page(100, 0, true));
+        if (url === detailChildrenUrl("episodes", "s1", 100)) return Promise.resolve(page(100, 100, true));
+        if (url === detailChildrenUrl("episodes", "s1", 200)) return Promise.resolve(page(5, 200, false));
+        return Promise.reject(new Error(`unexpected ${url}`));
+      });
+      const { result } = renderHook(() => useDetailChildren("s1", "episodes", 0, pickItems));
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      expect(result.current.items.map((i) => i.n)).toEqual(Array.from({ length: 205 }, (_, i) => i));
+      // Every request is one page: none asks for the whole list.
+      expect(fetchMock.mock.calls).toHaveLength(3);
+      for (const [url] of fetchMock.mock.calls) expect(url).not.toMatch(/limit=0\b/);
+    });
+
+    it("keeps the list on screen when a later page fails", async () => {
+      fetchMock.mockImplementation((url: string) =>
+        url === detailChildrenUrl("episodes", "s1") ? Promise.resolve(page(100, 0, false)) : Promise.reject(new Error("no")),
+      );
+      const { result, rerender } = renderHook(({ tick }) => useDetailChildren("s1", "episodes", tick, pickItems), {
+        initialProps: { tick: 0 },
+      });
+      await waitFor(() => expect(result.current.items).toHaveLength(100));
+
+      fetchMock.mockImplementation((url: string) =>
+        url === detailChildrenUrl("episodes", "s1") ? Promise.resolve(page(100, 0, true)) : Promise.reject(new Error("down")),
+      );
+      rerender({ tick: 1 });
+      await waitFor(() => expect(calls(detailChildrenUrl("episodes", "s1", 100))).toBe(1));
+      await act(async () => {});
+      expect(result.current.items).toHaveLength(100);
+    });
+  });
 });

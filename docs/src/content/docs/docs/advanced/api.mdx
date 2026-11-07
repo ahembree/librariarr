@@ -99,12 +99,12 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (default 50, at most 100, `0` = all), `offset` (overrides `page`); sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
+| `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (default 50, at most 100, `0` = all), `offset` (overrides `page`), `index=1` (adds the listing's [index](#listing-index)); sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
 | `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies except `startsWith`, plus `seriesKey` and `seasonNumber`, or `itemId` (an episode's id) for the season that episode belongs to |
-| `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
+| `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `index=1`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
 | `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing), or `itemId` (an episode's id) for that episode's show; `serverId` optional |
 | `GET` | `/api/v1/media/music` | Tracks, with the same parameters as movies except `startsWith`; `parentTitle` (artist) and `albumTitle` narrow the list, or `itemId` (a track's id) lists the album that track is on |
-| `GET` | `/api/v1/media/music/grouped` | Artists, with track and album counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
+| `GET` | `/api/v1/media/music/grouped` | Artists, with track and album counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `index=1`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
 | `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle`, or `itemId` (a track's id) for that track's artist; `serverId` optional |
 | `GET` | `/api/v1/media/search` | Search by title: `q` (at most 200 characters; longer is a `400`), `type` (`MOVIE`, `SERIES` or `MUSIC`). `seriesScope=true` returns shows instead of episodes, `musicScope=true` artists and albums instead of tracks. `types=MOVIE,SERIES,MUSIC` (in place of `type`) searches several types in one request and answers `{ "results": { "MOVIE": [...], ... } }`, each list what `type` returns for it |
 | `GET` | `/api/v1/media/recently-added` | Newest additions: `limit` (1–50, default 10), `type`, `serverId` |
@@ -113,6 +113,21 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | `GET` | `/api/v1/media/{id}` | One item with its streams, external ids and file details. Unlike the app's own view, it omits the file path and its servers' addresses and machine ids |
 | `GET` | `/api/v1/media/{id}/plays` | That item's plays (user, date and time, device): `page`, `limit` (≤ 200, default 50), `serverId` |
 | `GET` | `/api/v1/media/{id}/image` | Artwork (an image, not JSON). `type` (`art`, `parent`, `season`, or `role` with `index` for a cast member's photo; poster by default) and `w` (`400`, `640` or `800`) |
+
+#### Listing index
+
+The movies, episodes, tracks, shows and artists listings take `index=1`, which adds an `index` object to the answer describing the whole listing under the same filters and sort, whichever page you asked for:
+
+- `total` — how many rows the listing has;
+- `letters` (movies, shows and artists) — the row offset of the first row whose title starts with each letter, `#` for titles that do not start with a letter, in the listing's order: `?offset=<letters.Q>` starts a page at the first Q;
+- `sums` (shows and artists) — `seasons` and `episodes` over every show, or `albums` and `tracks` over every artist.
+
+With it you can page through a library of any size with `limit` and `offset`, knowing its length up front, instead of reading it whole with `limit=0` (which counts as 20 requests). `limit=0` still answers everything, as before.
+
+```bash
+curl -H "Authorization: Bearer lbr_…" \
+  "https://librariarr.example.com/api/v1/media/movies?limit=100&offset=0&index=1"
+```
 
 ### Servers and syncs
 

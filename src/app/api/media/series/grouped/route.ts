@@ -13,6 +13,8 @@ import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { letterOffsets, sumOf, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
+import { memoListRows } from "@/lib/api/list-rows-memo";
 import type { Prisma } from "@/generated/prisma/client";
 
 interface SeriesGroupRow {
@@ -206,16 +208,77 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // `isFullListingLimit` inside it, so the API-key guard's charge for a full
   // listing cannot drift from this route.
   const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
-  const search = searchParams.get("search");
-  const sortBy = searchParams.get("sortBy") || "parentTitle";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
   const serverId = searchParams.get("serverId");
-  const startsWith = searchParams.get("startsWith");
+  const withIndex = wantsListIndex(searchParams);
 
   const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
-    return NextResponse.json({ series: [], pagination: { page, limit, hasMore: false } });
+    return NextResponse.json({
+      series: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: seriesIndex([]) }),
+    });
   }
+
+  // A page of a listing the library page is scrolling through reads the
+  // sorted shows kept from its previous page (`memoListRows`); everything
+  // else (a `limit=0` read, which also places presence differently) computes
+  // them for itself.
+  const paged = limit > 0;
+  const { rows: sorted, presenceAfterPaging } = paged
+    ? await memoListRows("series-grouped", searchParams, () => loadSortedSeries(sf, searchParams, { paged }))
+    : await loadSortedSeries(sf, searchParams, { paged });
+  const index = withIndex ? seriesIndex(sorted) : undefined;
+
+  // The presence of just the shows being returned, on copies: the rows may be
+  // the shared ones above.
+  const withPresence = async <T extends { seriesKey: string; servers: ServerPresence[] }>(rows: T[]) => {
+    if (!presenceAfterPaging) return rows;
+    const presence = await getServerPresenceByGroup("SERIES", sf.serverIds, presenceScope(rows.map((r) => r.seriesKey)));
+    return rows.map((row) => ({ ...row, servers: presence.get(row.seriesKey) ?? [] }));
+  };
+  if (paged) {
+    const pageRows = sorted.slice(skip, skip + limit + 1);
+    const hasMore = pageRows.length > limit;
+    if (hasMore) pageRows.pop();
+    return jsonResponse(request, {
+      series: await withPresence(pageRows),
+      pagination: { page, limit, hasMore },
+      ...(index && { index }),
+    });
+  }
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, {
+    series: await withPresence(sorted.slice(skip)),
+    pagination: { page, limit, hasMore: false },
+    ...(index && { index }),
+  });
+});
+
+type ServerFilter = NonNullable<Awaited<ReturnType<typeof resolveServerFilter>>>;
+
+/** The index the Series page reads: the show count, the A–Z offsets, and the seasons and episodes it heads the page with. */
+function seriesIndex(rows: readonly { parentTitle: string; seasonCount: number; episodeCount: number }[]): ListIndex {
+  return {
+    total: rows.length,
+    letters: letterOffsets(rows.map((r) => r.parentTitle)),
+    sums: { seasons: sumOf(rows, (r) => r.seasonCount), episodes: sumOf(rows, (r) => r.episodeCount) },
+  };
+}
+
+/**
+ * Every show of the listing, filtered and sorted. `presenceAfterPaging`: the
+ * rows carry no presence yet, and the page cut from them reads its own.
+ */
+async function loadSortedSeries(
+  sf: ServerFilter,
+  searchParams: URLSearchParams,
+  { paged }: { paged: boolean },
+) {
+  const search = searchParams.get("search");
+  const sortBy = searchParams.get("sortBy") || "parentTitle";
+  const sortOrder = searchParams.get("sortOrder") || "asc";
+  const startsWith = searchParams.get("startsWith");
 
   // One SQL GROUP BY for every server count. This was the multi-server path
   // only; a single-server install loaded every episode row into Node — with
@@ -329,7 +392,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // is the order of ties — shows with equal episode counts, or two same-titled
   // shows — and a page boundary falls in the same place on every request.
   const presenceSource = seriesPresenceSource(sf.isSingleServer, qualifyingKeys, {
-    paged: limit > 0,
+    paged,
     titleFiltered: !!search || !!startsWith,
   });
   const [groups, representatives, groupServerPresence] = await Promise.all([
@@ -467,23 +530,8 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // Post-aggregation filters on series-level computed fields
   seriesList = applySeriesFilters(seriesList, searchParams);
 
-  const sorted = sortSeriesList(seriesList, sortBy, sortOrder);
-  // The presence of just the shows being returned.
-  const withPresence = async <T extends { seriesKey: string; servers: ServerPresence[] }>(rows: T[]) => {
-    if (presenceSource !== "page") return rows;
-    const presence = await getServerPresenceByGroup("SERIES", sf.serverIds, presenceScope(rows.map((r) => r.seriesKey)));
-    for (const row of rows) row.servers = presence.get(row.seriesKey) ?? [];
-    return rows;
-  };
-  if (limit > 0) {
-    const paged = sorted.slice(skip, skip + limit + 1);
-    const hasMore = paged.length > limit;
-    if (hasMore) paged.pop();
-    return jsonResponse(request, { series: await withPresence(paged), pagination: { page, limit, hasMore } });
-  }
-  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { series: await withPresence(sorted.slice(skip)), pagination: { page, limit, hasMore: false } });
-});
+  return { rows: sortSeriesList(seriesList, sortBy, sortOrder), presenceAfterPaging: presenceSource === "page" };
+}
 
 /**
  * Above this many shows, presence is read for the whole library instead: past

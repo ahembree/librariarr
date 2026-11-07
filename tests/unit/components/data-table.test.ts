@@ -39,6 +39,32 @@ function table(columns: DataTableColumn<Row>[], extra: Record<string, unknown> =
 }
 
 describe("DataTable", () => {
+  it("hands a server-sorted table's header clicks to the page and sorts nothing itself", () => {
+    const onSortChange = vi.fn();
+    const sizeSort = vi.fn((r: Row) => r.size);
+    render(
+      table(inlineColumns(sizeSort), {
+        onSortChange,
+        defaultSortId: "size",
+        defaultSortOrder: "asc",
+        // A paged listing: rows not loaded yet are `undefined`.
+        data: [...rows, undefined, undefined],
+      }),
+    );
+    screen.getByText("Size").click();
+    expect(onSortChange).toHaveBeenLastCalledWith("size", "desc");
+    screen.getByText("Name").click();
+    expect(onSortChange).toHaveBeenLastCalledWith("name", "asc");
+    // The server's order is the order: the table never ran a sort of its own.
+    expect(sizeSort).not.toHaveBeenCalled();
+  });
+
+  it("keeps rows not loaded yet last when it sorts on the client", () => {
+    const sizeSort = vi.fn((r: Row) => r.size);
+    expect(() => render(table(inlineColumns(sizeSort), { data: [undefined, ...rows, undefined] }))).not.toThrow();
+    for (const [row] of sizeSort.mock.calls) expect(row).toBeDefined();
+  });
+
   it("does not re-sort when the page rebuilds its columns around the same sort function", () => {
     const sizeSort = vi.fn((r: Row) => r.size);
     const { rerender } = render(table(inlineColumns(sizeSort)));
