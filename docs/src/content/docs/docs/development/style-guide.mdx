@@ -392,6 +392,14 @@ Two shapes, never interchangeable:
 
 `ColorChip` does not forward a ref, so under a Radix `TooltipTrigger asChild` wrap it in a `<span className="inline-flex">`. Give a chip a `title` when its text abbreviates something.
 
+### Table Rows
+
+Data rows take their background, hover and change tone from `rowSurfaceClass` (`src/lib/table-row-surface.ts`), never from hand-written classes:
+
+- **Zebra stripe** — `bg-white/1.5` on every odd row *index*. Never `even:`/`odd:`: the tables are virtualized, so a row's DOM position moves as you scroll and an `:nth-child` stripe flips on every row.
+- **Hover** — clickable rows get `hover:bg-white/3 hover:ring-1 hover:ring-primary/20` and a pointer cursor.
+- **Change tones** (the rule editor's preview: new and removed matches) — `added` is a `bg-green-dim` fill with an inset `ring-green/40`, `removed` the amber pair at 60% opacity. A toned row takes no stripe and keeps its fill on hover (the ring strengthens in its own hue). A tone is never colour alone: `RowToneChip` puts **+ New** / **− Removed** in words and shape before the title, and on a card's top-right corner over a solid backdrop.
+
 ### Badges
 
 Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`. See Chips vs Badges above for when a `Badge` is the right shape.
