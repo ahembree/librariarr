@@ -4,7 +4,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, XCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ActionFailure, NotActedOn } from "@/lib/lifecycle/action-report";
+import type { ActionFailure, ActionRunDetails, NotActedOn } from "@/lib/lifecycle/action-report";
 
 /**
  * What a manual run of actions did, as the Query page and the Pending page
@@ -49,17 +49,7 @@ export function emptyActionResult(memberNoun?: string): ActionResultReport {
 }
 
 /** `into` with one response's counts and details added. */
-export function addActionResult(
-  into: ActionResultReport,
-  part: {
-    executed?: number;
-    failed?: number;
-    skipped?: number;
-    failures?: ActionFailure[];
-    notActedOn?: NotActedOn[];
-    notActedOnCount?: number;
-  },
-): ActionResultReport {
+export function addActionResult(into: ActionResultReport, part: Partial<ActionRunDetails>): ActionResultReport {
   return {
     ...into,
     executed: into.executed + (part.executed ?? 0),

@@ -20,11 +20,6 @@ export interface ArrMediaManagementConfig {
 type ArrAppName = "Radarr" | "Sonarr" | "Lidarr";
 
 /**
- * The requests Radarr, Sonarr and Lidarr answer identically — Radarr and
- * Sonarr under `/api/v3`, Lidarr under `/api/v1`. Each client adds its own
- * media endpoints on top.
- */
-/**
  * The per-request timeout of a file delete. The apps move each file into the
  * recycle bin inside the request — a copy when the bin is on another mount —
  * so it takes far longer than the 15 s every other request gets. One that
@@ -33,6 +28,11 @@ type ArrAppName = "Radarr" | "Sonarr" | "Lidarr";
  */
 export const FILE_DELETE_TIMEOUT_MS = 120_000;
 
+/**
+ * The requests Radarr, Sonarr and Lidarr answer identically — Radarr and
+ * Sonarr under `/api/v3`, Lidarr under `/api/v1`. Each client adds its own
+ * media endpoints on top.
+ */
 export abstract class ArrClientBase {
   protected readonly client: AxiosInstance;
 

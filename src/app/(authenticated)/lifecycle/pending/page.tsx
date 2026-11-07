@@ -51,7 +51,7 @@ import {
   useActionResultDialog,
 } from "@/components/action-result-dialog";
 import { consumeProgressStream } from "@/lib/progress/client";
-import type { ActionFailure, NotActedOn } from "@/lib/lifecycle/action-report";
+import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
@@ -590,13 +590,7 @@ const ruleSetOfGroup = (g: RuleSetGroup) => g.ruleSet;
 const PENDING_EVENTS = ["lifecycle:action-executed", "lifecycle:detection-completed"] as const;
 
 /** What an Execute answers (`POST /api/lifecycle/actions/execute`). */
-interface ExecuteAnswer {
-  executed: number;
-  failed: number;
-  errors?: string[];
-  failures?: ActionFailure[];
-  notActedOn?: NotActedOn[];
-  notActedOnCount?: number;
+interface ExecuteAnswer extends ActionRunDetails {
   /** Why the run stopped before the rest (the rule set changed while it ran). */
   stopped?: string;
 }

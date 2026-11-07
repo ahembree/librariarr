@@ -104,7 +104,7 @@ import {
   useActionResultDialog,
   type ActionResultReport,
 } from "@/components/action-result-dialog";
-import type { ActionFailure, NotActedOn } from "@/lib/lifecycle/action-report";
+import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
 import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup } from "@/lib/query/batch";
@@ -1292,14 +1292,8 @@ export default function QueryPage() {
           }
 
           // The result is streamed as NDJSON with live phase progress.
-          const data = await consumeProgressStream<{
-            executed: number;
-            failed: number;
+          const data = await consumeProgressStream<ActionRunDetails & {
             skipped: number;
-            errors: string[];
-            failures?: ActionFailure[];
-            notActedOn?: NotActedOn[];
-            notActedOnCount?: number;
             /** The server refused the rest of the run (the deletion ceiling). */
             stopped?: boolean;
           }>(resp, forward);

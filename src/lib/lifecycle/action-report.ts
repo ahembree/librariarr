@@ -21,8 +21,17 @@ export interface NotActedOn {
 /** At most this many not-acted-on members are listed per response; `notActedOnCount` counts them all. */
 export const NOT_ACTED_ON_LIMIT = 200;
 
-/** A run's result as the action routes answer it, beside their counts. */
+/**
+ * A manual run's result as `POST /api/query/actions` and
+ * `POST /api/lifecycle/actions/execute` answer it — the one shape both pages
+ * read (each route adds its own `stopped`).
+ */
 export interface ActionRunDetails {
+  executed: number;
+  failed: number;
+  /** Selected items the run left out (the query-actions route). */
+  skipped?: number;
+  errors?: string[];
   failures?: ActionFailure[];
   notActedOn?: NotActedOn[];
   notActedOnCount?: number;
