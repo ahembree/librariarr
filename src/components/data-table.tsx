@@ -6,6 +6,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { arrangePinnedColumns, parseStoredPins, togglePinnedId } from "@/lib/table-pinning";
+import { rowSurfaceClass } from "@/lib/table-row-surface";
 import { horizontalThumb, scrollPerThumbPixel } from "@/lib/scroll-thumb";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 
@@ -528,10 +529,7 @@ export function DataTable<T>({
                 ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
                 data-clickable={onRowClick ? "" : undefined}
-                className={cn(
-                  "transition-colors duration-200 even:bg-white/1.5",
-                  onRowClick && "cursor-pointer hover:bg-white/3 hover:ring-1 hover:ring-primary/20"
-                )}
+                className={rowSurfaceClass({ index: virtualRow.index, interactive: !!onRowClick })}
                 onClick={() => onRowClick?.(item)}
               >
                 {orderedColumns.map((col) => (

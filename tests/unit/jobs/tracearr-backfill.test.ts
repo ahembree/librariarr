@@ -287,10 +287,8 @@ describe("tracearr-backfill task", () => {
     await runBackfill();
 
     expect(m.emitWatchHistoryUpdated).toHaveBeenCalledTimes(1);
-    expect(m.emitWatchHistoryUpdated).toHaveBeenCalledWith(SERVER_ID, {
-      imported: 250,
-      backfillPending: true,
-    });
+    // The server id alone: the receiver refetches the routes that own the figures.
+    expect(m.emitWatchHistoryUpdated).toHaveBeenCalledExactlyOnceWith(SERVER_ID);
   });
 
   it("propagates a failure so graphile-worker retries, without stacking a duplicate job", async () => {

@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
 import { NextResponse } from "next/server";
 import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
 import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
@@ -14,6 +15,8 @@ import {
   passwordByteLength,
 } from "@/lib/auth/password-rules";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
+import { isForwardAuthCredentialHeader } from "@/lib/sso/forward-secret";
+import { groupScopeSaveError, groupScopeViolation, type GroupScopeAction } from "@/lib/conditions/group-scope";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -451,6 +454,12 @@ const actionTypeEnum = z.enum([
 // Shared sort modes for a Plex collection's item ordering.
 const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 
+// One action may add some Arr tags and remove others, but never the same tag.
+const TAG_LISTS_OVERLAP = {
+  message: "A tag cannot be both added and removed",
+  path: ["removeArrTags"],
+};
+
 export const ruleSetCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -471,7 +480,58 @@ export const ruleSetCreateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
-});
+}).superRefine((data, ctx) => {
+  // A criterion that describes one episode or track may never make a whole
+  // show or artist an action's target (`groupScopeViolation`): not with the
+  // scope on, and not with it off under an action that acts on the whole show
+  // or artist. The scope is on unless the request turns it off, and the
+  // action off unless it turns it on, as the route creates them.
+  const violation = groupScopeViolation(data.type, data.seriesScope ?? true, data.rules, {
+    ...data,
+    actionEnabled: data.actionEnabled ?? false,
+  });
+  if (violation) {
+    ctx.addIssue({
+      code: "custom",
+      path: [violation.judgement === "group" ? "rules" : "actionType"],
+      message: groupScopeSaveError(violation),
+    });
+  }
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
+
+/** A rule set's state as far as `groupScopeViolation` reads it. */
+export interface RuleSetScopeState extends GroupScopeAction {
+  type: string;
+  seriesScope: boolean;
+  rules: unknown;
+}
+
+/**
+ * The refusal of a rule set update whose merged state — the request over the
+ * stored rule set, since a PUT sends only what changed — lets a criterion
+ * that describes one episode or track make a whole show or artist its
+ * action's target (`groupScopeViolation`): the same 400 `ruleSetCreateSchema`
+ * answers a create with, which only the route can decide for an update.
+ * `path` names what the request changed. With `actionCausedOnly` (a request
+ * changing the action but not the rules or scope) only a violation the action
+ * makes is refused — the scope off and the action acting on the whole show or
+ * artist — so an action change on a rule set already invalid for its scope
+ * (saved before the rule) stays allowed, as turning its action off must.
+ * Null when allowed.
+ */
+export function ruleSetScopeError(
+  merged: RuleSetScopeState,
+  path: string,
+  opts: { actionCausedOnly?: boolean } = {},
+): NextResponse | null {
+  const violation = groupScopeViolation(merged.type, merged.seriesScope, merged.rules, merged);
+  if (!violation) return null;
+  if (opts.actionCausedOnly && violation.judgement !== "member") return null;
+  return NextResponse.json(
+    { error: "Validation failed", details: [`${path}: ${groupScopeSaveError(violation)}`] },
+    { status: 400 },
+  );
+}
 
 export const ruleSetUpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -492,7 +552,7 @@ export const ruleSetUpdateSchema = z.object({
   discordNotifyOnMatch: z.boolean().optional(),
   stickyMatches: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required").optional(),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 // Collection (reusable Plex collection definition) CRUD.
 export const collectionCreateSchema = z.object({
@@ -512,6 +572,21 @@ export const collectionUpdateSchema = z.object({
   sort: collectionSortEnum.optional(),
 });
 
+/**
+ * The editor's (unsaved) action, which Preview, Test Media and the match diff
+ * judge the rules with as saving would (`groupScopeViolation`: with the scope
+ * off, an action on the whole show or artist may not follow per-episode
+ * criteria). A field left out reads as the stored rule set's
+ * (`editorScopeAction`, src/lib/lifecycle/editor-action.ts).
+ */
+const editorActionFields = {
+  actionEnabled: z.boolean().optional(),
+  actionType: z.string().max(100).nullable().optional(),
+  addArrTags: z.array(z.string().max(200)).max(100).optional(),
+  removeArrTags: z.array(z.string().max(200)).max(100).optional(),
+  searchAfterAction: z.boolean().optional(),
+};
+
 export const rulePreviewSchema = z.object({
   rules: rulesSchema,
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
@@ -524,6 +599,7 @@ export const rulePreviewSchema = z.object({
   arrInstanceId: z.string().max(200).nullable().optional(),
   /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
   ruleSetId: z.string().max(200).optional(),
+  ...editorActionFields,
 });
 
 export const ruleTestItemSchema = z.object({
@@ -539,6 +615,7 @@ export const ruleTestItemSchema = z.object({
   arrInstanceId: z.string().max(200).nullable().optional(),
   /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
   ruleSetId: z.string().max(200).optional(),
+  ...editorActionFields,
 });
 
 export const actionExecuteSchema = z.object({
@@ -559,8 +636,7 @@ export const ruleDiffSchema = z.object({
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
   /** The editor's unsaved action config; the stored one when absent. */
-  actionEnabled: z.boolean().optional(),
-  actionType: z.string().nullable().optional(),
+  ...editorActionFields,
   /** The editor's unsaved Arr instance; the stored one when absent. */
   arrInstanceId: z.string().max(200).nullable().optional(),
 });
@@ -725,6 +801,16 @@ export const apiExceptionDeleteSchema = z.strictObject({
 
 // ─── SSO schemas ───
 
+// A header the proxy uses for credentials would be read back out of the
+// account (`FORWARD_AUTH_CREDENTIAL_HEADERS`, src/lib/sso/forward-secret.ts).
+const forwardAuthHeaderSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (name) => !isForwardAuthCredentialHeader(name),
+    "Cannot be a header that carries a credential (X-Librariarr-Proxy-Secret, Authorization, Proxy-Authorization or Cookie)",
+  );
+
 export const ssoConfigSchema = z.object({
   ssoEnabled: z.boolean().optional(),
   ssoMode: z.enum(["OIDC", "FORWARD_AUTH"]).optional(),
@@ -751,9 +837,9 @@ export const ssoConfigSchema = z.object({
     )
     .optional(),
   oidcUsernameClaim: z.string().min(1).optional(),
-  forwardAuthUserHeader: z.string().min(1).optional(),
-  forwardAuthEmailHeader: z.string().min(1).optional(),
-  forwardAuthNameHeader: z.string().min(1).optional(),
+  forwardAuthUserHeader: forwardAuthHeaderSchema.optional(),
+  forwardAuthEmailHeader: forwardAuthHeaderSchema.optional(),
+  forwardAuthNameHeader: forwardAuthHeaderSchema.optional(),
 });
 
 export const ssoTestSchema = z.object({
@@ -1018,7 +1104,7 @@ export const queryActionSchema = z.object({
   searchAfterAction: z.boolean().optional().default(false),
   addArrTags: z.array(z.string()).optional().default([]),
   removeArrTags: z.array(z.string()).optional().default([]),
-});
+}).refine(tagListsDisjoint, TAG_LISTS_OVERLAP);
 
 export const savedQueryCreateSchema = z.object({
   name: z.string().min(1).max(100),

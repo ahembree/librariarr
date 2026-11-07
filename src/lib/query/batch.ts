@@ -17,6 +17,12 @@ export interface BatchableItem {
    * falls back to the title when absent.
    */
   seriesKey?: string | null;
+  /**
+   * An episode row's season: a show too big for one request is split at
+   * season boundaries, so an Unmonitor that unmonitors whole seasons sees
+   * each season's selected episodes in one request (`splitOversizedGroup`).
+   */
+  seasonNumber?: number | null;
 }
 
 /** The media family an ad-hoc action targets, derived from its action type
@@ -113,8 +119,10 @@ export function oversizedActionGroup(
  *
  * Whole groups are packed greedily into batches of at most `size`. A single
  * group larger than `size` (one show or artist with more than `size` selected
- * rows; the page refuses that for a whole-record action) is hard-split across batches. Order is preserved
- * and the batches are a disjoint partition of the retained ids.
+ * rows; the page refuses that for a whole-record action) is split across
+ * batches — a show a whole season at a time (`splitOversizedGroup`). Groups
+ * keep their order, and the batches are a disjoint partition of the retained
+ * ids.
  */
 export function buildActionBatches(
   items: readonly BatchableItem[],
@@ -125,26 +133,27 @@ export function buildActionBatches(
     throw new Error(`batch size must be a positive integer, got ${size}`);
   }
 
-  // Group ids, preserving first-seen order so batches stay stable/contiguous.
-  const groups = new Map<string, string[]>();
+  // Group items, preserving first-seen order so batches stay stable/contiguous.
+  const groups = new Map<string, BatchableItem[]>();
   for (const item of items) {
     if (targetType && item.type !== targetType) continue;
     const key = groupKey(item);
     const existing = groups.get(key);
-    if (existing) existing.push(item.id);
-    else groups.set(key, [item.id]);
+    if (existing) existing.push(item);
+    else groups.set(key, [item]);
   }
 
   const batches: string[][] = [];
   let current: string[] = [];
-  for (const ids of groups.values()) {
+  for (const group of groups.values()) {
+    const ids = group.map((item) => item.id);
     if (ids.length > size) {
-      // Oversized single group: flush what we have, then hard-split it.
+      // Oversized single group: flush what we have, then split it.
       if (current.length) {
         batches.push(current);
         current = [];
       }
-      for (let i = 0; i < ids.length; i += size) batches.push(ids.slice(i, i + size));
+      batches.push(...splitOversizedGroup(group, size));
       continue;
     }
     if (current.length + ids.length > size) {
@@ -155,4 +164,37 @@ export function buildActionBatches(
   }
   if (current.length) batches.push(current);
   return batches;
+}
+
+/**
+ * One show's (or artist's) rows split into requests of at most `size`. A
+ * show's episodes are packed a whole season at a time, so no season straddles
+ * two requests — each request's action then sees every selected episode of
+ * its seasons, which an Unmonitor that unmonitors whole seasons judges them
+ * by. Only a single season larger than `size` is cut. Rows without a season
+ * (an artist's tracks) are cut by index.
+ */
+function splitOversizedGroup(group: readonly BatchableItem[], size: number): string[][] {
+  const seasons = new Map<string, string[]>();
+  for (const item of group) {
+    const key = item.type === "SERIES" && item.seasonNumber != null ? `s${item.seasonNumber}` : "none";
+    const ids = seasons.get(key);
+    if (ids) ids.push(item.id);
+    else seasons.set(key, [item.id]);
+  }
+  const out: string[][] = [];
+  let current: string[] = [];
+  for (const ids of seasons.values()) {
+    if (current.length + ids.length > size && current.length > 0) {
+      out.push(current);
+      current = [];
+    }
+    if (ids.length > size) {
+      for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+      continue;
+    }
+    current.push(...ids);
+  }
+  if (current.length) out.push(current);
+  return out;
 }

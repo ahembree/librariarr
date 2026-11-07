@@ -12,7 +12,8 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionHonorsMemberIds, actsOnMembers, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, actsOnMembers, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ruleSetActsOnEpisodes, ruleSetSeasonScope, type SeasonScope } from "@/lib/lifecycle/episode-scope";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld, notifyDeletionHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
@@ -35,6 +36,8 @@ import { coverageOf, uncoveredEpisodes } from "@/lib/lifecycle/episode-coverage"
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { HOLD_ACTION_SELECT, actionHoldFor } from "@/lib/lifecycle/held-actions";
+import { RULE_SET_VERSION_SELECT, lockRuleSetAtVersion, ruleSetVersion } from "@/lib/lifecycle/rule-set-matching";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
@@ -83,6 +86,11 @@ interface ActionSchedulingRuleSet {
   name: string;
   type: string;
   seriesScope: boolean;
+  /**
+   * Its rules, which `ruleSetActsOnEpisodes` reads for Unmonitor & Delete
+   * Files — a delete, which per-episode coverage (the one use here) skips.
+   */
+  rules?: unknown;
   actionEnabled: boolean;
   actionType: string | null;
   actionDelayDays: number;
@@ -94,20 +102,52 @@ interface ActionSchedulingRuleSet {
   removeArrTags: string[];
 }
 
+/** Scheduling a rule set's actions reads and writes many rows in one transaction. */
+const SCHEDULING_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * Schedule lifecycle actions for a rule set based on current matches.
  * - Deletes PENDING actions for items that no longer match
  * - Deduplicates PENDING actions
  * - Creates new PENDING actions for newly matched items (preserving existing ones)
+ *
+ * `expectedVersion` is `ruleSetVersion` of the rule set as the detection run
+ * that produced `matchedItems` evaluated it (and as `ruleSet` carries it).
+ * Everything here runs in one transaction under a lock on the rule set's row
+ * (`lockRuleSetAtVersion`), and only while it is still at that version: a
+ * save — and a run of the newer rules releasing the hold that save set —
+ * landing after this run evaluated must never be followed by actions
+ * scheduled, or cancelled, from the older rules' matches. Such a run changes
+ * no action and leaves them to the next detection run. Every caller that
+ * scheduled from a detection run passes it; without it nothing is checked.
  */
 export async function scheduleActionsForRuleSet(
+  ruleSet: ActionSchedulingRuleSet,
+  matchedItems: Record<string, unknown>[],
+  episodeIdMap: Map<string, string[]>,
+  opts: { expectedVersion?: string } = {},
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    if (opts.expectedVersion && !(await lockRuleSetAtVersion(tx, ruleSet.id, opts.expectedVersion))) {
+      logger.info(
+        "Lifecycle",
+        `Left the actions of rule set "${ruleSet.name}" as they were — it was edited (or detection ran it under newer rules) after these matches were detected; the next detection run schedules them`,
+      );
+      return;
+    }
+    await scheduleWithin(tx, ruleSet, matchedItems, episodeIdMap);
+  }, { timeout: SCHEDULING_TIMEOUT_MS });
+}
+
+async function scheduleWithin(
+  db: Prisma.TransactionClient,
   ruleSet: ActionSchedulingRuleSet,
   matchedItems: Record<string, unknown>[],
   episodeIdMap: Map<string, string[]>,
 ): Promise<void> {
   // If actions are disabled or no action type is configured, delete all pending actions and return early
   if (!ruleSet.actionEnabled || !ruleSet.actionType) {
-    const deleted = await prisma.lifecycleAction.deleteMany({
+    const deleted = await db.lifecycleAction.deleteMany({
       where: { ruleSetId: ruleSet.id, status: "PENDING" },
     });
     if (deleted.count > 0) {
@@ -120,7 +160,7 @@ export async function scheduleActionsForRuleSet(
   const currentIds = new Set(matchedItems.map((item) => item.id as string));
 
   // Delete pending actions for items no longer in the match set
-  const previousPending = await prisma.lifecycleAction.findMany({
+  const previousPending = await db.lifecycleAction.findMany({
     where: { ruleSetId: ruleSet.id, status: "PENDING" },
     select: { mediaItemId: true },
   });
@@ -129,7 +169,7 @@ export async function scheduleActionsForRuleSet(
 
   if (stalePendingIds.length > 0) {
     for (const ids of inChunks(stalePendingIds)) {
-      await prisma.lifecycleAction.deleteMany({
+      await db.lifecycleAction.deleteMany({
         where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: { in: ids } },
       });
     }
@@ -139,7 +179,7 @@ export async function scheduleActionsForRuleSet(
   // Delete orphaned pending actions whose media item was purged from the DB (FK is
   // SetNull, so mediaItemId goes null). These can never execute; the stale check above
   // only covers non-null ids, so sweep them here for immediate self-healing.
-  const orphaned = await prisma.lifecycleAction.deleteMany({
+  const orphaned = await db.lifecycleAction.deleteMany({
     where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: null },
   });
   if (orphaned.count > 0) {
@@ -147,7 +187,7 @@ export async function scheduleActionsForRuleSet(
   }
 
   // Deduplicate: clean up any duplicate PENDING actions (from concurrent runs)
-  const allPending = await prisma.lifecycleAction.findMany({
+  const allPending = await db.lifecycleAction.findMany({
     where: { ruleSetId: ruleSet.id, status: "PENDING" },
     orderBy: { createdAt: "asc" },
     select: { id: true, mediaItemId: true },
@@ -163,7 +203,7 @@ export async function scheduleActionsForRuleSet(
   }
   if (duplicateIds.length > 0) {
     for (const ids of inChunks(duplicateIds)) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
+      await db.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
     }
     logger.info("Lifecycle", `Removed ${duplicateIds.length} duplicate pending actions for rule set "${ruleSet.name}"`);
   }
@@ -199,7 +239,7 @@ export async function scheduleActionsForRuleSet(
     });
   }
   const existingActions = await findInChunks(matchedItemIds, (ids) =>
-    prisma.lifecycleAction.findMany({
+    db.lifecycleAction.findMany({
       where: {
         ruleSetId: ruleSet.id,
         mediaItemId: { in: ids },
@@ -208,7 +248,7 @@ export async function scheduleActionsForRuleSet(
       select: ACTION_SIGNATURE_SELECT,
     }),
   );
-  const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet);
+  const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, { ...ruleSet, rules: ruleSet.rules });
   const existingItemIds = new Set<string | null>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
@@ -222,7 +262,7 @@ export async function scheduleActionsForRuleSet(
   // a whole-series one runs while any matching episode is uncovered.
   const remainingMembers = new Map<string, string[]>();
   if (perEpisodeCoverage) {
-    const settled = await prisma.lifecycleAction.findMany({
+    const settled = await db.lifecycleAction.findMany({
       where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType! },
       select: ACTION_SIGNATURE_SELECT,
     });
@@ -246,7 +286,7 @@ export async function scheduleActionsForRuleSet(
     const dueAt = (item: Record<string, unknown>) =>
       heldScheduledFor(scheduledFor, hold, { type: ruleSet.type, title: item.title, parentTitle: item.parentTitle });
 
-    await prisma.lifecycleAction.createMany({
+    await db.lifecycleAction.createMany({
       data: newItems.map((item) => ({
         userId: ruleSet.userId,
         mediaItemId: item.id as string,
@@ -319,6 +359,12 @@ export async function processLifecycleRules(userId?: string) {
         logger.debug("Lifecycle", `Skipping rule set "${ruleSet.name}" — no active rules`);
         continue;
       }
+      // The rule set as this run read it, at the start of the run: its
+      // matches are written and its actions scheduled only while it is still
+      // this (`lockRuleSetAtVersion`). A save since — and a "Save and
+      // re-detect" that evaluated the new rules and released their hold —
+      // must not be followed by this run's matches and actions of the old ones.
+      const version = ruleSetVersion(ruleSet);
 
       // MATCH-ALL SAFETY: Arr/Seerr rules whose instances are unavailable must
       // skip the rule set — evaluating with an empty metadata map makes
@@ -334,6 +380,8 @@ export async function processLifecycleRules(userId?: string) {
         rules,
         ruleSet.serverIds,
         ruleSet.arrInstanceId,
+        ruleSet.seriesScope,
+        ruleSet,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
@@ -372,7 +420,7 @@ export async function processLifecycleRules(userId?: string) {
         : undefined;
 
       // Evaluate rules and save match results to DB (incremental: add new, remove stale)
-      const { items: matchedItems, episodeIdMap } = await detectAndSaveMatches(
+      const { items: matchedItems, episodeIdMap, discarded } = await detectAndSaveMatches(
         {
           id: ruleSet.id,
           name: ruleSet.name,
@@ -388,13 +436,19 @@ export async function processLifecycleRules(userId?: string) {
           addImportExclusion: ruleSet.addImportExclusion,
           addArrTags: ruleSet.addArrTags,
           removeArrTags: ruleSet.removeArrTags,
+          searchAfterAction: ruleSet.searchAfterAction,
           stickyMatches: ruleSet.stickyMatches,
+          actionsHeldSince: ruleSet.actionsHeldSince,
+          version,
         },
         serverIds,
         arrData,
         seerrData,
         false, // incremental: add new matches, remove stale ones
       );
+      // Edited while this run evaluated it: nothing was written, and nothing
+      // may be notified or scheduled from the old rules' result.
+      if (discarded) continue;
 
       // Send Discord notification for match changes if configured.
       {
@@ -450,7 +504,7 @@ export async function processLifecycleRules(userId?: string) {
       }
 
       // Cancel stale actions and create new ones via shared scheduling function
-      await scheduleActionsForRuleSet(ruleSet, matchedItems, episodeIdMap);
+      await scheduleActionsForRuleSet(ruleSet, matchedItems, episodeIdMap, { expectedVersion: version });
     } catch (error) {
       logger.error("Lifecycle", `Error processing rule set "${ruleSet.name}"`, { error: String(error) });
     }
@@ -489,13 +543,18 @@ export function resetApiHoldNotices(): void {
  * happens here.
  */
 async function recordVanishedAction(
-  action: Prisma.LifecycleActionGetPayload<object> & { mediaItem?: unknown; ruleSet?: unknown; episodeScope?: boolean },
+  action: Prisma.LifecycleActionGetPayload<object> & {
+    mediaItem?: unknown;
+    ruleSet?: unknown;
+    episodeScope?: boolean;
+    seasonScope?: SeasonScope;
+  },
   result: Omit<Prisma.LifecycleActionUncheckedCreateInput, "userId" | "actionType" | "scheduledFor">,
 ): Promise<void> {
-  // The relations and the run's own `episodeScope` are not columns: Prisma
-  // refuses a create carrying them.
+  // The relations and the run's own `episodeScope`/`seasonScope` are not
+  // columns: Prisma refuses a create carrying them.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id, createdAt, updatedAt, mediaItem, ruleSet, episodeScope, ...scalars } = action;
+  const { id, createdAt, updatedAt, mediaItem, ruleSet, episodeScope, seasonScope, ...scalars } = action;
   const data: Prisma.LifecycleActionUncheckedCreateInput = { ...scalars, ...result };
   try {
     await prisma.lifecycleAction.create({ data });
@@ -526,7 +585,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // A minute early, so a clock difference between the app and the database —
   // `createdAt` is the database's — can only make pass 2 check more, never less.
   const exceptionsCheckedBefore = new Date(Date.now() - 60_000);
-  const loadedActions = await prisma.lifecycleAction.findMany({
+  const dueActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
       scheduledFor: { lte: new Date() },
@@ -555,17 +614,50 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           discordNotifyOnAction: true,
           userId: true,
           type: true,
-          rules: true,
-          seriesScope: true,
+          actionsHeldSince: true,
+          ...HOLD_ACTION_SELECT,
+          // Its rules, scope and action — and the version pass 1 judges each
+          // action under: pass 2 acts only while the rule set is still at it.
+          ...RULE_SET_VERSION_SELECT,
         },
       },
     },
   });
+  // Nor one whose rule set is held (`actionHoldFor`): its rules or servers
+  // changed since its matches were detected, its sticky matches were turned
+  // off or it was enabled again (`actionsHeldSince`) — the matches are not
+  // the saved rule set's until a detection run re-checks them — or a per-episode or
+  // per-track criterion could make a whole show or artist the target of its
+  // action (judged at series or artist scope, or followed by an action on the
+  // whole show or artist with the scope off — the rule set's, or this
+  // action's own snapshot of it), which detection skips until it is edited.
+  // Left out of the run untouched — still PENDING, dates unchanged, not
+  // cancelled by any check below — and logged, so a due action that did not
+  // run is explained.
+  const heldRuleSets = new Map<string, string>();
+  const loadedActions = dueActions.filter((a) => {
+    const hold = a.ruleSet ? actionHoldFor(a.ruleSet, a) : null;
+    if (!hold) return true;
+    heldRuleSets.set(
+      a.ruleSet!.name,
+      hold.kind === "groupScope"
+        ? hold.reason
+        : "it was edited (its rules, servers or sticky matches) or enabled again since its matches were detected; the next detection run re-checks them",
+    );
+    return false;
+  });
+  for (const [name, why] of heldRuleSets) {
+    logger.info("Lifecycle", `Holding the due actions of rule set "${name}" — ${why}`);
+  }
+
   // Whether each action acts on its episodes rather than its series, decided
   // once and carried with the action into naming, pass 1 and the executor.
   const pendingActions = loadedActions.map((a) => ({
     ...a,
     episodeScope: !!a.ruleSet && ruleSetActsOnEpisodes(a.actionType, a.ruleSet),
+    // Whether it unmonitors the seasons of its episodes whole (criteria that
+    // decide per season), judged from the rules pass 2 re-checks the version of.
+    seasonScope: a.ruleSet ? ruleSetSeasonScope(a.actionType, a.ruleSet) : undefined,
   }));
 
   // SAFETY: Batch-validate that each pending action's item still exists in
@@ -997,10 +1089,35 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           scheduledFor: { lte: new Date() },
           ruleSet: { is: { enabled: true } },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          ruleSet: {
+            select: {
+              type: true, actionsHeldSince: true, ...HOLD_ACTION_SELECT, ...RULE_SET_VERSION_SELECT,
+            },
+          },
+        },
       });
       if (!current) {
         skip("it was cancelled, rescheduled, changed or executed elsewhere after this run started");
+        continue;
+      }
+      // A hold set since the run loaded the action (`actionHoldFor`) holds it
+      // from here on, even mid-run: an edit that changed what the rule set
+      // matches, or a per-episode criterion that could make a whole show its
+      // target. (The relation filter above already requires the rule set.)
+      if (current.ruleSet && actionHoldFor(current.ruleSet, action)) {
+        skip(`rule set "${action.ruleSet?.name ?? action.ruleSetId}" was held after this run started`);
+        continue;
+      }
+      // Pass 1 judged this action — which members still match, whether it
+      // is stale — from the matches of the rule set as it was when the run
+      // loaded it. An edit since, followed by a detection run that released
+      // the edit's hold and narrowed the matches, leaves no hold and the
+      // action row untouched, but the members pass 1 kept are the old rules'.
+      // The next run's pass 1 judges it under the current rules.
+      if (current.ruleSet && action.ruleSet && ruleSetVersion(current.ruleSet) !== ruleSetVersion(action.ruleSet)) {
+        skip(`rule set "${action.ruleSet.name}" was edited after this run started`);
         continue;
       }
       if (await newlyProtected(action.userId, action.actionType, mediaItem, filteredMatchedIds)) {

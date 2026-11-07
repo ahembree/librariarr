@@ -73,6 +73,11 @@ export const GET = withSession(async (session, request: NextRequest) => {
   //
   // Filtering by the resolved ids also lets the history query use
   // WatchHistory(mediaItemId) instead of joining and filtering MediaItem.
+  //
+  // A season's history (season 0, no episode) takes the episodes with no
+  // season too, as the season listings group them under Specials
+  // (`COALESCE("seasonNumber", 0)`) and the season page lists them; one
+  // episode is still matched by its own numbers.
   const scopedItems = await prisma.$queryRaw<Array<{ id: string }>>`
     SELECT mi."id"
     FROM "MediaItem" mi
@@ -85,7 +90,8 @@ export const GET = withSession(async (session, request: NextRequest) => {
         OR (${seriesKey}::text IS NULL AND mi."parentTitle" IS NOT NULL
             AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}::text)))
       )
-      AND (${seasonNumber}::int IS NULL OR mi."seasonNumber" = ${seasonNumber}::int)
+      AND (${seasonNumber}::int IS NULL OR mi."seasonNumber" = ${seasonNumber}::int
+        OR (${seasonNumber}::int = 0 AND ${episodeNumber}::int IS NULL AND mi."seasonNumber" IS NULL))
       AND (${episodeNumber}::int IS NULL OR mi."episodeNumber" = ${episodeNumber}::int)
   `;
 

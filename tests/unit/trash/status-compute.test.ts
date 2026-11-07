@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { mockPrisma, mockFetchCatalog, clientCtor, mockGetCfs, mockGetProfiles } = vi.hoisted(() => ({
+const { mockPrisma, mockFetchCatalog, clientCtor, mockGetCfs, mockGetProfiles, mockGetSchema, mockGetLanguages } = vi.hoisted(() => ({
   mockPrisma: {
     sonarrInstance: { findFirst: vi.fn(), findMany: vi.fn() },
     radarrInstance: { findFirst: vi.fn(), findMany: vi.fn() },
-    trashManagedResource: { findMany: vi.fn() },
+    trashManagedResource: { findMany: vi.fn(), updateMany: vi.fn() },
   },
   mockFetchCatalog: vi.fn(),
   clientCtor: vi.fn(),
   mockGetCfs: vi.fn(),
   mockGetProfiles: vi.fn(),
+  mockGetSchema: vi.fn(),
+  mockGetLanguages: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
@@ -22,6 +24,8 @@ vi.mock("@/lib/trash/arr-guide-client", () => ({
     clientCtor(...args);
     this.getCustomFormats = mockGetCfs;
     this.getQualityProfiles = mockGetProfiles;
+    this.getQualityProfileSchema = mockGetSchema;
+    this.getLanguages = mockGetLanguages;
   }),
 }));
 
@@ -31,8 +35,11 @@ import {
   listGuideInstances,
   managedInstanceWhere,
   guideClientFor,
+  forgetRecordedArrIds,
   type ResolvedInstance,
 } from "@/lib/trash/status";
+import { buildQualityProfile } from "@/lib/trash/translate";
+import type { ArrQualityProfileSchema } from "@/lib/trash/types";
 import {
   trashCfHash,
   trashProfileHash,
@@ -97,6 +104,22 @@ describe("managedInstanceWhere / guideClientFor", () => {
   it("builds a guide client from the instance", () => {
     guideClientFor(SONARR);
     expect(clientCtor).toHaveBeenCalledWith("http://radarr:7878", "k", "SONARR");
+  });
+});
+
+describe("forgetRecordedArrIds", () => {
+  it("clears the recorded app ids of one instance's managed rows", async () => {
+    mockPrisma.trashManagedResource.updateMany.mockResolvedValue({ count: 2 });
+    await expect(forgetRecordedArrIds(mockPrisma as never, "SONARR", "s1")).resolves.toEqual({ count: 2 });
+    expect(mockPrisma.trashManagedResource.updateMany).toHaveBeenCalledWith({
+      where: { sonarrInstanceId: "s1", arrId: { not: null } },
+      data: { arrId: null },
+    });
+    await forgetRecordedArrIds(mockPrisma as never, "RADARR", "r1");
+    expect(mockPrisma.trashManagedResource.updateMany).toHaveBeenLastCalledWith({
+      where: { radarrInstanceId: "r1", arrId: { not: null } },
+      data: { arrId: null },
+    });
   });
 });
 
@@ -268,6 +291,86 @@ describe("computeTrashStatus", () => {
     ]);
     const s = await computeTrashStatus("u1", RADARR);
     expect(s.items.find((i) => i.resourceType === "QUALITY_DEFINITION")?.status).toBe("MANAGED");
+  });
+
+  describe("a recorded id that names another resource", () => {
+    const SCHEMA: ArrQualityProfileSchema = {
+      name: "",
+      upgradeAllowed: true,
+      cutoff: 0,
+      minFormatScore: 0,
+      cutoffFormatScore: 0,
+      items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: false }],
+      formatItems: [{ format: 2, name: "Bad", score: 0 }],
+      language: { id: 1, name: "English" },
+    };
+    const cfMap = () => new Map(catalog().customFormats.map((c) => [c.trash_id, c]));
+    const cfWithSpec: TrashCustomFormat = {
+      trash_id: "cfA",
+      name: "AMZN",
+      specifications: [{ name: "Amazon", implementation: "ReleaseTitleSpecification", fields: { value: "amzn" } }],
+    };
+    const rows = () => [
+      { id: "mA", resourceType: "CUSTOM_FORMAT", trashId: "cfA", name: "AMZN", arrId: 5, selection: null, lastSyncedAt: synced, lastSyncHash: trashCfHash(cfWithSpec) },
+      { id: "mQ", resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray", arrId: 1, selection: null, lastSyncedAt: synced, lastSyncHash: trashProfileHash(qp, cfMap(), null) },
+    ];
+
+    beforeEach(() => {
+      mockFetchCatalog.mockResolvedValue(catalog({ customFormats: [cfWithSpec, cfB, cfC] }));
+      mockPrisma.trashManagedResource.findMany.mockResolvedValue(rows());
+      mockGetSchema.mockResolvedValue(SCHEMA);
+      mockGetLanguages.mockResolvedValue([{ id: 1, name: "English" }]);
+    });
+
+    it("reports the managed format and profile missing, not in sync", async () => {
+      // The instance reaches another app now: ids 5 and 1 are the user's own.
+      mockGetCfs.mockResolvedValue([
+        { id: 5, name: "My Release Group", specifications: [{ name: "Group", implementation: "ReleaseGroupSpecification", fields: [{ name: "value", value: "GRP" }] }] },
+      ]);
+      mockGetProfiles.mockResolvedValue([
+        { id: 1, name: "Any", upgradeAllowed: false, cutoff: 7, minFormatScore: 0, cutoffFormatScore: 0, items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }], formatItems: [{ format: 2, name: "Bad", score: 0 }] },
+      ]);
+      const s = await computeTrashStatus("u1", RADARR);
+      const by = Object.fromEntries(s.items.map((i) => [`${i.resourceType}:${i.trashId}`, i]));
+      expect(by["CUSTOM_FORMAT:cfA"]).toMatchObject({ status: "MANAGED_MISSING", existsInArr: false, managed: true });
+      expect(by["QUALITY_PROFILE:qp1"]).toMatchObject({ status: "MANAGED_MISSING", existsInArr: false, managed: true });
+    });
+
+    it("follows a format and a profile renamed in the app with their content untouched", async () => {
+      mockGetCfs.mockResolvedValue([
+        { id: 5, name: "Amazon (mine)", specifications: [{ name: "Amazon", implementation: "ReleaseTitleSpecification", fields: [{ name: "value", value: "amzn" }] }] },
+      ]);
+      const { payload } = buildQualityProfile(qp, SCHEMA, "RADARR", cfMap(), undefined, [{ id: 1, name: "English" }]);
+      mockGetProfiles.mockResolvedValue([{ ...payload, id: 1, name: "My HD" }]);
+      const s = await computeTrashStatus("u1", RADARR);
+      const by = Object.fromEntries(s.items.map((i) => [`${i.resourceType}:${i.trashId}`, i]));
+      expect(by["CUSTOM_FORMAT:cfA"]).toMatchObject({ status: "MANAGED", existsInArr: true, arrId: 5 });
+      expect(by["QUALITY_PROFILE:qp1"]).toMatchObject({ status: "MANAGED", existsInArr: true, arrId: 1 });
+      expect(mockGetSchema).toHaveBeenCalledTimes(1);
+      expect(mockGetLanguages).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows a resource still under the name the row last synced it under, reading no schema", async () => {
+      mockPrisma.trashManagedResource.findMany.mockResolvedValue(
+        rows().map((r) => ({ ...r, name: r.resourceType === "CUSTOM_FORMAT" ? "Amazon (old)" : "HD (old)" })),
+      );
+      mockGetCfs.mockResolvedValue([{ id: 5, name: "amazon (old)", specifications: [] }]);
+      mockGetProfiles.mockResolvedValue([{ id: 1, name: "HD (old)" }]);
+      const s = await computeTrashStatus("u1", SONARR);
+      const by = Object.fromEntries(s.items.map((i) => [`${i.resourceType}:${i.trashId}`, i]));
+      expect(by["CUSTOM_FORMAT:cfA"]).toMatchObject({ existsInArr: true, arrId: 5 });
+      expect(by["QUALITY_PROFILE:qp1"]).toMatchObject({ existsInArr: true, arrId: 1 });
+      expect(mockGetSchema).not.toHaveBeenCalled();
+    });
+
+    it("reports the instance unreachable when the profile schema cannot be read", async () => {
+      mockGetProfiles.mockResolvedValue([{ id: 1, name: "Any" }]);
+      mockGetSchema.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.2:7878"));
+      const s = await computeTrashStatus("u1", SONARR);
+      expect(s).toMatchObject({ reachable: false, error: "connect ECONNREFUSED [internal]:7878", items: [] });
+      // Sonarr profiles carry no language: none is read.
+      expect(mockGetLanguages).not.toHaveBeenCalled();
+    });
   });
 
   it("omits quality sizes and naming when the guide has none", async () => {

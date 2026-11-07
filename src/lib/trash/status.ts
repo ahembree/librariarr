@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { findArrInstance } from "@/lib/arr/instances";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { GuideArrClient } from "./arr-guide-client";
 import { fetchTrashCatalog } from "./catalog";
-import { findManagedArrResource } from "./translate";
+import {
+  findManagedArrResource,
+  findManagedQualityProfile,
+  profileOverlayOf,
+  sameCustomFormatContent,
+  type ManagedProfileContext,
+} from "./translate";
 import { trashCfHash, trashProfileHash, trashQualitySizeHash, namingSelectionHash } from "./signature";
 import { NAMING_TRASH_ID } from "./types";
 import type {
@@ -14,6 +21,8 @@ import type {
   TrashStatusItem,
   NamingSelection,
   QualityProfileSelection,
+  ArrLanguage,
+  ArrQualityProfileSchema,
 } from "./types";
 
 export interface ResolvedInstance {
@@ -30,6 +39,24 @@ export function managedInstanceWhere(serviceType: ServiceType, instanceId: strin
   return serviceType === "SONARR"
     ? { sonarrInstanceId: instanceId }
     : { radarrInstanceId: instanceId };
+}
+
+/**
+ * Forget the app ids an instance's managed rows recorded. Called, in the same
+ * transaction, when the instance's URL changes: the ids are the old app's, and
+ * if the new URL reaches another app (or a restored copy) the same number names
+ * something else there. Until the next sync records new ids, each managed
+ * resource is found by its guide name only.
+ */
+export function forgetRecordedArrIds(
+  db: Pick<Prisma.TransactionClient, "trashManagedResource">,
+  serviceType: ServiceType,
+  instanceId: string,
+) {
+  return db.trashManagedResource.updateMany({
+    where: { ...managedInstanceWhere(serviceType, instanceId), arrId: { not: null } },
+    data: { arrId: null },
+  });
 }
 
 export async function resolveInstance(
@@ -61,6 +88,8 @@ interface ManagedRow {
   id: string;
   resourceType: string;
   trashId: string;
+  /** What the app resource was called when the row last synced or adopted it. */
+  name: string;
   arrId: number | null;
   selection: unknown;
   lastSyncedAt: Date | null;
@@ -157,6 +186,18 @@ export async function computeTrashStatus(
   }
   const cfMapByTrashId = new Map(catalog.customFormats.map((c) => [c.trash_id, c]));
 
+  const unreachable = (err: unknown): TrashStatus => ({
+    serviceType: inst.serviceType,
+    instanceId: inst.id,
+    instanceName: inst.name,
+    reachable: false,
+    error:
+      sanitizeErrorDetail(err instanceof Error ? err.message : undefined) ??
+      "Unable to reach instance",
+    items: [],
+    managedProfileCf,
+  });
+
   let arrCfs, arrProfiles;
   try {
     [arrCfs, arrProfiles] = await Promise.all([
@@ -164,16 +205,40 @@ export async function computeTrashStatus(
       client.getQualityProfiles(),
     ]);
   } catch (err) {
-    return {
-      serviceType: inst.serviceType,
-      instanceId: inst.id,
-      instanceName: inst.name,
-      reachable: false,
-      error:
-        sanitizeErrorDetail(err instanceof Error ? err.message : undefined) ??
-        "Unable to reach instance",
-      items: [],
-      managedProfileCf,
+    return unreachable(err);
+  }
+
+  // A managed profile found at its recorded id under another name is the row's
+  // only if its content is what the sync would write (`findManagedArrResource`),
+  // and building that takes the profile schema (and Radarr's languages) — read
+  // only when some profile needs it, as the sync does, so status and sync agree.
+  const profiles = arrProfiles;
+  const needsProfileContent = catalog.qualityProfiles.some((qp) => {
+    const m = keyOf("QUALITY_PROFILE", qp.trash_id);
+    return (
+      m?.arrId != null &&
+      profiles.some((p) => p.id === m.arrId) &&
+      !findManagedQualityProfile(profiles, qp, m)
+    );
+  });
+  let profileContext: Omit<ManagedProfileContext, "selection"> | undefined;
+  if (needsProfileContent) {
+    let schema: ArrQualityProfileSchema;
+    let languages: ArrLanguage[] | undefined;
+    try {
+      [schema, languages] = await Promise.all([
+        client.getQualityProfileSchema(),
+        inst.serviceType === "RADARR" ? client.getLanguages() : undefined,
+      ]);
+    } catch (err) {
+      return unreachable(err);
+    }
+    profileContext = {
+      schema,
+      service: inst.serviceType,
+      cfMapByTrashId,
+      languages,
+      overlays: managedRows.filter((m) => m.resourceType === "PROFILE_CF").map(profileOverlayOf),
     };
   }
 
@@ -182,8 +247,11 @@ export async function computeTrashStatus(
   for (const cf of catalog.customFormats) {
     const m = keyOf("CUSTOM_FORMAT", cf.trash_id);
     // The recorded id finds a managed format renamed upstream or in the app —
-    // the sync updates that copy rather than creating a second one.
-    const existing = findManagedArrResource(arrCfs, cf.name, m?.arrId);
+    // the sync updates that copy rather than creating a second one — when the
+    // format there is provably the row's; otherwise the row's format is missing.
+    const existing = findManagedArrResource(arrCfs, cf.name, m, (candidate) =>
+      sameCustomFormatContent(candidate, cf),
+    );
     items.push({
       resourceType: "CUSTOM_FORMAT",
       trashId: cf.trash_id,
@@ -199,7 +267,15 @@ export async function computeTrashStatus(
 
   for (const qp of catalog.qualityProfiles) {
     const m = keyOf("QUALITY_PROFILE", qp.trash_id);
-    const existing = findManagedArrResource(arrProfiles, qp.name, m?.arrId);
+    const existing = findManagedQualityProfile(
+      arrProfiles,
+      qp,
+      m,
+      profileContext && {
+        ...profileContext,
+        selection: (m?.selection ?? null) as QualityProfileSelection | null,
+      },
+    );
     items.push({
       resourceType: "QUALITY_PROFILE",
       trashId: qp.trash_id,

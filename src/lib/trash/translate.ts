@@ -22,7 +22,10 @@ import type {
   ArrLanguage,
   ArrNamingConfig,
   NamingSelection,
+  ProfileCfSelection,
+  QualityProfileSelection,
 } from "./types";
+import { diffValues } from "./diff";
 
 // ─── Custom formats ───
 
@@ -141,6 +144,22 @@ export function projectManagedFields(before: CfComparable, after: CfComparable):
   return { ...before, specifications };
 }
 
+// ─── Managed resource identity ───
+
+/** Names compare trimmed and case-insensitively, as the apps themselves do. */
+export const nameKey = (name: string) => name.trim().toLowerCase();
+
+/** What a managed row recorded about its app resource. */
+export interface RecordedArrResource {
+  /** The app id recorded at the last sync. */
+  arrId?: number | null;
+  /**
+   * The name the app resource carried when the row last synced or adopted it
+   * (the row's `name`: set at assignment, then rewritten by every applied sync).
+   */
+  name?: string | null;
+}
+
 /**
  * Find the app resource a managed row refers to: by the guide name first, then
  * by the app id recorded at the last sync. The id fallback is what keeps a
@@ -149,19 +168,157 @@ export function projectManagedFields(before: CfComparable, after: CfComparable):
  * keeps its scores in every profile, so a matching release is scored twice).
  * The name match wins when both exist: an app resource already carrying the
  * guide name is the one the sync would collide with on rename anyway.
+ *
+ * An id alone proves nothing. The instance can be pointed at another app, or
+ * the app restored from an older backup, and the recorded id then names
+ * whatever that app gave the same number — the user's own format or profile,
+ * which a sync would overwrite and rename. So the resource at the recorded id
+ * is accepted only when it is provably the row's:
+ *  - it still carries the name the row last synced or adopted it under (TRaSH
+ *    renamed it upstream; the app's copy is as the sync left it), or
+ *  - `sameContent` says its content is what the sync would write, the name
+ *    aside (the user renamed it in the app and changed nothing else).
+ * Otherwise the row's resource is missing: status says so and a sync creates
+ * it. The trade-off: a resource renamed in the app AND changed since (by the
+ * user, or by a guide update the sync has not applied yet) is no longer
+ * followed — the sync creates the guide's copy beside it, never overwriting
+ * something it cannot prove it wrote.
  */
 export function findManagedArrResource<T extends { id?: number; name: string }>(
   resources: T[],
   name: string,
-  arrId: number | null | undefined,
+  recorded: RecordedArrResource | null | undefined,
+  sameContent?: (candidate: T) => boolean,
 ): T | undefined {
-  const lower = name.trim().toLowerCase();
   const byName =
-    resources.find((r) => r.name === name) ??
-    resources.find((r) => r.name.trim().toLowerCase() === lower);
+    resources.find((r) => r.name === name) ?? resources.find((r) => nameKey(r.name) === nameKey(name));
   if (byName) return byName;
-  if (arrId == null) return undefined;
-  return resources.find((r) => r.id === arrId);
+  if (recorded?.arrId == null) return undefined;
+  const candidate = resources.find((r) => r.id === recorded.arrId);
+  if (!candidate) return undefined;
+  if (recorded.name != null && nameKey(candidate.name) === nameKey(recorded.name)) return candidate;
+  return sameContent?.(candidate) ? candidate : undefined;
+}
+
+/**
+ * Whether an app custom format already holds the guide format's definition,
+ * its name aside — the fields the sync manages, compared as the sync's own
+ * diff compares them.
+ */
+export function sameCustomFormatContent(candidate: ArrCustomFormat, cf: TrashCustomFormat): boolean {
+  const after = cfComparable(trashCfToArr(cf));
+  const before = projectManagedFields(cfComparable(candidate), after);
+  return diffValues({ ...before, name: after.name }, after).length === 0;
+}
+
+/**
+ * Whether an app quality profile already holds `payload` (the profile the sync
+ * would write to it), its name aside.
+ */
+export function sameQualityProfileContent(
+  candidate: ArrQualityProfile,
+  payload: ArrQualityProfile,
+  service: ServiceType,
+): boolean {
+  const after = profileComparable(payload, service);
+  return diffValues({ ...profileComparable(candidate, service), name: after.name }, after).length === 0;
+}
+
+// ─── Profile custom-format overlays (PROFILE_CF) ───
+
+/** A managed PROFILE_CF overlay: the profile it targets and its format scores. */
+export interface ProfileOverlay {
+  /** The profile name the overlay was assigned to (the row's trash id). */
+  profileName: string;
+  /** The profile id it last wrote to. */
+  arrId: number | null;
+  /** The profile's name when the overlay last wrote to it. */
+  name: string | null;
+  formats: ProfileCfSelection["formats"];
+}
+
+/** A PROFILE_CF managed row as the overlay it describes. */
+export function profileOverlayOf(row: {
+  trashId: string;
+  arrId: number | null;
+  name: string;
+  selection: unknown;
+}): ProfileOverlay {
+  return {
+    profileName: row.trashId,
+    arrId: row.arrId,
+    name: row.name,
+    formats: ((row.selection ?? null) as ProfileCfSelection | null)?.formats ?? [],
+  };
+}
+
+/** The current guide name of an overlay format — the stored name goes stale when the guide renames it. */
+export function overlayFormatName(
+  f: ProfileCfSelection["formats"][number],
+  cfMapByTrashId: Map<string, TrashCustomFormat>,
+): string {
+  return cfMapByTrashId.get(f.trashId)?.name ?? f.name;
+}
+
+/** An overlay's scores keyed by `nameKey` of each format's current guide name. */
+export function overlayScores(
+  formats: ProfileCfSelection["formats"],
+  cfMapByTrashId: Map<string, TrashCustomFormat>,
+): Map<string, number> {
+  return new Map(formats.map((f) => [nameKey(overlayFormatName(f, cfMapByTrashId)), f.score]));
+}
+
+/**
+ * Whether a profile already carries an overlay's scores: every overlay format
+ * the profile has is scored as the overlay says, and at least one of them with
+ * a non-zero score (a profile scoring them all 0 proves nothing).
+ */
+export function overlayAppliedTo(profile: ArrQualityProfile, scores: Map<string, number>): boolean {
+  let matched = false;
+  for (const f of profile.formatItems ?? []) {
+    const want = scores.get(nameKey(f.name));
+    if (want === undefined) continue;
+    if (f.score !== want) return false;
+    if (want !== 0) matched = true;
+  }
+  return matched;
+}
+
+/**
+ * The app profile an overlay targets: the profile carrying its name, else the
+ * one at the id it last wrote to when that is provably the same profile (the
+ * name it last wrote under, or its scores still on it — the profile renamed in
+ * the app). See `findManagedArrResource`.
+ */
+export function findOverlayProfile(
+  profiles: ArrQualityProfile[],
+  overlay: Pick<ProfileOverlay, "profileName" | "arrId" | "name">,
+  scores: Map<string, number>,
+): ArrQualityProfile | undefined {
+  return findManagedArrResource(profiles, overlay.profileName, overlay, (p) => overlayAppliedTo(p, scores));
+}
+
+/**
+ * The overlay scores a guide quality profile's sync folds in for `profile` (the
+ * app profile it writes, if any): every overlay assigned to the guide profile's
+ * name or targeting `profile` itself.
+ */
+export function profileScoreOverrides(
+  guideName: string,
+  profile: ArrQualityProfile | undefined,
+  overlays: ProfileOverlay[],
+  cfMapByTrashId: Map<string, TrashCustomFormat>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const o of overlays) {
+    const scores = overlayScores(o.formats, cfMapByTrashId);
+    const targetsThis =
+      nameKey(o.profileName) === nameKey(guideName) ||
+      (profile !== undefined && findOverlayProfile([profile], o, scores) === profile);
+    if (!targetsThis) continue;
+    for (const [k, v] of scores) out.set(k, v);
+  }
+  return out;
 }
 
 // ─── Quality definitions (sizes) ───
@@ -499,6 +656,56 @@ export function profileComparable(profile: ArrQualityProfile, service: ServiceTy
     qualities: orderedQualities,
     formatScores,
   };
+}
+
+/** What building a managed guide profile needs beyond the guide profile itself. */
+export interface ManagedProfileContext {
+  schema: ArrQualityProfileSchema;
+  service: ServiceType;
+  cfMapByTrashId: Map<string, TrashCustomFormat>;
+  /** Radarr only: the instance's languages, to resolve a named guide language. */
+  languages?: ArrLanguage[];
+  /** The row's per-profile options (score set, reset unmatched scores). */
+  selection?: QualityProfileSelection | null;
+  /** Every managed PROFILE_CF overlay on the instance. */
+  overlays: ProfileOverlay[];
+}
+
+/**
+ * The payload a managed guide profile's sync writes over `existing` (or
+ * creates), with the PROFILE_CF overlays that target it folded in.
+ */
+export function buildManagedQualityProfile(
+  qp: TrashQualityProfile,
+  ctx: ManagedProfileContext,
+  existing?: ArrQualityProfile,
+): BuildProfileResult {
+  return buildQualityProfile(qp, ctx.schema, ctx.service, ctx.cfMapByTrashId, existing, ctx.languages, {
+    ...(ctx.selection ?? {}),
+    scoreOverrides: profileScoreOverrides(qp.name, existing, ctx.overlays, ctx.cfMapByTrashId),
+  });
+}
+
+/**
+ * The app profile a managed guide profile refers to (`findManagedArrResource`).
+ * Without `ctx` (the schema is not at hand) a profile at the recorded id is
+ * accepted only under the name the row recorded.
+ */
+export function findManagedQualityProfile(
+  profiles: ArrQualityProfile[],
+  qp: TrashQualityProfile,
+  recorded: RecordedArrResource | null | undefined,
+  ctx?: ManagedProfileContext,
+): ArrQualityProfile | undefined {
+  return findManagedArrResource(
+    profiles,
+    qp.name,
+    recorded,
+    ctx
+      ? (candidate) =>
+          sameQualityProfileContent(candidate, buildManagedQualityProfile(qp, ctx, candidate).payload, ctx.service)
+      : undefined,
+  );
 }
 
 // ─── Naming ───

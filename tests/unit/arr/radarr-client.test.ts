@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { RadarrClient } from "@/lib/arr/radarr-client";
+import { FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 describe("RadarrClient", () => {
   let client: RadarrClient;
@@ -276,7 +277,7 @@ describe("RadarrClient", () => {
     it("sends delete for file id", async () => {
       mockAxiosInstance.delete.mockResolvedValueOnce({});
       await client.deleteMovieFile(99);
-      expect(mockAxiosInstance.delete).toHaveBeenCalledWith("/api/v3/moviefile/99");
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith("/api/v3/moviefile/99", { timeout: FILE_DELETE_TIMEOUT_MS });
     });
   });
 

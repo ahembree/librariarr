@@ -108,6 +108,9 @@ export interface SyncWatchHistoryPayload {
    * there: `/api/sync/by-type` enqueues this same task as the deferred
    * server-wide refresh for its per-library jobs, and that one must stay a
    * full replace or the plays a server has since deleted are never reconciled.
+   * Both share the jobKey `watch-history:<serverId>`, so `enqueueJob` drops
+   * `incremental` when the job still queued under it is a full replace
+   * (`keepQueuedFullReplace` in `jobs/client.ts`).
    */
   incremental?: boolean;
 }

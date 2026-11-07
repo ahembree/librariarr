@@ -574,7 +574,7 @@ describe("backfillDedupKeys", () => {
     expect(canonical).toBe(1);
   });
 
-  it("keys a track on artist and title whatever external ids it stores, as the sync does", async () => {
+  it("keys a track on artist, album and title whatever external ids it stores, as the sync does", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Server 1" });
     const lib = await createTestLibrary(server.id, { type: "MUSIC" });
@@ -583,6 +583,7 @@ describe("backfillDedupKeys", () => {
       title: "Paranoid Android",
       type: "MUSIC",
       parentTitle: "Radiohead",
+      albumTitle: "OK Computer",
     });
     await createTestExternalId(track.id, "MUSICBRAINZ", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
 
@@ -592,7 +593,7 @@ describe("backfillDedupKeys", () => {
       where: { id: track.id },
       select: { dedupKey: true },
     });
-    expect(refreshed.dedupKey).toBe("music:radiohead:paranoid android");
+    expect(refreshed.dedupKey).toBe("track:radiohead:ok computer:paranoid android");
   });
 
   it("backfills all items when userId is not provided", async () => {

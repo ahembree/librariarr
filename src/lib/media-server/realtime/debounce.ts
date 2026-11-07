@@ -41,6 +41,12 @@ export class Debouncer {
     }
   }
 
+  /** Run a pending fire now instead of at its deadline; does nothing when none is pending. */
+  flush(): void {
+    if (this.timer == null) return;
+    this.run();
+  }
+
   /** Cancel any pending fire without running it. */
   cancel(): void {
     if (this.timer) {

@@ -27,6 +27,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { rowSurfaceClass } from "@/lib/table-row-surface";
 import type { MediaItemWithRelations } from "@/lib/types";
 import {
   ChevronDown,
@@ -183,18 +184,17 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
     const badge = (
       <ColorChip
         key={idx}
-        className="border-border text-muted-foreground text-[11px] font-normal"
+        className="gap-1 border-border text-muted-foreground text-[11px] font-normal"
       >
+        {/* The chip is inline-flex, which drops whitespace text nodes; the gap spaces the parts. */}
         {c.groupName && (
-          <span className="text-sky mr-0.5">[{c.groupName}]</span>
+          <span className="text-sky">[{c.groupName}]</span>
         )}
         {c.negate && (
-          <span className="text-red mr-0.5">NOT</span>
+          <span className="text-red">NOT</span>
         )}
         <span className="text-muted-foreground">{c.field}</span>
-        {" "}
         <span>{c.operator}</span>
-        {" "}
         <span className="font-medium">{c.value}</span>
       </ColorChip>
     );
@@ -317,7 +317,7 @@ function MatchItemsTableView({
               <tr
                 ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
-                className="transition-all duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 hover:shadow-md hover:shadow-primary/10 cursor-pointer"
+                className={cn(rowSurfaceClass({ index: virtualRow.index, interactive: true }), "transition-all hover:shadow-md hover:shadow-primary/10")}
                 style={{
                   position: "absolute",
                   top: 0,

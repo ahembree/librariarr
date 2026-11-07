@@ -626,7 +626,7 @@ describe("executeAction", () => {
     expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false }, expect.objectContaining({ id: 2 }));
     expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
     // E03 (file 12) did not match and is left alone.
-    expect(outcome).toEqual({ deletedMemberIds: ["ep1", "ep2"] });
+    expect(outcome).toEqual({ deletedMemberIds: ["ep1", "ep2"], notActedOn: [] });
   });
 
   describe("Sonarr episode-file correlation", () => {
@@ -1053,6 +1053,37 @@ describe("executeAction", () => {
         id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [],
       });
       mockLidarrClient.getAlbums.mockResolvedValue([{ id: 10, title: "Album A" }, { id: 11, title: "Live at the BBC" }]);
+    });
+
+    it("reports the tracks it left alone with their reasons", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "ok", title: "Song", episodeNumber: 1 }),
+        track({ id: "absent", title: "Not On The Album", episodeNumber: 7 }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 10, trackFileId: 101, title: "Song", hasFile: true, trackNumber: "1", mediumNumber: 1 },
+      ]);
+
+      const outcome = await executeAction(lidarrAction(["ok", "absent"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
+      expect(outcome.deletedMemberIds).toEqual(["ok"]);
+      expect(outcome.notActedOn).toEqual([
+        { title: "Test Artist — Not On The Album", reason: expect.stringMatching(/^Lidarr lists no single track it could be matched to/) },
+      ]);
+    });
+
+    it("reports an action whose tracks have all left the library as having changed nothing", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+
+      const outcome = await executeAction(lidarrAction(["gone-1", "gone-2"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
+      expect(outcome.deletedMemberIds).toEqual([]);
+      expect(outcome.notActedOn).toEqual([{
+        title: "Test Artist — 2 tracks",
+        reason: "No longer in the library (removed since the action was scheduled) — nothing was deleted",
+      }]);
     });
 
     it("tells 'Song' from 'Song (Demo)' on the same album", async () => {

@@ -11,11 +11,17 @@ import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
-import { audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
+import {
+  UNKNOWN_ARTIST,
+  albumArtistKeySql,
+  albumTitleDisplaySql,
+  albumTitleKeySql,
+  audioCodecLabelSql,
+  foldCodecCounts,
+  type CodecCountRow,
+} from "@/lib/media/music-sql";
 import type { Prisma } from "@/generated/prisma/client";
 
-const UNKNOWN_ALBUM = "Unknown Album";
-const UNKNOWN_ARTIST = "Unknown Artist";
 
 interface AlbumGroupRow {
   group_key: string;
@@ -111,7 +117,11 @@ const listGet = withSession(async (session, request: NextRequest) => {
       FROM "MediaItem" mi
       JOIN "Library" l ON mi."libraryId" = l.id
       WHERE ${conditions.join("\n        AND ")}`;
-  const albumKey = `LOWER(TRIM(COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}'))) || '::' || LOWER(TRIM(COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}')))`;
+  // The album page lists an album by the same key (`albumTitleKeySql`): a
+  // blank album title joins the tracks with none under "Unknown Album" there
+  // and on the artist page, where it used to be a card of its own, untitled.
+  const albumKey = `${albumArtistKeySql(`mi."parentTitle"`)} || '::' || ${albumTitleKeySql(`mi."albumTitle"`)}`;
+  const albumTitleCol = albumTitleDisplaySql(`mi."albumTitle"`);
   // "First" in track order — album-level fields are the same on every track;
   // the fold took whichever arrived first, from a query with no ORDER BY.
   const trackOrder = `"seasonNumber", "episodeNumber", id`;
@@ -142,7 +152,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
         (array_agg(id ORDER BY ${trackOrder}) FILTER (WHERE NULLIF("summary", '') IS NOT NULL))[1] as "summaryItemId"
       FROM (
         SELECT ${albumKey} as group_key, mi.id,
-          COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}') as "albumTitle",
+          ${albumTitleCol} as "albumTitle",
           COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}') as "artistName",
           mi."seasonNumber", mi."episodeNumber", mi."fileSize", mi."playCount", mi."lastPlayedAt",
           mi."addedAt", l."mediaServerId", mi."summary", mi."genres", mi."studio", mi."contentRating",
@@ -159,7 +169,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
       `SELECT DISTINCT ON (${albumKey})
         ${albumKey} as group_key,
         mi.id as "mediaItemId",
-        COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}') as "albumTitle",
+        ${albumTitleCol} as "albumTitle",
         COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}') as "artistName",
         NULLIF(mi."summary", '') as "summary"
       ${scope}

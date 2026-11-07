@@ -3,11 +3,13 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
-import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
+import { validateRequest, ruleSetUpdateSchema, ruleSetScopeError } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
 import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 import { hasArrRules } from "@/lib/rules/lifecycle-engine";
+import { releasesStoredMatches, rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
+import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 export const PUT = withSession(async (
@@ -45,6 +47,32 @@ export const PUT = withSession(async (
     currentType = current.type;
   }
 
+  // The schema checks the two tag lists against each other only when both are
+  // sent; a body carrying one is checked against the stored other.
+  if ((addArrTags === undefined) !== (removeArrTags === undefined)) {
+    const stored = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { addArrTags: true, removeArrTags: true },
+    });
+    if (!stored) {
+      return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
+    }
+    const lists = {
+      addArrTags: addArrTags ?? stored.addArrTags,
+      removeArrTags: removeArrTags ?? stored.removeArrTags,
+    };
+    if (!tagListsDisjoint(lists)) {
+      const field = addArrTags !== undefined ? "addArrTags" : "removeArrTags";
+      return NextResponse.json(
+        {
+          error: "Validation failed",
+          details: [`${field}: A tag cannot be both added and removed`],
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   if (name !== undefined) {
     const existing = await prisma.ruleSet.findFirst({
       where: { userId: session.userId, name, type: currentType!, id: { not: id } },
@@ -69,6 +97,47 @@ export const PUT = withSession(async (
         { status: 400 }
       );
     }
+  }
+
+  // A criterion that describes one episode or track may never make a whole
+  // show or artist an action's target (`ruleSetScopeError`): new rules under
+  // the stored scope and action, the scope turned on over the stored rules,
+  // and an action that acts on the whole show or artist armed over per-episode
+  // rules with the scope off — a new action type, its Arr tags or search after,
+  // or the action switched on — are all refused as a create would be. A save
+  // changing none of these (a rename, enabling or disabling it), or changing
+  // only an action already invalid for its scope's sake, cannot make it so and
+  // stays allowed on one saved before the rule existed — whose detection is
+  // skipped and whose actions are held until it is edited — so it can still be
+  // turned off.
+  const scopeFields = { rules, seriesScope, actionType, actionEnabled, addArrTags, removeArrTags, searchAfterAction };
+  const changedScopeField = Object.entries(scopeFields).find(([, value]) => value !== undefined)?.[0];
+  if (changedScopeField) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: {
+        type: true, seriesScope: true, rules: true,
+        actionEnabled: true, actionType: true, addArrTags: true, removeArrTags: true, searchAfterAction: true,
+      },
+    });
+    if (!current) {
+      return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
+    }
+    const scopeError = ruleSetScopeError(
+      {
+        type: current.type,
+        seriesScope: seriesScope ?? current.seriesScope,
+        rules: rules ?? current.rules,
+        actionEnabled: actionEnabled ?? current.actionEnabled,
+        actionType: actionType !== undefined ? actionType : current.actionType,
+        addArrTags: addArrTags ?? current.addArrTags,
+        removeArrTags: removeArrTags ?? current.removeArrTags,
+        searchAfterAction: searchAfterAction ?? current.searchAfterAction,
+      },
+      changedScopeField,
+      { actionCausedOnly: rules === undefined && seriesScope === undefined },
+    );
+    if (scopeError) return scopeError;
   }
 
   // If the merged state would be an enabled CHANGE_QUALITY_PROFILE_* action
@@ -143,6 +212,33 @@ export const PUT = withSession(async (
     seriesScopeChanged = current !== null && current.seriesScope !== seriesScope;
   }
 
+  // Whether this save changes what the rule set matches. The editor sends its
+  // rules and servers with every save, so they are compared with what is
+  // stored (`rule-set-matching.ts`), not taken as changed for being present.
+  let matchesChanged = arrScopeChanged || seriesScopeChanged;
+  if (!matchesChanged && (rules !== undefined || serverIds !== undefined)) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { rules: true, serverIds: true },
+    });
+    matchesChanged =
+      current !== null &&
+      ((rules !== undefined && rulesChanged(current.rules, rules)) ||
+        (serverIds !== undefined && serverIdsChanged(current.serverIds, serverIds)));
+  }
+  // The same rules can still let stored matches run that detection has not
+  // re-checked (`releasesStoredMatches`): sticky matches turned off — the
+  // matches the rules no longer select were kept only by stickiness — or a
+  // disabled rule set enabled again, whose matches detection left frozen
+  // while it was off. Held the same way until detection re-checks them.
+  if (!matchesChanged && (stickyMatches === false || enabled === true)) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { stickyMatches: true, enabled: true },
+    });
+    matchesChanged = current !== null && releasesStoredMatches(current, { stickyMatches, enabled });
+  }
+
   // A referenced collection must exist, belong to the user, and target the same
   // library type as this rule set.
   if (collectionId) {
@@ -183,12 +279,27 @@ export const PUT = withSession(async (
   if (discordNotifyOnMatch !== undefined) updateData.discordNotifyOnMatch = discordNotifyOnMatch;
   if (stickyMatches !== undefined) updateData.stickyMatches = stickyMatches;
   if (serverIds !== undefined) updateData.serverIds = serverIds;
+  // HOLD the rule set's actions until detection has re-checked its matches
+  // under what was just saved. The executor acts on a PENDING action as long
+  // as its RuleMatch row exists, and detection and execution run on separate
+  // schedules: with the matches kept ("Save only"), an action whose item the
+  // edited rules no longer select ran before the next detection dropped it —
+  // from the schedule, or from Execute on the Pending page. Set when the
+  // matches are cleared too: a detection run already under way read the old
+  // rules, and the matches it writes must not arm actions either. The next
+  // detection that evaluates the rule set under these rules releases it
+  // (`releaseHeldActions` in detect-matches.ts), keeping each still-matching
+  // action's date; the ones no longer matching are cancelled as usual.
+  // Turning sticky matches off and re-enabling the rule set count (above).
+  if (matchesChanged) updateData.actionsHeldSince = new Date();
 
   // clearMatches=false preserves existing matches and pending actions (e.g. when user
   // wants to keep matches intact after a config-only change). Defaults to true for
   // backwards compatibility and safety. A change of the instance the Arr
   // criteria are read from, or of series scope, always clears (see
-  // `arrScopeChanged`, `seriesScopeChanged`).
+  // `arrScopeChanged`, `seriesScopeChanged`). Kept across a change of the
+  // rules or servers, sticky matches turned off or the rule set enabled again,
+  // the pending actions are held (`actionsHeldSince` above).
   const clearMatches =
     request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged || seriesScopeChanged;
 

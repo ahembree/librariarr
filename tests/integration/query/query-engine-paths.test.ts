@@ -264,6 +264,44 @@ describe("executeQuery — paths", () => {
     expect(show.playCount).toBe(5);
   });
 
+  it("oneCopyPerEpisode counts each matched episode once, the canonical copy first, and still lists every server", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const a = await createTestServer(user.id, { name: "Alpha" });
+    const b = await createTestServer(user.id, { name: "Beta" });
+    const libA = await createTestLibrary(a.id, { type: "SERIES", key: "sa" });
+    const libB = await createTestLibrary(b.id, { type: "SERIES", key: "sb" });
+    const episode = async (lib: string, n: number, size: number, plays: number, canonical: boolean, resolution = "1080") => {
+      const row = await createTestMediaItem(lib, {
+        type: "SERIES", title: `E${n}`, parentTitle: "Shared", seriesKey: "tvdb:42",
+        seasonNumber: 1, episodeNumber: n, fileSize: BigInt(size), playCount: plays, resolution,
+      });
+      await prisma.mediaItem.update({ where: { id: row.id }, data: { dedupKey: `series:tvdb:42:s1e${n}`, dedupCanonical: canonical } });
+    };
+    // E1 on both (canonical on Beta), E2 on both (canonical on Alpha), E3 on Alpha only.
+    await episode(libA.id, 1, 100, 1, false);
+    await episode(libB.id, 1, 200, 2, true);
+    await episode(libA.id, 2, 300, 3, true);
+    await episode(libB.id, 2, 400, 4, false, "2160");
+    await episode(libA.id, 3, 500, 5, true);
+
+    const shared = (r: { items: Array<Record<string, unknown>> }) => r.items.find((i) => i.title === "Shared")!;
+    const everyCopy = shared(await executeQuery(def({ mediaTypes: ["SERIES"] }), user.id, 1, 0));
+    expect(everyCopy).toMatchObject({ matchedEpisodes: 5, fileSize: "1500", playCount: 15 });
+
+    const oneCopy = shared(await executeQuery(def({ mediaTypes: ["SERIES"] }), user.id, 1, 0, undefined, { oneCopyPerEpisode: true }));
+    expect(oneCopy).toMatchObject({ matchedEpisodes: 3, seasonCount: 1, fileSize: "1000", playCount: 10 });
+    expect((oneCopy.servers as Array<{ serverName: string }>).map((sv) => sv.serverName)).toEqual(["Alpha", "Beta"]);
+
+    // Only Beta's copy of E2 is 4K: that copy is the one counted, canonical or not.
+    const fourK = shared(await executeQuery(
+      def({ mediaTypes: ["SERIES"], groups: [group([rule("resolution", "equals", "2160")])] }),
+      user.id, 1, 0, undefined, { oneCopyPerEpisode: true },
+    ));
+    expect(fourK).toMatchObject({ matchedEpisodes: 1, fileSize: "400", playCount: 4 });
+    expect((fourK.servers as Array<{ serverName: string }>).map((sv) => sv.serverName)).toEqual(["Beta"]);
+  });
+
   it("grouped series-aggregate path: no SERIES episodes, or none surviving, yields no shows", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

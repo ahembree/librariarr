@@ -21,6 +21,7 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import { albumTitleDisplay, UNKNOWN_ARTIST } from "@/lib/media/music-sql";
 import { useBackOverride, useMediaDetailRecord } from "@/hooks/use-media-detail-record";
 import { useDetailChildren } from "@/hooks/use-detail-children";
 import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
@@ -115,8 +116,10 @@ export default function AlbumDetailPage() {
   const pending = loading || (item !== null && !trackList.loaded);
   if (pending || !item) return <DetailPageStates loading={pending} notFoundLabel="Album not found" />;
 
-  const artistName = item.parentTitle || "Unknown Artist";
-  const albumTitle = (item as MediaItemWithRelations & { albumTitle?: string | null }).albumTitle || item.title;
+  const artistName = item.parentTitle || UNKNOWN_ARTIST;
+  // A track with no album opens its artist's "Unknown Album" (the card it came
+  // from, and the tracks listed below), not an album named after the track.
+  const albumTitle = albumTitleDisplay((item as MediaItemWithRelations & { albumTitle?: string | null }).albumTitle ?? null);
   const totalSize = tracks.reduce((sum, t) => sum + (t.fileSize ? Number(t.fileSize) : 0), 0);
 
   // Audio codec breakdown

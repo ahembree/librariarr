@@ -180,13 +180,24 @@ export async function fetchCrossSystemData(
 }
 
 /**
- * The cross-system values of a show or an artist, read across its episodes or
- * tracks: matched by every rule set that matched any of them, pending if any
- * has a pending action, on as many servers as its most-copied one. The
- * series- and artist-scope engines evaluate the aggregate record, which used
- * to carry none of these — every show read "matched by no rule set, no pending
- * action, on one server", so an exclusion such as "NOT Matched By Rule Set =
- * Keep" failed open.
+ * One item's cross-system values in `data`. Every id `fetchCrossSystemData`
+ * was asked for has an entry; any other reads as that function's defaults.
+ * The series- and artist-scope engines and Test Media read each episode's or
+ * track's own (`isEveryMemberField`): a show or artist matches only when the
+ * rule holds for every one of them.
+ */
+export function crossSystemValuesOf(data: CrossSystemDataMap, id: string): CrossSystemDataEntry {
+  return data.get(id) ?? { serverCount: 1, matchedRuleSets: [], hasPendingAction: false };
+}
+
+/**
+ * The cross-system values of a show or an artist, summed up across its
+ * episodes or tracks for display: matched by every rule set that matched any
+ * of them, pending if any has a pending action, on as many servers as its
+ * most-copied one. The Query table shows a grouped show row's columns this
+ * way. Rule evaluation never reads it: a show or artist judged as a whole is
+ * judged through each member's own values (`crossSystemValuesOf`), so no one
+ * episode decides for the rest.
  */
 export function foldCrossSystemData(
   memberIds: readonly string[],

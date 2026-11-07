@@ -8,10 +8,10 @@ import { MAX_SEARCH_QUERY_LENGTH } from "@/lib/api-keys/limits";
 /**
  * How many distinct items a group of matching rows holds — the "N eps" /
  * "N tracks" of a scoped result. A copy on another server is the same item, so
- * rows fold by `dedupKey`, but only ACROSS servers: `computeDedupKey` names a
- * track by artist + title and an episode by show + SxxExx, so two different
- * rows of ONE server can share a key (the same song on an album and on a
- * compilation; episodes without numbers). Each row is numbered among the rows
+ * rows fold by `dedupKey`, but only ACROSS servers: `computeDedupKey` names an
+ * episode by show + SxxExx and a track by artist + album + title, so two
+ * different rows of ONE server can share a key (episodes without numbers; a
+ * title twice on one album). Each row is numbered among the rows
  * of its own group, server and key (`copyNumber`), and the group counts its
  * distinct (key, number) pairs: per key, as many items as any one server holds.
  */

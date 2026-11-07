@@ -145,7 +145,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // finished — meaning their `SyncJob` rows are COMPLETED and
     // `syncWatchHistoryTask`'s "a full sync is already running" guard does not
     // swallow it. Sharing the realtime manager's jobKey dedupes with any
-    // refresh a `watch-changed` event already queued.
+    // refresh a `watch-changed` event already queued; a realtime enqueue made
+    // after this one leaves it a full replace (`enqueueJob` drops its
+    // `incremental` while this job is still queued).
     await enqueueJob(
       TASK_SYNC_WATCH_HISTORY,
       { serverId: server.id },

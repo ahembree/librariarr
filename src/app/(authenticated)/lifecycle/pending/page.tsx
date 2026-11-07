@@ -17,7 +17,6 @@ import {
   Inbox,
   LayoutGrid,
   Loader2,
-  Play,
   RotateCcw,
   ShieldOff,
   TableProperties,
@@ -31,6 +30,7 @@ import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useCardSize } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
+import { rowSurfaceClass } from "@/lib/table-row-surface";
 import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { MetadataLine } from "@/components/metadata-line";
 import { TabNav } from "@/components/tab-nav";
@@ -43,6 +43,20 @@ import { LoadingButton } from "@/components/loading-button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
 import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
+import { WholeSeasonsChip } from "@/components/whole-seasons-chip";
+import { QueryProgress, EMPTY_PROGRESS, applyProgressUpdate, type ProgressState } from "@/components/query-progress";
+import {
+  actionResultHasProblems,
+  addActionResult,
+  emptyActionResult,
+  hasActionResultDetails,
+  summarizeActionResult,
+  toastActionResult,
+  useActionResultDialog,
+  type ActionResultReport,
+} from "@/components/action-result-dialog";
+import { consumeProgressStream } from "@/lib/progress/client";
+import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
@@ -50,6 +64,20 @@ import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
 import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
 import { useSetState } from "@/hooks/use-set-state";
+import {
+  ExecuteAllButton,
+  ExecuteNowButton,
+  HeldChip,
+  RetryActionButton,
+} from "@/components/held-actions";
+import {
+  heldActionCount,
+  heldCountLabel,
+  holdReasonOf,
+  isActionHeld,
+  skippedHeldLabel,
+  type HoldingRuleSet,
+} from "@/lib/lifecycle/held-actions";
 
 interface ActionItem {
   id: string;
@@ -106,6 +134,23 @@ interface RuleSetGroup {
     arrInstanceId: string | null;
     targetQualityProfileId?: number | null;
     deleted?: boolean;
+    /**
+     * Set (ISO) while a save that changed what the rule set matches holds its
+     * actions, until the next detection run re-checks them: the server
+     * refuses Execute, Execute All and Retry (409), so the page disables them.
+     */
+    actionsHeldSince?: string | null;
+    /**
+     * Set while the rule set uses per-episode/per-track criteria at series or
+     * artist scope: its actions are held, and refused the same way, until it
+     * is edited. The reason, as the server words it.
+     */
+    scopeHoldReason?: string | null;
+    /**
+     * Whether its episode-scoped Unmonitor also unmonitors whole seasons —
+     * criteria that decide per season. The group header says so.
+     */
+    wholeSeasons?: boolean;
   };
   items: ActionItem[];
   count: number;
@@ -149,6 +194,7 @@ function actionHoverContent(mi: ActionMediaItem, withImage: boolean) {
 function VirtualizedActionTable({
   items,
   ruleSetId,
+  hold,
   isPending,
   executingItems,
   retryingItems,
@@ -163,6 +209,8 @@ function VirtualizedActionTable({
 }: {
   items: ActionItem[];
   ruleSetId: string;
+  /** The group's rule set: while it is held, Execute and Retry are disabled with the reason. */
+  hold: HoldingRuleSet;
   isPending: boolean;
   executingItems: ReadonlySet<string>;
   retryingItems: ReadonlySet<string>;
@@ -219,13 +267,14 @@ function VirtualizedActionTable({
               const hasMediaItem = action.mediaItem.id !== null;
               const itemKey = hasMediaItem ? `${ruleSetId}:${action.mediaItem.id}` : "";
               const isItemExecuting = hasMediaItem && executingItems.has(itemKey);
+              const heldReason = isActionHeld(hold, action) ? holdReasonOf(hold) : null;
 
               const tableRow = (
                 <tr
                   key={action.id}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className={`transition-colors duration-200 even:bg-white/1.5 ${hasMediaItem ? "hover:bg-white/3 hover:ring-1 hover:ring-primary/20 cursor-pointer" : ""}`}
+                  className={rowSurfaceClass({ index: virtualRow.index, interactive: hasMediaItem })}
                   onClick={hasMediaItem ? () => onItemClick(action) : undefined}
                 >
                   <td className="p-4 align-middle">
@@ -298,11 +347,14 @@ function VirtualizedActionTable({
                     )}
                   </td>
                   <td className="p-4 align-middle">
-                    <ColorChip
-                      className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}
-                    >
-                      {STATUS_LABELS[action.status] ?? action.status}
-                    </ColorChip>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <ColorChip
+                        className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}
+                      >
+                        {STATUS_LABELS[action.status] ?? action.status}
+                      </ColorChip>
+                      {heldReason && <HeldChip reason={heldReason} />}
+                    </div>
                     {action.error && (
                       <div className="mt-1 max-w-64">
                         <p
@@ -327,15 +379,11 @@ function VirtualizedActionTable({
                   {isPending && (
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <LoadingButton
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
+                        <ExecuteNowButton
+                          heldReason={heldReason}
+                          executing={isItemExecuting}
                           disabled={!hasMediaItem}
-                          loading={isItemExecuting}
-                          icon={Play}
-                          iconClassName="h-4 w-4"
-                          title="Execute now"
+                          onExecute={() => hasMediaItem && onExecuteItem(ruleSetId, action.mediaItem.id!)}
                         />
                         <LoadingButton
                           variant="ghost"
@@ -354,14 +402,10 @@ function VirtualizedActionTable({
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {action.status === "FAILED" && !isDeletedRuleSet && hasMediaItem && (
-                          <LoadingButton
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onRetryAction(action)}
-                            loading={retryingItems.has(action.id)}
-                            icon={Play}
-                            iconClassName="h-4 w-4 text-amber"
-                            title="Force retry"
+                          <RetryActionButton
+                            heldReason={heldReason}
+                            retrying={retryingItems.has(action.id)}
+                            onRetry={() => onRetryAction(action)}
                           />
                         )}
                         <Button
@@ -411,6 +455,8 @@ interface PendingActionCardProps {
   isMovie: boolean;
   priority: boolean;
   excepted: boolean;
+  /** Why the action's rule set holds it, or null (`isActionHeld`, `holdReasonOf`). */
+  heldReason: string | null;
   onItemClick: (action: ActionItem) => void;
   getHex: (category: ChipColorCategory, value: string) => string;
 }
@@ -426,6 +472,7 @@ const PendingActionCard = memo(function PendingActionCard({
   isMovie,
   priority,
   excepted,
+  heldReason,
   onItemClick,
   getHex,
 }: PendingActionCardProps) {
@@ -463,9 +510,12 @@ const PendingActionCard = memo(function PendingActionCard({
           mi.matchedEpisodes ? undefined : qualitySegments(qualityChips(mi, isMusic ? "music" : "video"), getHex)
         }
         badges={
-          <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
-            {STATUS_LABELS[action.status] ?? action.status}
-          </ColorChip>
+          <>
+            <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
+              {STATUS_LABELS[action.status] ?? action.status}
+            </ColorChip>
+            {heldReason && <HeldChip reason={heldReason} />}
+          </>
         }
       />
     </div>
@@ -475,11 +525,14 @@ const PendingActionCard = memo(function PendingActionCard({
 function PendingActionCardGrid({
   items,
   ruleSetType,
+  hold,
   onItemClick,
   exceptedItemIds,
 }: {
   items: ActionItem[];
   ruleSetType: string;
+  /** The group's rule set: its held cards carry the Held chip. */
+  hold: HoldingRuleSet;
   /** Stable: the cards are memoised on it. */
   onItemClick: (action: ActionItem) => void;
   exceptedItemIds: ReadonlySet<string>;
@@ -503,6 +556,7 @@ function PendingActionCardGrid({
     overscan: 5,
   });
 
+  const heldReason = holdReasonOf(hold);
   const renderCard = useCallback(
     (action: ActionItem, { priority }: GridCardContext) => (
       <PendingActionCard
@@ -511,11 +565,12 @@ function PendingActionCardGrid({
         isMovie={isMovie}
         priority={priority}
         excepted={exceptedItemIds.has(action.mediaItem.id!)}
+        heldReason={heldReason && isActionHeld(hold, action) ? heldReason : null}
         onItemClick={onItemClick}
         getHex={getHex}
       />
     ),
-    [isMusic, isMovie, exceptedItemIds, onItemClick, getHex],
+    [isMusic, isMovie, exceptedItemIds, hold, heldReason, onItemClick, getHex],
   );
 
   return (
@@ -533,10 +588,91 @@ function PendingActionCardGrid({
 
 const ruleSetOfGroup = (g: RuleSetGroup) => g.ruleSet;
 
-// Detection is what CREATES pending actions, and an execute removes them and
-// moves the deletion stats: the listing and the stats card above it re-read
-// on both, so the two halves of this page never disagree.
+// Detection is what CREATES pending actions — and releases a rule set's held
+// ones (`actionsHeldSince`), which the listing then reports unheld — and an
+// execute removes them and moves the deletion stats: the listing and the stats
+// card above it re-read on both, so the two halves of this page never disagree.
 const PENDING_EVENTS = ["lifecycle:action-executed", "lifecycle:detection-completed"] as const;
+
+/** What an Execute answers (`POST /api/lifecycle/actions/execute`). */
+interface ExecuteAnswer extends ActionRunDetails {
+  /** Why the run stopped before the rest (the rule set changed while it ran). */
+  stopped?: string;
+}
+
+/** A running Execute's progress bars on its rule set's card: Execute All's, then each row's. */
+function ExecuteProgressBanner({ runs }: { runs: Array<{ key: string; label: string; state: ProgressState }> }) {
+  if (runs.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {runs.map((run) => (
+        <div key={run.key} className="space-y-1">
+          <p className="truncate text-xs text-muted-foreground">{run.label}</p>
+          {run.state.phases.length > 0 ? (
+            <QueryProgress state={run.state} />
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-foreground/90">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
+              Starting…
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A rule set's last Execute All on its card: green only when it ran cleanly;
+ * amber with the summary when an item failed, a member was left alone or the
+ * run stopped — a button reopening the details when there are reasons to list.
+ */
+function ExecuteResultChip({
+  result,
+  onShowDetails,
+}: {
+  result: { report: ActionResultReport | null; error: string | null };
+  onShowDetails: (report: ActionResultReport) => void;
+}) {
+  const { report, error } = result;
+  if (!report) {
+    return (
+      <span className="flex items-center gap-1 text-xs text-red" title={error ?? undefined}>
+        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+        Not executed
+      </span>
+    );
+  }
+  if (!actionResultHasProblems(report) && !report.note) {
+    return (
+      <span className="flex items-center gap-1 text-xs text-green">
+        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+        {report.executed} executed
+      </span>
+    );
+  }
+  const label = (
+    <>
+      <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+      {summarizeActionResult(report)}
+      {report.note ? " — stopped" : ""}
+    </>
+  );
+  return hasActionResultDetails(report) ? (
+    <button
+      type="button"
+      className="flex items-center gap-1 text-xs text-amber hover:underline"
+      title={report.note ?? "View the reasons"}
+      onClick={() => onShowDetails(report)}
+    >
+      {label}
+    </button>
+  ) : (
+    <span className="flex items-center gap-1 text-xs text-amber" title={report.note}>
+      {label}
+    </span>
+  );
+}
 
 /** The execute route's announcement of the run this page asked for. */
 const isOwnExecute = (result: { executed?: unknown; failed?: unknown }) => (data: Record<string, unknown>) =>
@@ -562,7 +698,16 @@ export default function PendingActionsPage() {
   const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [executingRules, executingRuleActions] = useSetState<string>();
   const [executingItems, executingItemActions] = useSetState<string>();
-  const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
+  // Each rule set's last Execute All: what ran, every failure and every member
+  // left alone (the card's result chip reopens the details), or why it was
+  // refused.
+  const [executeResults, setExecuteResults] = useState<Record<string, { report: ActionResultReport | null; error: string | null }>>({});
+  // Each running Execute's progress, by rule set id (Execute All) or
+  // `ruleSetId:mediaItemId` (a row's), shown on its rule set's card.
+  const [executeProgress, setExecuteProgress] = useState<Record<string, { label: string; state: ProgressState }>>({});
+  // Each failed item and each episode or track left alone, opened from the
+  // completion toast.
+  const { showDetails: showActionResult, dialog: actionResultDialog } = useActionResultDialog();
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
   const detailPanel = useMediaDetailPanel();
@@ -601,6 +746,8 @@ export default function PendingActionsPage() {
   }, []);
 
   useEffect(() => {
+    // Fetch-on-mount: the loading state it sets is the effect's purpose.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDeletionStats();
   }, [fetchDeletionStats]);
 
@@ -632,7 +779,7 @@ export default function PendingActionsPage() {
       }
     }
     return map;
-  }, [deletionStats?.byRuleSet]);
+  }, [deletionStats]);
 
   // Only the latest request may write. The Pending listing is the slow one
   // (it estimates rows for matches without an action), so switching to
@@ -662,6 +809,9 @@ export default function PendingActionsPage() {
   const pageRefetch = useRealtimeRefetch(PENDING_EVENTS, refreshPage);
 
   useEffect(() => {
+    // Fetch-on-mount (and on a status tab change): the loading state it sets
+    // is the effect's purpose.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchActions();
   }, [fetchActions]);
 
@@ -721,8 +871,64 @@ export default function PendingActionsPage() {
   // they answer. The route announces a run that executed or failed anything
   // with `lifecycle:action-executed`, whose re-read is the one kept when it
   // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
+  /**
+   * One Execute (Execute All, or a row's), its progress streamed into
+   * `executeProgress[progressKey]` while it runs. Refusals answer as an error
+   * (the route's 4xx before the run, or the stream's error during it).
+   */
+  const runExecute = async (
+    progressKey: string,
+    label: string,
+    body: { ruleSetId: string; mediaItemIds?: string[] },
+  ): Promise<{ ok: true; data: ExecuteAnswer } | { ok: false; error: string }> => {
+    setExecuteProgress((prev) => ({ ...prev, [progressKey]: { label, state: EMPTY_PROGRESS } }));
+    try {
+      const response = await fetch("/api/lifecycle/actions/execute?stream=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await consumeProgressStream<ExecuteAnswer>(response, (update) =>
+        setExecuteProgress((prev) =>
+          prev[progressKey]
+            ? { ...prev, [progressKey]: { label, state: applyProgressUpdate(prev[progressKey].state, update) } }
+            : prev,
+        ),
+      );
+      return { ok: true, data };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      setExecuteProgress((prev) => {
+        const next = { ...prev };
+        delete next[progressKey];
+        return next;
+      });
+    }
+  };
+
+  /** The members of a rule set's actions, as the results dialog names them. */
+  const memberNounOf = (ruleSetId: string) => {
+    const type = groups.find((g) => g.ruleSet.id === ruleSetId)?.ruleSet.type;
+    return type === "SERIES" ? "episode" : type === "MUSIC" ? "track" : "item";
+  };
+
+  // Execute All and a row's Execute re-read the listing and the stats when
+  // they answer. The route announces a run that executed or failed anything
+  // with `lifecycle:action-executed`, whose re-read is the one kept when it
+  // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
   const executeAll = async (ruleSetId: string) => {
     setConfirmExecuteRuleSetId(null);
+    // A held rule set's actions are skipped, and the hold is the rule set's:
+    // nothing is left to send (the route would answer 409). Its button is
+    // disabled; this covers a hold the listing reported while the dialog was open.
+    const group = groups.find((g) => g.ruleSet.id === ruleSetId);
+    const held = group ? heldActionCount(group) : 0;
+    const heldReason = group ? holdReasonOf(group.ruleSet) : null;
+    if (heldReason && held > 0) {
+      toast.info(skippedHeldLabel(held), { description: heldReason });
+      return;
+    }
     executingRuleActions.add(ruleSetId);
     setExecuteResults((prev) => {
       const next = { ...prev };
@@ -731,40 +937,25 @@ export default function PendingActionsPage() {
     });
     const ticket = pageRefetch.begin();
     try {
-      const response = await fetch("/api/lifecycle/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId }),
-      });
-      const data = await response.json();
-      if (response.ok) {
-        setExecuteResults((prev) => ({
-          ...prev,
-          [ruleSetId]: { executed: data.executed, failed: data.failed, errors: data.errors || [] },
-        }));
-        if (data.failed > 0 && data.errors?.length > 0) {
-          toast.error(`${data.failed} action${data.failed !== 1 ? "s" : ""} failed`, {
-            description: data.errors.join("\n"),
-          });
-        } else if (data.executed > 0) {
-          toast.success(`${data.executed} action${data.executed !== 1 ? "s" : ""} executed`);
+      const answer = await runExecute(ruleSetId, "Execute All", { ruleSetId });
+      if (answer.ok) {
+        const data = answer.data;
+        const report = { ...addActionResult(emptyActionResult(memberNounOf(ruleSetId)), data), note: data.stopped };
+        setExecuteResults((prev) => ({ ...prev, [ruleSetId]: { report, error: null } }));
+        // Green only when nothing failed, nothing was left alone and the run
+        // was not stopped (the rule set changed while it ran) — one toast,
+        // which otherwise opens every reason (View Details).
+        if (data.executed > 0 || data.failed > 0 || data.stopped) {
+          toastActionResult(report, showActionResult, { stopped: data.stopped });
         }
       } else {
-        setExecuteResults((prev) => ({
-          ...prev,
-          [ruleSetId]: { executed: 0, failed: 0, errors: [data.error || "Unknown error"] },
-        }));
-        toast.error(data.error || "Failed to execute actions");
+        setExecuteResults((prev) => ({ ...prev, [ruleSetId]: { report: null, error: answer.error } }));
+        toast.error(answer.error || "Failed to execute actions");
       }
       await ticket.settle({
-        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
-        isOwn: isOwnExecute(data),
+        expectEvent: answer.ok && (answer.data.executed > 0 || answer.data.failed > 0),
+        isOwn: isOwnExecute(answer.ok ? answer.data : {}),
       });
-    } catch (error) {
-      setExecuteResults((prev) => ({
-        ...prev,
-        [ruleSetId]: { executed: 0, failed: 0, errors: [String(error)] },
-      }));
     } finally {
       ticket.cancel();
       executingRuleActions.remove(ruleSetId);
@@ -775,29 +966,22 @@ export default function PendingActionsPage() {
     const key = `${ruleSetId}:${mediaItemId}`;
     executingItemActions.add(key);
     const ticket = pageRefetch.begin();
+    const title =
+      groups.find((g) => g.ruleSet.id === ruleSetId)?.items.find((i) => i.mediaItem.id === mediaItemId)?.mediaItem.title ??
+      "Execute";
     try {
-      const response = await fetch("/api/lifecycle/actions/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId, mediaItemIds: [mediaItemId] }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        toast.error(data.error || "Failed to execute action");
-      } else if (data.failed > 0 && data.errors?.length > 0) {
-        toast.error("Action failed", {
-          description: data.errors.join("\n"),
-        });
+      const answer = await runExecute(key, title, { ruleSetId, mediaItemIds: [mediaItemId] });
+      if (!answer.ok) {
+        toast.error(answer.error || "Failed to execute action");
       } else {
-        toast.success("Action executed");
+        toastActionResult(addActionResult(emptyActionResult(memberNounOf(ruleSetId)), answer.data), showActionResult, {
+          stopped: answer.data.stopped,
+        });
       }
       await ticket.settle({
-        expectEvent: response.ok && (data.executed > 0 || data.failed > 0),
-        isOwn: isOwnExecute(data),
+        expectEvent: answer.ok && (answer.data.executed > 0 || answer.data.failed > 0),
+        isOwn: isOwnExecute(answer.ok ? answer.data : {}),
       });
-    } catch (error) {
-      console.error("Failed to execute item:", error);
-      toast.error("Failed to execute action");
     } finally {
       ticket.cancel();
       executingItemActions.remove(key);
@@ -985,6 +1169,13 @@ export default function PendingActionsPage() {
               const isExecuting = executingRules.has(group.ruleSet.id);
               const result = executeResults[group.ruleSet.id];
 
+              // Held since an edit changed what the rule set matches, or for
+              // per-episode criteria at series scope: the rows it holds
+              // (pending, failed) can't run until detection re-checks them, or
+              // until the rule set is edited.
+              const heldCount = heldActionCount(group);
+              const heldReason = heldCount > 0 ? holdReasonOf(group.ruleSet) : null;
+
               // Per-rule deletion stats — contextual to active tab
               const rs = ruleSetStatsMap.get(group.ruleSet.id);
               const showPending = statusFilter === "PENDING" || statusFilter === "ALL";
@@ -1009,39 +1200,37 @@ export default function PendingActionsPage() {
                 <RuleSetGroupCard
                   key={group.ruleSet.id}
                   ruleSet={group.ruleSet}
+                  banner={
+                    <ExecuteProgressBanner
+                      runs={Object.entries(executeProgress)
+                        .filter(([key]) => key === group.ruleSet.id || key.startsWith(`${group.ruleSet.id}:`))
+                        .map(([key, run]) => ({ key, ...run }))}
+                    />
+                  }
                   countLabel={`${group.count} item${group.count !== 1 ? "s" : ""}`}
                   expanded={isExpanded}
                   onToggle={() => toggleExpand(group.ruleSet.id)}
-                  meta={stats}
+                  meta={
+                    heldReason || group.ruleSet.wholeSeasons ? (
+                      <>
+                        {heldReason && <HeldChip reason={heldReason} />}
+                        {group.ruleSet.wholeSeasons && <WholeSeasonsChip />}
+                        {stats}
+                      </>
+                    ) : stats
+                  }
                   actions={
                     // Execute All button (only for PENDING filter, not for deleted rule sets)
                     isPending && group.count > 0 && !group.ruleSet.deleted ? (
                       <div className="flex flex-wrap items-center gap-2">
-                        {result && (
-                          <span className="text-xs">
-                            {result.failed === 0 ? (
-                              <span className="text-green flex items-center gap-1">
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                {result.executed} executed
-                              </span>
-                            ) : (
-                              <span className="text-amber flex items-center gap-1">
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                {result.executed} ok, {result.failed} failed
-                              </span>
-                            )}
-                          </span>
-                        )}
-                        <LoadingButton
-                          size="sm"
-                          variant="default"
-                          onClick={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
-                          loading={isExecuting}
-                          icon={Play}
-                          iconClassName="h-4 w-4 mr-1"
-                        >
-                          {isExecuting ? "Executing..." : "Execute All"}
-                        </LoadingButton>
+                        {result && <ExecuteResultChip result={result} onShowDetails={showActionResult} />}
+                        <ExecuteAllButton
+                          held={heldCount}
+                          heldReason={heldReason}
+                          heldLabel={heldCountLabel(heldCount, group.ruleSet)}
+                          executing={isExecuting}
+                          onExecuteAll={() => setConfirmExecuteRuleSetId(group.ruleSet.id)}
+                        />
                       </div>
                     ) : undefined
                   }
@@ -1051,6 +1240,7 @@ export default function PendingActionsPage() {
                       <VirtualizedActionTable
                         items={group.items}
                         ruleSetId={group.ruleSet.id}
+                        hold={group.ruleSet}
                         isPending={isPending}
                         executingItems={executingItems}
                         retryingItems={retryingItems}
@@ -1067,6 +1257,7 @@ export default function PendingActionsPage() {
                       <PendingActionCardGrid
                         items={group.items}
                         ruleSetType={group.ruleSet.type}
+                        hold={group.ruleSet}
                         onItemClick={openDetailPanel}
                         exceptedItemIds={exceptedItemIds}
                       />
@@ -1084,6 +1275,7 @@ export default function PendingActionsPage() {
         )}
 
         {/* Execute All confirmation dialog */}
+        {actionResultDialog}
         <ConfirmDialog
           open={!!confirmExecuteRuleSetId}
           onOpenChange={(open) => { if (!open) setConfirmExecuteRuleSetId(null); }}

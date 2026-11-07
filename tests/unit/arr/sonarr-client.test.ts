@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { FILE_DELETE_TIMEOUT_MS } from "@/lib/arr/arr-client-base";
 
 describe("SonarrClient", () => {
   let client: SonarrClient;
@@ -206,6 +207,7 @@ describe("SonarrClient", () => {
       await client.deleteEpisodeFiles([1, 2, 3]);
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith("/api/v3/episodefile/bulk", {
         data: { episodeFileIds: [1, 2, 3] },
+        timeout: FILE_DELETE_TIMEOUT_MS,
       });
     });
 
@@ -295,8 +297,18 @@ describe("SonarrClient", () => {
     it("sends nothing for an empty id list", async () => {
       await client.setEpisodesMonitored([], true);
       await client.triggerEpisodeSearch([]);
+      await client.setSeasonsMonitored(2, [], false);
       expect(mockAxiosInstance.put).not.toHaveBeenCalled();
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it("sets season flags through the season pass, with no series record and no episode monitoring", async () => {
+      mockAxiosInstance.post.mockResolvedValueOnce({ data: {} });
+      await client.setSeasonsMonitored(2, [1, 3], false);
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/seasonpass", {
+        series: [{ id: 2, seasons: [{ seasonNumber: 1, monitored: false }, { seasonNumber: 3, monitored: false }] }],
+      });
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
   });
 

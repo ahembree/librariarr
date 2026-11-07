@@ -49,6 +49,8 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   hasPlayActivityRules: mockHasPlayActivityRules,
+  hasEpisodeLevelRules: vi.fn(() => false),
+  hasSeasonsBehindLatestRules: vi.fn(() => false),
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   groupSeriesResults: mockGroupSeriesResults,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
@@ -490,9 +492,12 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
 
     it("adds an artist once for an artist-level action, on a single server", async () => {
       const { tracks, ruleSet, serverIds } = await artistTracks(1);
+      // An action on the whole artist may follow only what every track
+      // answers alike — the artist's name — not a track's own play count.
+      const byArtist = [{ id: "r1", field: "parentTitle", operator: "equals", value: "The Artist", condition: "AND" }];
 
       const body = await diff(ruleSet.id, {
-        rules: validRules, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_LIDARR",
+        rules: byArtist, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_LIDARR",
       });
 
       expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });

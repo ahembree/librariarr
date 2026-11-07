@@ -245,6 +245,19 @@ model MediaServer {
   /// subsequent slice re-walks the same pages forever. Recording what was SEEN
   /// guarantees forward progress regardless of what was kept.
   tracearrBackfillCursorAt DateTime?
+  /// The start (`since`) of a forward catch-up window the Tracearr import has
+  /// not finished walking, or null when every forward window was walked to its
+  /// end.
+  ///
+  /// The forward pass reads newest first, so one that stops after a page (a
+  /// timeout, a 429 past its retries, Stop, a restart) has already stored the
+  /// newest plays. The next `since` is derived from `MAX(watchedAt)`, which
+  /// those plays moved, so everything between the old `since` and the oldest
+  /// play that run reached would never be asked for again. The next forward
+  /// window reaches back to this instant instead, and an exhausted forward walk
+  /// clears it. Reset with the rest of the Tracearr state (mapping change,
+  /// `restartTracearrBackfill`, the importer's stale-state reset).
+  tracearrForwardResumeAt DateTime?
   /// Whether the one-time backfill of this server's Tracearr history has walked
   /// all the way to the oldest play.
   ///
@@ -586,6 +599,15 @@ model RuleSet {
   discordNotifyOnMatch   Boolean           @default(false)
   stickyMatches          Boolean           @default(false)
   serverIds              String[]          @default([])
+  /// Set by a save that changes what the rule set matches — its rules, its
+  /// servers, its series scope, or the Arr instance its Arr criteria are read
+  /// from — and cleared by the next detection run that evaluates it under
+  /// those rules (only if no later save set it again). While it is set none of
+  /// the rule set's actions run: not the scheduled executor, Execute on the
+  /// Pending page, force-retry or the public API. A "Save only" keeps the
+  /// matches the old rules made, and they are not acted on until detection
+  /// has re-checked them.
+  actionsHeldSince       DateTime?
   lifecycleActions       LifecycleAction[]
   ruleMatches            RuleMatch[]
   createdAt              DateTime          @default(now())
@@ -943,8 +965,8 @@ model TrashManagedResource {
   radarrInstance   RadarrInstance? @relation(fields: [radarrInstanceId], references: [id], onDelete: Cascade)
   resourceType     String // "CUSTOM_FORMAT" | "QUALITY_PROFILE" | "QUALITY_DEFINITION" | "NAMING"
   trashId          String // TRaSH trash_id (or a synthetic key for singleton resources like NAMING)
-  name             String // display name captured at assignment time
-  arrId            Int? // id of the resource inside the Arr once synced (null for bulk/config resources)
+  name             String // name at assignment; for a CF / profile / PROFILE_CF, rewritten by each applied sync to the app resource's name — with arrId, what identifies it (findManagedArrResource)
+  arrId            Int? // id of the resource inside the Arr once synced (null for bulk/config resources); cleared when the instance's URL changes
   selection        Json? // extra choices for the resource (e.g. chosen naming variants)
   lastSyncedAt     DateTime?
   lastSyncHash     String? // hash of the last-synced TRaSH definition, used to flag upstream guide changes

@@ -179,9 +179,11 @@ export function _resetKnownAddressesForTesting(): void {
   knownAddresses.clear();
 }
 
-// AI chat/test is interactive — a user asks many questions in a session, so the
-// tight auth limit is wrong here. Still bounded so a runaway client (or a leaked
-// session) can't hammer a paid LLM endpoint: 30 requests per 5-minute window.
+// AI chat (`/api/ai/chat`) is interactive — a user asks many questions in a
+// session, so the tight auth limit is wrong here. Still bounded so a runaway
+// client (or a leaked session) can't hammer a paid LLM endpoint: 30 requests per
+// 5-minute window. `/api/settings/ai/test` does not use this limiter: it is
+// charged through `checkAuthRateLimit(request, "ai-test")`.
 export const aiRateLimiter = new RateLimiter(30, 5 * 60 * 1000);
 
 // ─── Public API (/api/v1) ───

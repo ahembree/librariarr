@@ -43,7 +43,8 @@ type BreakdownEntry<C extends BreakdownColumn> = { _count: number; type: string 
  * tool so the two can't drift. Returns counts, per-type size & duration,
  * resolution/codec/genre/etc. breakdowns, and the top-played movies/series/music
  * (cumulative play count). `dedupEnabled` restricts breakdowns and counts to the
- * canonical copy across servers.
+ * canonical copy across servers; the top-played lists add up every copy's
+ * plays and name each title once, by its canonical copy.
  *
  * Every count, size and breakdown comes from two scans of the library — one
  * for the totals, one `GROUPING SETS` pass for the six breakdowns — plus the
@@ -124,28 +125,35 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
         (mi.type, mi."contentRating"), (mi.type, mi."dynamicRange"), (mi.type, mi."audioChannels")
       )
     `,
-    prisma.mediaItem.findMany({
-      where: { ...serverFilter, type: "MOVIE", playCount: { gt: 0 }, ...(dedupEnabled ? { dedupCanonical: true } : {}) },
-      orderBy: { playCount: "desc" },
-      take: 10,
-      select: {
-        id: true,
-        title: true,
-        year: true,
-        playCount: true,
-        thumbUrl: true,
-      },
-    }),
+    // The most-played lists sum every copy's plays: a play counts on the server
+    // it happened on, so with dedup on, reading only the canonical copy dropped
+    // a film canonical on one server and watched on another from the list, and
+    // a show or artist counted only its canonical episodes' or tracks' plays.
+    // Each title is listed once, under its canonical copy (`topMoviesAcrossCopies`).
+    dedupEnabled
+      ? topMoviesAcrossCopies(inServers)
+      : prisma.mediaItem.findMany({
+          where: { ...serverFilter, type: "MOVIE", playCount: { gt: 0 } },
+          orderBy: { playCount: "desc" },
+          take: 10,
+          select: {
+            id: true,
+            title: true,
+            year: true,
+            playCount: true,
+            thumbUrl: true,
+          },
+        }),
     prisma.mediaItem.groupBy({
       // Top series by cumulative plays, keyed on series identity (seriesKey) so
-      // two same-titled shows don't pool their plays into one row.
+      // two same-titled shows don't pool their plays into one row, and the same
+      // show on two servers pools both.
       by: ["seriesKey"],
       where: {
         ...serverFilter,
         type: "SERIES",
         seriesKey: { not: null },
         playCount: { gt: 0 },
-        ...(dedupEnabled ? { dedupCanonical: true } : {}),
       },
       _sum: { playCount: true },
       orderBy: { _sum: { playCount: "desc" } },
@@ -158,7 +166,6 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
         type: "MUSIC",
         parentTitle: { not: null },
         playCount: { gt: 0 },
-        ...(dedupEnabled ? { dedupCanonical: true } : {}),
       },
       _sum: { playCount: true },
       orderBy: { _sum: { playCount: "desc" } },
@@ -216,10 +223,12 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
     .map((s) => s.parentTitle)
     .filter((t): t is string => t != null);
 
-  // The most-played episode/track of each, by `DISTINCT ON` in SQL. Prisma's
-  // `distinct` is applied in Node: it read every episode of the ten shows
-  // (every track of the ten artists) to keep one each. `id` breaks a tie in
-  // play count, which the unordered pick left to the heap order.
+  // The most-played episode/track of each, by `DISTINCT ON` in SQL — a
+  // canonical one first, so a show or artist on two servers links its
+  // canonical copy. Prisma's `distinct` is applied in Node: it read every
+  // episode of the ten shows (every track of the ten artists) to keep one
+  // each. `id` breaks a tie in play count, which the unordered pick left to
+  // the heap order.
   const [seriesReps, musicDetails] = await Promise.all([
     topSeriesKeys.length > 0
       ? prisma.$queryRaw<{ id: string; seriesKey: string | null; parentTitle: string | null; parentThumbUrl: string | null }[]>`
@@ -228,7 +237,7 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
           JOIN "Library" l ON mi."libraryId" = l.id
           WHERE ${inServers} AND mi.type = 'SERIES'::"LibraryType"
             AND mi."seriesKey" = ANY(${topSeriesKeys}::text[])
-          ORDER BY mi."seriesKey", mi."playCount" DESC, mi.id`
+          ORDER BY mi."seriesKey", mi."dedupCanonical" DESC, mi."playCount" DESC, mi.id`
       : [],
     topMusicArtists.length > 0
       ? prisma.$queryRaw<{ id: string; parentTitle: string; parentThumbUrl: string | null }[]>`
@@ -237,7 +246,7 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
           JOIN "Library" l ON mi."libraryId" = l.id
           WHERE ${inServers} AND mi.type = 'MUSIC'::"LibraryType"
             AND mi."parentTitle" = ANY(${topMusicArtists}::text[])
-          ORDER BY mi."parentTitle", mi."playCount" DESC, mi.id`
+          ORDER BY mi."parentTitle", mi."dedupCanonical" DESC, mi."playCount" DESC, mi.id`
       : [],
   ]);
 
@@ -294,4 +303,52 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
     audioChannelsBreakdown: breakdown("audioChannels"),
     genreBreakdown,
   };
+}
+
+interface TopMovie {
+  id: string;
+  title: string;
+  year: number | null;
+  playCount: number;
+  thumbUrl: string | null;
+}
+
+/**
+ * The ten most-played films with dedup on: plays summed over every copy of a
+ * title (one `dedupKey`; a film with none stands alone) on the servers in
+ * scope, each title listed once under its canonical copy — the one the
+ * library shows — whether or not that copy was the one played.
+ *
+ * Two statements rather than one: the sum reads only played rows (few), and
+ * the canonical copy of the ten titles is looked up by key, where a single
+ * aggregate keeping a representative per title would read every film.
+ */
+async function topMoviesAcrossCopies(inServers: Prisma.Sql): Promise<TopMovie[]> {
+  const top = await prisma.$queryRaw<{ title_key: string; keyed: boolean; plays: number }[]>`
+    SELECT COALESCE(mi."dedupKey", mi.id) AS title_key, (mi."dedupKey" IS NOT NULL) AS keyed,
+      SUM(mi."playCount")::int AS plays
+    FROM "MediaItem" mi
+    JOIN "Library" l ON mi."libraryId" = l.id
+    WHERE ${inServers} AND mi.type = 'MOVIE'::"LibraryType" AND mi."playCount" > 0
+    GROUP BY 1, 2
+    ORDER BY plays DESC, title_key
+    LIMIT 10
+  `;
+  if (top.length === 0) return [];
+  const keys = top.filter((t) => t.keyed).map((t) => t.title_key);
+  const ids = top.filter((t) => !t.keyed).map((t) => t.title_key);
+  const reps = await prisma.$queryRaw<(Omit<TopMovie, "playCount"> & { title_key: string })[]>`
+    SELECT DISTINCT ON (COALESCE(mi."dedupKey", mi.id)) COALESCE(mi."dedupKey", mi.id) AS title_key,
+      mi.id, mi.title, mi.year, mi."thumbUrl"
+    FROM "MediaItem" mi
+    JOIN "Library" l ON mi."libraryId" = l.id
+    WHERE ${inServers} AND mi.type = 'MOVIE'::"LibraryType"
+      AND (mi."dedupKey" = ANY(${keys}::text[]) OR (mi."dedupKey" IS NULL AND mi.id = ANY(${ids}::text[])))
+    ORDER BY COALESCE(mi."dedupKey", mi.id), mi."dedupCanonical" DESC, mi.id
+  `;
+  const repByKey = new Map(reps.map((r) => [r.title_key, r]));
+  return top.flatMap((t) => {
+    const rep = repByKey.get(t.title_key);
+    return rep ? [{ id: rep.id, title: rep.title, year: rep.year, playCount: t.plays, thumbUrl: rep.thumbUrl }] : [];
+  });
 }

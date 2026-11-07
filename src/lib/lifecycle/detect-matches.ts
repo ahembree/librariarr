@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { compareIds } from "@/lib/conditions/compare-ids";
 import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, hasEpisodeLevelRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
@@ -16,6 +16,7 @@ import { findExceptedItemIds, findExceptionProtectedGroups, isGroupProtected, ty
 import type { Prisma } from "@/generated/prisma/client";
 import { arrExternalIdsOf, arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys, groupsTracksByArtist } from "@/lib/lifecycle/cross-server-copies";
 import { identityFingerprint } from "@/lib/lifecycle/match-identity";
+import { lockRuleSetAtVersion, ruleSetVersion } from "@/lib/lifecycle/rule-set-matching";
 
 interface RuleSetConfig {
   id: string;
@@ -32,7 +33,86 @@ interface RuleSetConfig {
   addImportExclusion: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  /** Read by the group-scope gate: Lidarr's search after a file delete searches the whole artist. */
+  searchAfterAction?: boolean;
   stickyMatches: boolean;
+  /**
+   * `RuleSet.actionsHeldSince`, read in the same row as `rules`. Evaluating
+   * the rule set releases the hold (`releaseHeldActions`), and only this
+   * stamp: a save landing while the run evaluates older rules sets a newer one,
+   * which stays. Left out, the run releases nothing (the safe default).
+   */
+  actionsHeldSince?: Date | null;
+  /**
+   * `ruleSetVersion` of the row the caller read the rest of this from. The
+   * matches are written, and the hold released, only while the rule set is
+   * still at it (`lockRuleSetAtVersion`): a save landing while the run
+   * evaluated — and a run of the newer rules releasing its hold — must never
+   * be followed by this run's matches of the older rules. Every caller that
+   * read the rule set passes it (`processLifecycleRules`, `runDetection`);
+   * without it the write is unconditional.
+   */
+  version?: string;
+}
+
+/**
+ * Thrown inside the write transaction when the rule set is no longer at the
+ * version the run evaluated: rolls the transaction back.
+ */
+class RuleSetChangedDuringRun extends Error {}
+
+/** Interactive write transactions here can hold many thousand matches. */
+const DETECTION_WRITE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Run `writes` (when there are any) and release the edit hold in one
+ * transaction, under a lock on the rule set's row taken first — and only
+ * while it is still at the version the run evaluated (`ruleSet.version`).
+ * False when it is not: nothing was written, and the run's result is to be
+ * discarded.
+ */
+async function commitDetection(
+  ruleSet: RuleSetConfig,
+  writes: ((tx: Prisma.TransactionClient) => Promise<void>) | null,
+): Promise<boolean> {
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (ruleSet.version && !(await lockRuleSetAtVersion(tx, ruleSet.id, ruleSet.version))) {
+        throw new RuleSetChangedDuringRun();
+      }
+      if (writes) await writes(tx);
+      await releaseHeldActions(tx, ruleSet);
+    }, { timeout: DETECTION_WRITE_TIMEOUT_MS });
+    return true;
+  } catch (error) {
+    if (!(error instanceof RuleSetChangedDuringRun)) throw error;
+    logger.info(
+      "Lifecycle",
+      `Discarded this run's matches for rule set "${ruleSet.name}" — it was edited (or detection ran it under newer rules) while this run evaluated it; the next run evaluates it as it is now`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Release a rule set's actions held since a save changed what it matches
+ * (`RuleSet.actionsHeldSince`): this run has just re-evaluated it under the
+ * rules that save wrote, and its matches now say which items they still
+ * select. Its pending actions keep their dates — the executor cancels any
+ * whose item the rules dropped (the match is gone, or its member is) and
+ * scheduling cancels them too. Conditional on the stamp the run read with
+ * its rules, so a later save's hold survives a run of the older rules; and
+ * written in the same transaction as the matches, under the version check.
+ */
+async function releaseHeldActions(tx: Prisma.TransactionClient, ruleSet: RuleSetConfig): Promise<void> {
+  if (!ruleSet.actionsHeldSince) return;
+  const released = await tx.ruleSet.updateMany({
+    where: { id: ruleSet.id, actionsHeldSince: ruleSet.actionsHeldSince },
+    data: { actionsHeldSince: null },
+  });
+  if (released.count > 0) {
+    logger.info("Lifecycle", `Rule set "${ruleSet.name}" re-checked under its edited rules — its pending actions are no longer held`);
+  }
 }
 
 /** Format matched criteria into a readable string like "Resolution = 4K, Year > 2020" */
@@ -245,9 +325,26 @@ function collapseFingerprint(item: Record<string, unknown> | undefined): string 
   return JSON.stringify([members, servers, copies]);
 }
 
+/** What `detectAndSaveMatches` evaluated and wrote. */
+export interface DetectionResult {
+  items: Record<string, unknown>[];
+  count: number;
+  episodeIdMap: Map<string, string[]>;
+  currentItems: Record<string, unknown>[];
+  /**
+   * Set when the rule set left the version the run evaluated before its
+   * matches were written (`RuleSetConfig.version`): nothing was written, and
+   * nothing may be scheduled from `items`, which are empty.
+   */
+  discarded?: true;
+}
+
+const DISCARDED: DetectionResult = { items: [], count: 0, episodeIdMap: new Map(), currentItems: [], discarded: true };
+
 /**
  * Evaluate rules for a single rule set, compute match metadata, and
- * persist the results to the RuleMatch table.
+ * persist the results to the RuleMatch table — only while the rule set is
+ * still at the version the caller read (`RuleSetConfig.version`).
  *
  * Returns the enriched items (same shape as the old live matches API).
  */
@@ -257,7 +354,7 @@ export async function detectAndSaveMatches(
   arrData?: ArrDataMap,
   seerrData?: SeerrDataMap,
   fullReEval: boolean = false,
-): Promise<{ items: Record<string, unknown>[]; count: number; episodeIdMap: Map<string, string[]>; currentItems: Record<string, unknown>[] }> {
+): Promise<DetectionResult> {
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -292,6 +389,8 @@ export async function detectAndSaveMatches(
     rules,
     ruleSet.serverIds,
     ruleSet.arrInstanceId,
+    ruleSet.seriesScope,
+    ruleSet,
   );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
@@ -343,7 +442,7 @@ export async function detectAndSaveMatches(
   } else {
     const rawItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData, crossSystemOptions);
     if (ruleSet.type === "SERIES") {
-      const grouped = groupSeriesResults(rawItems);
+      const grouped = groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(rules) });
       // Build episode ID map: grouped item id → individual episode ids
       for (const g of grouped) {
         episodeIdMap.set(g.id as string, (g as unknown as { memberIds: string[] }).memberIds);
@@ -619,7 +718,7 @@ export async function detectAndSaveMatches(
 
   if (fullReEval) {
     // Full re-evaluation: atomic delete + recreate (clears stale matches)
-    await prisma.$transaction(async (tx) => {
+    const committed = await commitDetection(ruleSet, async (tx) => {
       await tx.ruleMatch.deleteMany({ where: { ruleSetId: ruleSet.id } });
 
       if (enrichedItems.length > 0) {
@@ -637,6 +736,7 @@ export async function detectAndSaveMatches(
         await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
     });
+    if (!committed) return DISCARDED;
 
     logger.info("Lifecycle", `Detected ${enrichedItems.length} matches for rule set "${ruleSet.name}" (full re-evaluation)`);
     return { items: enrichedItems, count: enrichedItems.length, episodeIdMap, currentItems: enrichedItems };
@@ -675,59 +775,59 @@ export async function detectAndSaveMatches(
   // Atomic create + delete: a partial failure must not leave a half-updated
   // match set (e.g. new matches written but stale ones never removed).
   const removeStale = !ruleSet.stickyMatches && staleIds.length > 0;
-  if (newItems.length > 0 || removeStale || refreshed.length > 0 || carried.size > 0) {
-    // updateMany, not update: a row removed since `heldMatches` was read (an
-    // exception filed, a manual Execute's cleanup) is simply skipped, where a
-    // P2025 would roll back every new match and stale removal in the batch.
-    await prisma.$transaction([
-      // The refreshed snapshots, a slice of rows per statement rather than one
-      // statement per match. An UPDATE … FROM skips a row deleted since it was
-      // read, as updateMany did.
-      ...inChunks(refreshed, REFRESH_CHUNK).map((chunk) =>
-        prisma.$executeRawUnsafe(
-          `UPDATE "RuleMatch" rm
-              SET "itemData" = r."itemData", "copyIds" = r."copyIds"
-             FROM jsonb_to_recordset($2::jsonb) AS r("mediaItemId" text, "itemData" jsonb, "copyIds" text[])
-            WHERE rm."ruleSetId" = $1 AND rm."mediaItemId" = r."mediaItemId"`,
-          ruleSet.id,
-          JSON.stringify(
-            chunk.map((item) => ({ mediaItemId: item.id as string, itemData: item, copyIds: copyIdsOf(item) })),
-            (_, v) => (typeof v === "bigint" ? v.toString() : v),
-          ),
+  const hasWrites = newItems.length > 0 || removeStale || refreshed.length > 0 || carried.size > 0;
+  // updateMany, not update: a row removed since `heldMatches` was read (an
+  // exception filed, a manual Execute's cleanup) is simply skipped, where a
+  // P2025 would roll back every new match and stale removal in the batch.
+  // With nothing to write the transaction still runs: the hold is released
+  // only under the version the run evaluated.
+  const committed = await commitDetection(ruleSet, hasWrites ? async (tx) => {
+    // The refreshed snapshots, a slice of rows per statement rather than one
+    // statement per match. An UPDATE … FROM skips a row deleted since it was
+    // read, as updateMany did.
+    for (const chunk of inChunks(refreshed, REFRESH_CHUNK)) {
+      await tx.$executeRawUnsafe(
+        `UPDATE "RuleMatch" rm
+            SET "itemData" = r."itemData", "copyIds" = r."copyIds"
+           FROM jsonb_to_recordset($2::jsonb) AS r("mediaItemId" text, "itemData" jsonb, "copyIds" text[])
+          WHERE rm."ruleSetId" = $1 AND rm."mediaItemId" = r."mediaItemId"`,
+        ruleSet.id,
+        JSON.stringify(
+          chunk.map((item) => ({ mediaItemId: item.id as string, itemData: item, copyIds: copyIdsOf(item) })),
+          (_, v) => (typeof v === "bigint" ? v.toString() : v),
         ),
-      ),
-      ...[...carried].map(([from, item]) =>
-        prisma.ruleMatch.updateMany({
-          where: { ruleSetId: ruleSet.id, mediaItemId: from },
-          data: { mediaItemId: item.id as string, itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
-        }),
-      ),
-      ...actionCarryOver.map(({ id, data }) =>
-        prisma.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data }),
-      ),
-      ...(newItems.length > 0
-        ? [
-            prisma.ruleMatch.createMany({
-              data: newItems.map((item) => ({
-                ruleSetId: ruleSet.id,
-                mediaItemId: item.id as string,
-                itemData: jsonSafe(item),
-                copyIds: copyIdsOf(item),
-                detectedAt: now,
-              })),
-              skipDuplicates: true,
-            }),
-          ]
-        : []),
-      ...(removeStale
-        ? inChunks(staleIds).map((ids) =>
-            prisma.ruleMatch.deleteMany({
-              where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
-            }),
-          )
-        : []),
-    ]);
-  }
+      );
+    }
+    for (const [from, item] of carried) {
+      await tx.ruleMatch.updateMany({
+        where: { ruleSetId: ruleSet.id, mediaItemId: from },
+        data: { mediaItemId: item.id as string, itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
+      });
+    }
+    for (const { id, data } of actionCarryOver) {
+      await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
+    }
+    if (newItems.length > 0) {
+      await tx.ruleMatch.createMany({
+        data: newItems.map((item) => ({
+          ruleSetId: ruleSet.id,
+          mediaItemId: item.id as string,
+          itemData: jsonSafe(item),
+          copyIds: copyIdsOf(item),
+          detectedAt: now,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    if (removeStale) {
+      for (const ids of inChunks(staleIds)) {
+        await tx.ruleMatch.deleteMany({
+          where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
+        });
+      }
+    }
+  } : null);
+  if (!committed) return DISCARDED;
 
   if (removeStale) {
     // Fetch current state of stale items to determine which criteria changed.
@@ -837,7 +937,11 @@ export async function detectAndSaveMatches(
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
 }
 
-/** A rule set a detection run could not evaluate because something threw. */
+/** Why a run reports a rule set it evaluated but whose matches it discarded. */
+export const DISCARDED_REASON =
+  "The rule set was edited while this run evaluated it, so its results were discarded — run detection again to evaluate it as it is now.";
+
+/** A rule set a detection run could not evaluate because something threw, or whose result it discarded. */
 export interface DetectionFailure {
   ruleSetId: string;
   name: string;
@@ -896,6 +1000,12 @@ export async function runDetection(
     };
     items: Record<string, unknown>[];
     count: number;
+    /**
+     * `ruleSetVersion` of the rule set as this run evaluated it: a caller
+     * scheduling from `items` passes it on (`scheduleActionsForRuleSet`'s
+     * `expectedVersion`), so a save since does not get the old rules' actions.
+     */
+    version: string;
   }> = [];
 
   for (const rs of ruleSets) {
@@ -912,6 +1022,9 @@ export async function runDetection(
 
       const rules = rs.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
       if (!hasAnyActiveRules(rules)) continue;
+      // The rule set as read here: its matches are written, and its actions
+      // scheduled, only while it is still this.
+      const version = ruleSetVersion(rs);
 
       // MATCH-ALL SAFETY: mirror processLifecycleRules — Arr/Seerr rules whose
       // instances are unavailable skip the rule set instead of evaluating
@@ -924,7 +1037,7 @@ export async function runDetection(
       // manual "Re-evaluate All" path refuse rule sets the scheduled path
       // happily evaluates — the same rule set, a different answer depending on
       // how it was triggered.
-      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId, rs.seriesScope, rs);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {
@@ -967,13 +1080,23 @@ export async function runDetection(
           addImportExclusion: rs.addImportExclusion,
           addArrTags: rs.addArrTags,
           removeArrTags: rs.removeArrTags,
+          searchAfterAction: rs.searchAfterAction,
           stickyMatches: rs.stickyMatches,
+          actionsHeldSince: rs.actionsHeldSince,
+          version,
         },
         serverIds,
         arrData,
         seerrData,
         fullReEval,
       );
+      // Edited while this run evaluated it: nothing was written. Reported
+      // like a failure, so the caller neither schedules from it nor counts
+      // it as evaluated.
+      if (result.discarded) {
+        failures?.push({ ruleSetId: rs.id, name: rs.name, reason: DISCARDED_REASON });
+        continue;
+      }
 
       results.push({
         ruleSet: {
@@ -992,6 +1115,7 @@ export async function runDetection(
         },
         items: result.items,
         count: result.count,
+        version,
       });
     } catch (error) {
       if (ruleSetId) throw error;

@@ -30,7 +30,7 @@ import { IntegrationsSection } from "@/components/integrations-section";
 import { ServerChips } from "@/components/server-chips";
 import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
-import { FadeImage } from "@/components/ui/fade-image";
+import { FadeImage } from "@/components/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 

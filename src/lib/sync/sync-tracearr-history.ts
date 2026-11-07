@@ -430,9 +430,10 @@ interface TracearrImportOptions {
    * Checked at the top of every page and passed into the HTTP call, so a cancel
    * takes effect within one page and interrupts a rate-limit backoff rather
    * than waiting it out. Stopping early is a normal outcome, not a failure: the
-   * import only appends and upserts, and both boundaries are derived from the
-   * rows already written, so the next run resumes exactly where this one
-   * stopped.
+   * import only appends and upserts, the backfill boundary is derived from the
+   * rows already written and its cursor, and a forward window left unfinished
+   * is recorded (`tracearrForwardResumeAt`), so the next run resumes where this
+   * one stopped in both directions.
    */
   signal?: AbortSignal;
   /**
@@ -554,6 +555,8 @@ async function runTracearrImport(
       tracearrBackfillComplete: true,
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
+      tracearrForwardResumeAt: true,
+      watchHistorySyncedAt: true,
       userId: true,
     },
   });
@@ -633,6 +636,8 @@ async function runTracearrImport(
     serverId,
     server.tracearrBackfillComplete,
     server.tracearrBackfillCursorAt,
+    server.tracearrForwardResumeAt,
+    server.watchHistorySyncedAt,
   );
   const client = new TracearrClient(instance.url, instance.apiKey);
 
@@ -641,25 +646,35 @@ async function runTracearrImport(
   // (see the backfill write below).
   let cursorAtStart = server.tracearrBackfillCursorAt;
 
-  // Stored backfill state with no rows behind it: a purge or a config-only
-  // restore removed them, and neither resets the state. Reset it here, in the
-  // database and not only for this run. Only clearing it locally restarted the
-  // walk for ONE slice: that slice's rows made the next slice read the stale
-  // "complete" flag as true again, so the archive walk stopped after five
-  // minutes, reported itself finished, and re-established the evidence marker
-  // over a history that was mostly missing.
+  // Stored backfill state whose rows were removed out from under it — a
+  // restore by an earlier version, which brought the server row back verbatim
+  // without the history (see `resolveImportWindow` for exactly when). Reset it
+  // here, in the database and not only for this run. Only clearing it locally
+  // restarted the walk for ONE slice: that slice's rows made the next slice
+  // read the stale "complete" flag as true again, so the archive walk stopped
+  // after five minutes, reported itself finished, and re-established the
+  // evidence marker over a history that was mostly missing.
   if (window.staleBackfillState) {
     logger.warn(
       "WatchHistory",
-      `"${serverName}" is marked fully backfilled but holds no Tracearr plays — ` +
-        `restarting the archive walk from the newest play`,
+      `"${serverName}" is marked fully backfilled but holds no Tracearr plays and its ` +
+        `history is no longer established — restarting the archive walk from the newest play`,
     );
     await persistMappedState(serverId, mappedServerId, serverName, {
       tracearrBackfillComplete: false,
       tracearrBackfillCursorAt: null,
+      // An unfinished forward window describes rows that are gone too; the
+      // walk from the newest play covers it.
+      tracearrForwardResumeAt: null,
     });
     cursorAtStart = null;
   }
+
+  // The forward resume point as this run found it. A stale reset just cleared
+  // it, and the window below already ignores it on a server with no rows.
+  const forwardResumeAtStart = window.staleBackfillState
+    ? null
+    : (server.tracearrForwardResumeAt ?? null);
 
   // Which passes can run at all, decided before anything expensive. The
   // backfill task is queued after every forward sync and, once the archive is
@@ -667,11 +682,13 @@ async function runTracearrImport(
   // on the server, with its provider ids) and load the account map anyway.
   const wantsForward = passes === "forward" || passes === "both";
   const wantsBackfill = passes === "backfill" || passes === "both";
-  // `complete` with no stored rows is a contradiction — the rows are what the
-  // flag describes. It means something removed them out from under the flag (a
-  // manual delete, a partial restore), so treat it as never-backfilled and let
-  // the pass below rebuild from scratch rather than importing nothing forever.
-  const backfillCompleteAtStart = server.tracearrBackfillComplete && window.hasRows;
+  // A stale "complete" is treated as never-backfilled, so the pass below
+  // rebuilds from scratch rather than importing nothing forever. "Complete"
+  // with no rows is NOT stale by itself: an archive whose every play is
+  // unjoinable is walked to its end having stored nothing — see
+  // `resolveImportWindow`.
+  const backfillCompleteAtStart =
+    server.tracearrBackfillComplete && !window.staleBackfillState;
   const forwardPlanned = wantsForward && window.since !== undefined;
   const backfillPlanned = wantsBackfill && !backfillCompleteAtStart;
 
@@ -788,20 +805,35 @@ async function runTracearrImport(
     // exhaust having stored nothing at all.
     sawAnyRecord: false,
   };
+  /**
+   * Whether a write found the server no longer mapped to `mappedServerId`.
+   * Nothing of this source may touch the server's history after that — see the
+   * NATIVE purge below. On an object for the same reason as `walked`.
+   */
+  const mapping: { changed: boolean } = { changed: false };
 
   /**
    * Walk one window to its end, or until something stops us.
    *
    * Returns `"exhausted"` only when the keyset genuinely ran out
-   * (`nextCursor === null`). Every other exit — cancelled, page cap, a stalled
-   * cursor, or a fetch/write error — returns `"stopped"`, and the distinction
-   * is load-bearing: it is what decides whether a backfill may be marked
-   * complete. Treating a cancelled walk as exhausted would permanently strand
+   * (`nextCursor === null`). Cancelled, page cap, a stalled cursor, the
+   * deadline, a yield and a mid-run mapping change return `"stopped"`; a
+   * fetch/write error returns `"errored"`. The distinction is load-bearing: it
+   * is what decides whether a backfill may be marked complete. Treating a cancelled walk as exhausted would permanently strand
    * the unread older history.
    */
   async function walk(
     pass: ImportPass,
-    options: { since?: Date; until?: Date },
+    options: {
+      since?: Date;
+      until?: Date;
+      /**
+       * Run before committing a page that stores rows while more pages follow
+       * it — the first point at which stopping would leave a gap below what is
+       * stored. See `recordForwardResume`.
+       */
+      beforeUnfinishedCommit?: () => Promise<void>;
+    },
   ): Promise<WalkOutcome> {
     let cursor: string | undefined;
     /** Pages fetched by THIS walk — see the deadline guard below. */
@@ -880,8 +912,8 @@ async function runTracearrImport(
       for (;;) {
         // Cancelled (client disconnected, user hit Stop, or the stream's lifetime
         // cap fired). Break rather than throw: everything written so far is
-        // committed and correct, and the watermark it establishes is what makes
-        // the next run resume from here.
+        // committed and correct, and the backfill cursor or the recorded
+        // forward resume point is what makes the next run resume from here.
         // Slice exhausted. Like a cancel this is a clean stop on a committed
         // page boundary, and like a cancel it must NOT count as "exhausted" —
         // the backfill is unfinished and another run is owed.
@@ -1030,6 +1062,13 @@ async function runTracearrImport(
           );
         }
 
+        // Committing rows while older pages remain unread is what opens a gap
+        // if the walk stops here, so the caller records that first — before the
+        // commit, so a crash between the two cannot lose it either.
+        if (options.beforeUnfinishedCommit && rows.length > 0 && page.nextCursor) {
+          await options.beforeUnfinishedCommit();
+        }
+
         // Write this page's rows before going on to the next one (which may
         // already be on its way — see `prefetch`). The model is
         // append/upsert-only, so a failure on a later page leaves these durably
@@ -1112,6 +1151,7 @@ async function runTracearrImport(
           `Tracearr history import for "${serverName}" stopped after ${pages} page(s) — ` +
             `the server's watch-history source changed while it ran`,
         );
+        mapping.changed = true;
         return "stopped";
       }
       // A fetch or write failure must never reach the job runner as a failed
@@ -1133,9 +1173,56 @@ async function runTracearrImport(
 
   // FORWARD pass: new plays since the last run. Skipped on a first import,
   // where there is no watermark and the backfill below covers everything.
+  //
+  // Newest first, like everything else this API serves, so a forward walk
+  // that stops after a page (a timeout, a 429 past its retries, a write that
+  // errored, Stop, the stream's lifetime cap) has stored the NEWEST plays of
+  // its window and not the older ones. The next `since` is derived from
+  // `MAX(watchedAt)`, which those plays just moved, so the stretch between this
+  // window's start and the oldest play it reached would never be asked for
+  // again. Its start is recorded before the first commit that can open such a
+  // gap, the next run's window reaches back to it, and only a forward walk that
+  // runs to its end clears it.
+  let forwardOutcome: WalkOutcome | undefined;
+  let forwardResumeRecorded = false;
   if (forwardPlanned && accountMapUsable) {
-    await walk("forward", { since: window.since });
+    const forwardSince = window.since!;
+    const forwardStartedAt = Date.now();
+    forwardOutcome = await walk("forward", {
+      since: forwardSince,
+      beforeUnfinishedCommit: async () => {
+        if (forwardResumeRecorded) return;
+        await recordForwardResume(serverId, mappedServerId, forwardSince);
+        forwardResumeRecorded = true;
+      },
+    });
+    if (
+      forwardOutcome === "exhausted" &&
+      (forwardResumeAtStart !== null || forwardResumeRecorded)
+    ) {
+      // On a server that still holds no Tracearr rows the point is the only
+      // forward watermark there is (see `resolveImportWindow`), so a finished
+      // walk moves it up to where this one started instead of dropping it.
+      const stillRowless = !window.hasRows && counters.inserted + counters.updated === 0;
+      await clearForwardResume(
+        serverId,
+        mappedServerId,
+        forwardSince,
+        stillRowless ? new Date(forwardStartedAt - OVERLAP_MS) : null,
+      );
+    }
   }
+
+  // Whether a forward window is still unfinished after this run: one this run
+  // left, or one an earlier run left that this run did not walk to its end. An
+  // earlier one only counts while it reaches further back than the rows' own
+  // watermark — otherwise the window derived from the rows already covers it.
+  const forwardGapOpen =
+    forwardOutcome !== "exhausted" &&
+    (forwardResumeRecorded ||
+      (forwardResumeAtStart !== null &&
+        window.rowSince !== undefined &&
+        forwardResumeAtStart < window.rowSince));
 
   // BACKFILL pass: keep walking older until the history is exhausted. This is
   // the one that survives an interruption — `until` is derived from the OLDEST
@@ -1227,8 +1314,24 @@ async function runTracearrImport(
       }
     }
 
+    const backfillStartedAt = Date.now();
     const outcome = await walk("backfill", { until: window.until });
     backfillOutcome = outcome;
+
+    // A forward watermark for a server this walk leaves holding no Tracearr
+    // rows. The forward `since` is read off the newest stored play, so with
+    // none the forward pass never runs — and the backfill only walks OLDER
+    // than its upper boundary, so a play newer than that would never be
+    // fetched, by either pass. That is the steady state of an archive whose
+    // every play is unjoinable (and it stays one after its walk completes, see
+    // `resolveImportWindow`), so record the boundary — where this walk started
+    // reading, less the overlap — as the forward pass's starting point. Only
+    // when none is recorded: a later slice's boundary is older, and the forward
+    // pass keeps a recorded one current itself (`clearForwardResume`).
+    const rowlessForwardStart =
+      !window.hasRows && counters.inserted + counters.updated === 0 && forwardResumeAtStart === null
+        ? new Date((window.until?.getTime() ?? backfillStartedAt) - OVERLAP_MS)
+        : undefined;
 
     // Persist how far the walk actually reached, and whether it finished, in ONE
     // write. The cursor matters because the next slice would otherwise resume
@@ -1282,20 +1385,24 @@ async function runTracearrImport(
         serverName,
         {
           ...(cursorAdvanced ? { tracearrBackfillCursorAt: reached } : {}),
+          ...(rowlessForwardStart ? { tracearrForwardResumeAt: rowlessForwardStart } : {}),
           ...(finished
             ? {
                 tracearrBackfillComplete: true,
                 // Established: the archive has been walked to its oldest play,
                 // so play-activity criteria can be answered faithfully again.
                 // Written with the completion flag in the SAME guarded
-                // statement, so it can never be missed or land without it.
-                watchHistorySyncedAt: new Date(),
+                // statement, so it can never land without it — unless a
+                // forward window is still unfinished, in which case plays
+                // newer than the archive are still missing and the release
+                // below writes it on the run that closes the window.
+                ...(forwardGapOpen ? {} : { watchHistorySyncedAt: new Date() }),
               }
             : {}),
         },
         { tracearrBackfillCursorAt: cursorAtStart, tracearrBackfillComplete: false },
       );
-      markerWritten = finished && stored;
+      markerWritten = finished && stored && !forwardGapOpen;
       if (!stored) backfillComplete = false;
     }
 
@@ -1328,15 +1435,23 @@ async function runTracearrImport(
   // imported nothing and has verified nothing about the vocabulary the rows
   // carry, which is what `watchedByUser` matches against — plus the
   // archive having been walked, which is the other half of what "established"
-  // means for a Tracearr-sourced server. A forward pass that stopped early does
-  // not block it: the marker describes the stored archive, not this run's page
-  // fetches, and a partial forward pass leaves that archive exactly as complete
-  // as it was.
+  // means for a Tracearr-sourced server — plus no unfinished forward window.
+  // A forward pass that stops early is not harmless to the stored history: it
+  // reads newest first, so it has stored the newest plays of its window and
+  // left a stretch of older ones unread below them (`forwardGapOpen`). Those
+  // plays are still owed, so the marker waits for the run that walks that
+  // window to its end.
   //
   // Written on every healthy run rather than only when currently withdrawn, so
   // the timestamp keeps meaning what the column says: when a sync last
   // established what was played here.
-  if (!markerWritten && backfillComplete && accountNames && accountNames.size > 0) {
+  if (
+    !markerWritten &&
+    backfillComplete &&
+    !forwardGapOpen &&
+    accountNames &&
+    accountNames.size > 0
+  ) {
     await persistMappedState(serverId, mappedServerId, serverName, {
       watchHistorySyncedAt: new Date(),
     });
@@ -1358,15 +1473,26 @@ async function runTracearrImport(
     // self-correcting: once inflated it never comes back down.
     //
     // Runs after rows landed, so a failed run can never leave the server with
-    // neither source. Unconditional rather than first-run-only: a mixed stratum
+    // neither source. On every run rather than the first only: a mixed stratum
     // can also arrive with a non-null watermark (a restored backup), and the
     // DELETE is an indexed no-op on every healthy sync.
-    {
-      const purged = await prisma.$executeRawUnsafe(
-        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "source"='NATIVE'`,
-        serverId,
-      );
-      if (purged > 0) {
+    //
+    // But only while the server is still mapped to the Tracearr server this run
+    // read. After an unlink the NATIVE rows are no longer a leftover: the PUT
+    // wiped this run's rows, and a History Refresh may already have written the
+    // server's fresh native history — which this DELETE would destroy while
+    // `watchHistorySyncedAt` stays set, so `watchedByUser is not X` would match
+    // the whole library. Skipped outright when a write already found the
+    // mapping moved; otherwise checked atomically with the delete.
+    if (!mapping.changed) {
+      const purged = await purgeNativeStratum(serverId, mappedServerId);
+      if (purged === null) {
+        logger.info(
+          "WatchHistory",
+          `Kept the native watch history of "${server.name}" — its watch-history ` +
+            `source changed while the Tracearr import ran`,
+        );
+      } else if (purged > 0) {
         logger.info(
           "WatchHistory",
           `Removed ${purged} native watch-history row(s) for "${server.name}" — ` +
@@ -1575,15 +1701,22 @@ type WalkOutcome = "exhausted" | "stopped" | "errored";
  * newest play and walk back until the history runs out".
  */
 interface ImportWindow {
+  /**
+   * The forward pass's `since`: `rowSince`, reaching back to an unfinished
+   * window — or, on a server holding no rows, the recorded forward watermark.
+   */
   since?: Date;
+  /** The forward `since` the stored rows alone imply (`resolveSince`). */
+  rowSince?: Date;
   until?: Date;
   /** Whether this server has any stored Tracearr rows at all. */
   hasRows: boolean;
   /**
    * The stored backfill state says "complete" (and carries a resume cursor)
-   * while the server holds no Tracearr rows — they were removed out from under
-   * it (a purge, a config-only restore). The caller resets that state, and this
-   * window already ignores it.
+   * while the server holds no Tracearr rows, and nothing says that is how the
+   * walk left it — the rows were removed out from under it (a restore by an
+   * earlier version). The caller resets that state, and this window already
+   * ignores it.
    */
   staleBackfillState: boolean;
 }
@@ -1606,6 +1739,10 @@ async function resolveImportWindow(
   serverId: string,
   backfillComplete: boolean,
   cursorAt: Date | null,
+  /** `MediaServer.tracearrForwardResumeAt` — see `recordForwardResume`. */
+  forwardResumeAt: Date | null,
+  /** `MediaServer.watchHistorySyncedAt` — withdrawn by every bulk wipe. */
+  watchHistorySyncedAt: Date | null,
 ): Promise<ImportWindow> {
   const rows = await prisma.$queryRawUnsafe<
     {
@@ -1637,16 +1774,48 @@ async function resolveImportWindow(
   };
 
   const hasRows = agg.maxWatchedAt !== null;
-  // "Complete" with no rows is a contradiction: the rows are what the flag and
-  // the cursor describe. Neither may steer this run — trusting the flag walks
-  // nothing, and trusting the cursor (the archive's far end) walks nothing
-  // either — so the walk starts again from the newest play.
-  const staleBackfillState = backfillComplete && !hasRows;
-  const complete = backfillComplete && hasRows;
+  // "Complete" with no rows has two causes that demand opposite answers.
+  //
+  //  - The walk legitimately stored nothing: every play Tracearr holds for the
+  //    server is unjoinable (media long gone, a rebuilt library). That walk
+  //    marked the history established and recorded a forward watermark, and
+  //    walking the archive again would store nothing again. Resetting it here
+  //    used to do exactly that on every forward sync: a full archive walk in
+  //    five-minute MAIN_QUEUE slices, complete, reset, repeat — with
+  //    play-activity rules refused for the server the whole time.
+  //  - The rows were removed out from under the flag. The bulk paths that do
+  //    that (purge, disable with delete data, a source change, a restore —
+  //    `restartTracearrBackfillWithoutPlays`) reset the flag themselves; this
+  //    is the backstop for a restore by an earlier version, which brought the
+  //    server row back verbatim without its history and withdrew
+  //    `watchHistorySyncedAt` from every server left without plays. Neither
+  //    the flag nor the cursor (the archive's far end) may steer this run
+  //    then, so the walk starts again from the newest play.
+  //
+  // So it is stale when the evidence marker has been withdrawn, or when no
+  // forward watermark exists to catch up from (a walk completed by a version
+  // that did not record one) — either way the walk starts again once, and
+  // ends recording both.
+  const staleBackfillState =
+    backfillComplete && !hasRows && (!watchHistorySyncedAt || !forwardResumeAt);
+  const complete = backfillComplete && !staleBackfillState;
   const cursor = staleBackfillState ? null : cursorAt;
+  const rowSince = resolveSince(agg.maxWatchedAt, agg.oldestOpenChain);
+  const resumeAt = staleBackfillState ? null : forwardResumeAt;
 
   return {
-    since: resolveSince(agg.maxWatchedAt, agg.oldestOpenChain),
+    // An unfinished forward window reaches the next one back to where it
+    // started — exactly there, and past the open-chain lookback clamp, since
+    // what it marks is unread history rather than a chain that may never
+    // settle. With no rows the recorded point is the forward watermark itself
+    // (see `rowlessForwardStart` in the run), and without one there is nothing
+    // to catch up from: the backfill walks from the newest play.
+    since: rowSince
+      ? resumeAt && resumeAt < rowSince
+        ? resumeAt
+        : rowSince
+      : (resumeAt ?? undefined),
+    rowSince,
     // Only meaningful while the backfill is unfinished; when it is finished the
     // caller never runs that pass.
     // Prefer where the walk actually REACHED over where it last managed to
@@ -1699,6 +1868,7 @@ async function persistMappedState(
     watchHistorySyncedAt?: Date | null;
     tracearrBackfillCursorAt?: Date | null;
     tracearrBackfillComplete?: boolean;
+    tracearrForwardResumeAt?: Date | null;
   },
   /** Further column values the row must still hold for the write to apply. */
   expect: {
@@ -1723,6 +1893,138 @@ async function persistMappedState(
   return true;
 }
 
+/**
+ * Delete the server's NATIVE rows, but only while it is still mapped to
+ * `tracearrServerId`; null when it no longer is.
+ *
+ * The same unit as `writeBatch`'s check: the `FOR SHARE` lock makes the server
+ * PUT's mapping change wait for this transaction, so either the stratum goes
+ * while this source still owns the history (and the PUT then wipes what is
+ * left), or the check sees the new mapping and nothing is deleted.
+ */
+async function purgeNativeStratum(
+  serverId: string,
+  tracearrServerId: string,
+): Promise<number | null> {
+  return prisma.$transaction(async (tx) => {
+    const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT "id" FROM "MediaServer"
+        WHERE "id" = $1 AND "tracearrServerId" = $2
+        FOR SHARE`,
+      serverId,
+      tracearrServerId,
+    );
+    if (mapped.length === 0) return null;
+    return tx.$executeRawUnsafe(
+      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1 AND "source"='NATIVE'`,
+      serverId,
+    );
+  });
+}
+
+/**
+ * Record `since` as the start of a forward window this run has not finished.
+ *
+ * Kept at the OLDEST unfinished start (written only over nothing or a later
+ * one): two runs can overlap — the History page's Refresh runs outside the job
+ * queue — and the older start covers both of their gaps. Guarded on the
+ * mapping like every other piece of Tracearr state; a write the guard refuses
+ * needs no handling here, because the row write that follows refuses too.
+ */
+async function recordForwardResume(
+  serverId: string,
+  tracearrServerId: string,
+  since: Date,
+): Promise<boolean> {
+  const { count } = await prisma.mediaServer.updateMany({
+    where: {
+      id: serverId,
+      tracearrServerId,
+      OR: [{ tracearrForwardResumeAt: null }, { tracearrForwardResumeAt: { gt: since } }],
+    },
+    data: { tracearrForwardResumeAt: since },
+  });
+  return count > 0;
+}
+
+/**
+ * Keep the forward pass's starting point where it is before a targeted write
+ * stores a play newer than every stored one.
+ *
+ * The forward `since` is read off the newest stored play (`resolveSince`), and
+ * only a forward walk reads the plays above it. A targeted write — the
+ * re-added-item recovery — stores a few items' plays wherever they fall, so
+ * one newer than the newest stored play moves that `since` past the plays in
+ * between, which nothing has read: the next forward pass would start above
+ * them, and the backfill only walks older than the oldest row. So before such
+ * a write the current row-derived `since` is recorded as an unfinished forward
+ * window (`recordForwardResume`: kept at the oldest, cleared only by a forward
+ * walk that runs to its end from at or before it), and the next forward pass
+ * starts there. Recorded BEFORE the write, as the walk records before a page
+ * commit: a crash in between leaves a point the next forward pass merely reads
+ * from again, never a gap.
+ *
+ * A play no newer than the newest stored one moves nothing, so the steady
+ * state writes nothing. A server holding no Tracearr rows needs nothing
+ * either: its forward watermark is the recorded point itself
+ * (`rowlessForwardStart`), which the next window keeps as the earlier bound.
+ */
+async function holdForwardWatermark(
+  serverId: string,
+  tracearrServerId: string,
+  rows: PendingRow[],
+): Promise<void> {
+  let newest: Date | null = null;
+  for (const { row } of rows) {
+    const watchedAt = row.watchedAt as Date;
+    if (!newest || watchedAt > newest) newest = watchedAt;
+  }
+  if (!newest) return;
+
+  const [agg] = await prisma.$queryRawUnsafe<
+    { maxWatchedAt: Date | null; oldestOpenChain: Date | null }[]
+  >(
+    // Two of `resolveImportWindow`'s subqueries, split for the same reason.
+    `SELECT (SELECT MAX("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR') AS "maxWatchedAt",
+            (SELECT MIN("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR'
+                AND ("watched" IS NOT TRUE OR "state" <> 'stopped')) AS "oldestOpenChain"`,
+    serverId,
+  );
+  if (!agg?.maxWatchedAt || newest <= agg.maxWatchedAt) return;
+
+  const since = resolveSince(agg.maxWatchedAt, agg.oldestOpenChain);
+  if (since && (await recordForwardResume(serverId, tracearrServerId, since))) {
+    logger.info(
+      "WatchHistory",
+      `Holding the Tracearr forward watermark of server ${serverId} at ` +
+        `${since.toISOString()} — a targeted import is storing a play newer than every ` +
+        `stored one, and the plays in between are still to be read by the forward pass`,
+    );
+  }
+}
+
+/**
+ * Clear the unfinished-window marker after a forward walk from `since` ran to
+ * its end — or, on a server that still holds no Tracearr rows, move it up to
+ * `next`, because there it is the forward watermark itself.
+ *
+ * Only a marker at or after `since`: that walk read everything from there to
+ * now, so it covered the unfinished window. An older one — recorded by an
+ * overlapping run after this one started — is still owed and stays.
+ */
+async function clearForwardResume(
+  serverId: string,
+  tracearrServerId: string,
+  since: Date,
+  next: Date | null = null,
+): Promise<void> {
+  await prisma.mediaServer.updateMany({
+    where: { id: serverId, tracearrServerId, tracearrForwardResumeAt: { gte: since } },
+    data: { tracearrForwardResumeAt: next },
+  });
+}
 
 /**
  * Map and upsert an already-fetched set of this server's records.
@@ -1735,7 +2037,9 @@ async function persistMappedState(
  * `isTranscode` latches) are the difference between a re-delivered chain merging
  * correctly and a fully-watched play being overwritten as 12% watched, which
  * `watch-reconcile.ts` would then stop counting. A copy of them would drift, and
- * the drift would be silent.
+ * the drift would be silent. Nor may it skip `holdForwardWatermark`: a play it
+ * stores newer than every stored one would otherwise move the forward pass's
+ * starting point past plays nothing has read.
  *
  * The caller has already scoped the records to this server (`server_id`), so
  * that filter is not repeated here; everything else — the per-statement chain-id
@@ -1781,6 +2085,9 @@ export async function importTracearrRecords(
       buildRow(record, resolved.mediaItemId, serverId, watchedAt, now, accountNames),
     );
   }
+
+  // Before the first write, never after it: see `holdForwardWatermark`.
+  await holdForwardWatermark(serverId, tracearrServerId, rows);
 
   let inserted = 0;
   let updated = 0;
@@ -1927,9 +2234,12 @@ async function insertRows(
  * changes is the size of the window — from "any moment in the whole run" down to
  * "one query" — and therefore how often the failure is hit at all. The residual
  * case stays self-healing exactly as it was: `walk()`'s catch keeps every page
- * already committed, returns `"stopped"`, and the next run rebuilds the index
- * and skips the now-absent item as `unresolved`. The cost that pre-checking
- * avoids is that recovery burning the rest of a five-minute backfill slice.
+ * already committed and returns `"errored"` (a write error, not a
+ * `TracearrMappingChangedError`, which is the only catch that returns
+ * `"stopped"`), the backfill task throws so graphile-worker retries the slice
+ * with backoff, and the next run rebuilds the index and skips the now-absent
+ * item as `unresolved`. The cost that pre-checking avoids is that recovery
+ * burning the rest of a five-minute backfill slice.
  *
  * Cheap enough to run per batch: the distinct ids of ~180 rows probed against
  * the primary key in one round-trip. The overwhelmingly common answer is "all of

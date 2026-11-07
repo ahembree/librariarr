@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { appCache } from "@/lib/cache/memory-cache";
 import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
-import { LIDARR, RADARR, SEERR, SONARR, listInstances } from "@/lib/integrations/instance-routes";
+import { HEALTH_CHECKED, listInstances } from "@/lib/integrations/instance-routes";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 /**
@@ -11,7 +11,8 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
  * Used by the rule editor, query page, pending actions, and rule matches
  * pages to surface a warning when a rule references an integration that is
  * configured but currently unreachable. Cached for 30s to avoid pinging
- * integrations on every page load.
+ * integrations on every page load; adding, editing or deleting an instance of
+ * a checked type drops the cached answer (`instanceChanged`).
  */
 
 const HEALTH_TTL_MS = 30_000;
@@ -75,12 +76,11 @@ async function checkInstance(
   }
 }
 
-/** The types whose reachability the rule editor and the Query page warn about. */
-const CHECKED = [SONARR, RADARR, LIDARR, SEERR] as const;
-
 async function computeHealth(userId: string): Promise<IntegrationsHealth> {
+  // The types whose reachability the rule editor and the Query page warn
+  // about — the same list whose instance routes drop the cached answer.
   const [sonarr, radarr, lidarr, seerr] = await Promise.all(
-    CHECKED.map(async (config): Promise<IntegrationTypeHealth> => {
+    HEALTH_CHECKED.map(async (config): Promise<IntegrationTypeHealth> => {
       const instances = await listInstances(config, userId, { enabledOnly: true });
       const results = await Promise.all(
         instances.map((i) => checkInstance(() => config.client(i.url, i.apiKey).testConnection(), i.id, i.name)),

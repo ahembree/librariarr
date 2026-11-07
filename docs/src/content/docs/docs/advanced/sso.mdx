@@ -302,7 +302,10 @@ the log records the rejection. With the variable itself unset the page says
 2. In **Settings → Authentication → Single Sign-On**:
    - **SSO Mode:** `Forward Auth`
    - Override the header names if your proxy uses different ones (some
-     proxies use `X-Forwarded-User`, `X-authentik-username`, etc.)
+     proxies use `X-Forwarded-User`, `X-authentik-username`, etc.). A header
+     that carries a credential — `X-Librariarr-Proxy-Secret`,
+     `Authorization`, `Proxy-Authorization` or `Cookie` — is refused for all
+     three.
    - The page confirms that `FORWARD_AUTH_SECRET` is set; SSO login cannot
      be turned on until it is.
 
@@ -685,9 +688,13 @@ together they decide which identity Librariarr accepts. A proxy overwrites its
 own identity headers but usually passes other headers through from the client,
 so naming the wrong one would let anyone the proxy lets in claim to be you;
 and the issuer is who vouches for your identity, the one your client secret is
-sent to. If it has been longer, Librariarr asks you to confirm it's you first.
-Editing the issuer while SSO login is off asks nothing: it takes effect only
-when SSO is turned on, which asks for a recent sign-in itself.
+sent to. Changing the forward-auth email or name header needs one too: each
+sign-in copies them into your account's email and display name, which the app
+shows back, so pointing one at a header your proxy adds for itself would read
+that header's value out. If it has been longer, Librariarr asks you to confirm
+it's you first. Editing the issuer while SSO login is off asks nothing: it
+takes effect only when SSO is turned on, which asks for a recent sign-in
+itself.
 
 To remove the link entirely, click **Unlink SSO**. Unlinking also
 automatically turns off the global SSO toggle — keeping it on after removing

@@ -86,7 +86,7 @@ const getLibraryOverview: AiTool = {
   definition: {
     name: "get_library_overview",
     description:
-      "High-level snapshot of the whole library: item counts (movies, series, seasons, episodes, artists, albums, tracks), total and per-type storage in GB, top resolutions / video codecs / genres, and the most-played titles by cumulative play count. Use this first for broad 'what's in my library' or summary questions.",
+      "High-level snapshot of the whole library: item counts (movies, series, seasons, episodes, artists, albums, tracks), total and per-type storage in GB, top resolutions / video codecs, top genres per media type (topGenres.movies counts movies, topGenres.shows counts shows, topGenres.artists counts artists), and the most-played titles by cumulative play count. Use this first for broad 'what's in my library' or summary questions.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
   async execute(userId) {
@@ -119,9 +119,15 @@ const getLibraryOverview: AiTool = {
         undefined,
         8,
       ),
-      topGenres: (stats.genreBreakdown as { value: string; _count: number }[])
-        .slice(0, 10)
-        .map((g) => ({ value: g.value, count: g._count })),
+      // Per media type, each counted in its own unit. The stats count a genre
+      // once per movie, per show (series identity) and per artist, one row
+      // per (genre, type); listed together without the type, a genre came up
+      // two or three times with counts in units that cannot be compared.
+      topGenres: {
+        movies: aggregateByValue(stats.genreBreakdown, "MOVIE", 10),
+        shows: aggregateByValue(stats.genreBreakdown, "SERIES", 10),
+        artists: aggregateByValue(stats.genreBreakdown, "MUSIC", 10),
+      },
       topPlayedMovies: stats.topMovies.map((m) => ({ title: m.title, plays: m.playCount })),
       topPlayedSeries: stats.topSeries.map((s2) => ({ title: s2.parentTitle, plays: s2.totalPlays })),
     };
@@ -349,10 +355,17 @@ const searchMedia: AiTool = {
     const limit = clampInt(args.limit, 25, 1, 50);
     // When multi-server dedup is enabled, over-fetch and collapse rows that
     // share a dedupKey (the same title held on more than one server) so the
-    // assistant's counts match every other tool — executeQuery never dedups.
-    // Items without a dedupKey (null) are always kept.
+    // assistant's counts match every other tool — executeQuery never dedups
+    // rows. A show row has no dedupKey (it stands for the show on every
+    // server), so its figures are asked of one copy per episode instead
+    // (`oneCopyPerEpisode`): summed over every server's copy, a show on two
+    // servers reported about twice its size and plays, against the overview's
+    // `seriesSize` and the system prompt's "unique titles". Items without a
+    // dedupKey (null) are always kept.
     const fetchLimit = s.dedupEnabled ? Math.min(limit * 3, 150) : limit;
-    const result = await executeQuery(definition, userId, 1, fetchLimit);
+    const result = await executeQuery(definition, userId, 1, fetchLimit, undefined, {
+      oneCopyPerEpisode: s.dedupEnabled,
+    });
 
     let rows = result.items as Record<string, unknown>[];
     let truncated = false;

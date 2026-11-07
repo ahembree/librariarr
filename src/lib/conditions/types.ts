@@ -74,6 +74,7 @@ export type ConditionSection =
   | "arrMedia"
   | "arrEpisodes"
   | "seerr"
+  | "episode"
   | "series"
   | "streamQuery";
 
@@ -90,6 +91,15 @@ export interface ConditionField {
   requiresSeerr?: boolean;
   /** Field aggregates across child episodes (only meaningful with SERIES context). */
   isSeriesAggregate?: boolean;
+  /**
+   * Field is a property of one episode (its season or episode number, or where
+   * its season sits relative to the show's newest one). Judged per episode,
+   * never against a series aggregate, and never allowed to decide for a whole
+   * show: the group-scope gate blocks it at series scope and under an action
+   * on the whole series (`GROUP_SCOPE_BLOCKED_FIELDS`, group-scope.ts). See
+   * `src/lib/conditions/episode-fields.ts`.
+   */
+  episodeLevel?: boolean;
   /** Library types for which this field is invalid. */
   invalidForLibraryType?: LibraryType[];
   /**

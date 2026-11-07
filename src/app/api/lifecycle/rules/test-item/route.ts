@@ -3,6 +3,8 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   evaluateAllRulesInMemory,
+  evaluateGroupThroughMembers,
+  hasMemberValueRules,
   getMatchedCriteriaForItems,
   getActualValuesForAllRules,
   hasArrRules,
@@ -13,18 +15,22 @@ import {
   hasWatchedByUserRules,
   hasCrossSystemFieldRules,
   hasCustomFormatScoreRules,
+  hasSeasonsBehindLatestRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
-import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
+import { fetchCrossSystemData, crossSystemValuesOf } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrRecordForPreview } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadataForPreview } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { loadEditorScopeAction } from "@/lib/lifecycle/editor-action";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
+import { withEveryMemberValues, withGroupParentTitle } from "@/lib/conditions/series-aggregates";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
@@ -92,6 +98,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
     arrInstanceId,
+    // As the group scope below reads it, with the editor's action: per-episode
+    // criteria at series or artist scope, or under an action on the whole
+    // show or artist with it off, are refused with the reason, not answered.
+    !!seriesScope,
+    await loadEditorScopeAction(session.userId, data, ruleSetId),
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
@@ -135,17 +146,25 @@ export const POST = withSession(async (session, request: NextRequest) => {
     originallyAvailableAt: item.originallyAvailableAt?.toISOString() ?? null,
     streams: item.streams ?? [],
   };
+  // Seasons Behind Latest, measured against the show's newest season in the
+  // episode's library, as the engines attach it.
+  if (hasSeasonsBehindLatestRules(typedRules)) await attachSeasonsBehindLatest([single]);
 
   // A SERIES rule reading a series-aggregate field is evaluated at the series
   // level even with seriesScope off, exactly as detection routes it
-  // (`evaluateSeriesScope(…, restrictMembersToEpisodeMatches)`): the series
-  // aggregate must match, and so must the episode with the aggregates injected.
+  // (`evaluateSeriesScope(…, restrictMembersToEpisodeMatches)`): the episode
+  // matches when it passes on its own with the series aggregates injected.
   const aggregateForced =
     type === "SERIES" && !seriesScope && hasSeriesAggregateRules(typedRules);
   const groupScope =
     (seriesScope && (type === "SERIES" || type === "MUSIC")) || aggregateForced;
 
   let group: Record<string, unknown> | null = null;
+  // The show's episodes or the artist's tracks, which a group is judged through.
+  let groupMembers: Array<{ id: string }> = [];
+  // Each member's own cross-system values, when a rule reads one: a group is
+  // judged through every member's (`isEveryMemberField`), as detection does.
+  let everyMember: ((member: { id: string }) => Record<string, unknown>) | undefined;
 
   // Series/music scope: aggregate all episodes/tracks of this series/artist
   if (groupScope) {
@@ -188,6 +207,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
         : (splitArtistGroupByMbid(candidates, (t) => artistMbidOf(t.externalIds)).find((g) =>
             g.some((t) => t.id === item.id),
           ) ?? candidates);
+    groupMembers = allItems;
 
     const totalPlays = allItems.reduce((sum, ep) => sum + ep.playCount, 0);
     const totalSize = allItems.reduce(
@@ -239,14 +259,20 @@ export const POST = withSession(async (session, request: NextRequest) => {
       )
     );
 
-    group = {
+    // A forced-aggregate run reads the tested episode's own cross-system
+    // values (`single`); a group, each member's.
+    const memberCross = aggregateForced ? undefined : await crossSystemFor(allItems.map((ep) => ep.id));
+    if (memberCross) everyMember = (member) => ({ ...crossSystemValuesOf(memberCross, member.id) });
+
+    // The show or artist, named by `title`; "Artist / Series" reads that name
+    // too (withGroupParentTitle), as detection evaluates a group. It carries
+    // no cross-system values of its own: those are each member's.
+    group = withGroupParentTitle({
       ...item,
-      ...foldCrossSystemData(allItems.map((ep) => ep.id), await crossSystemFor(allItems.map((ep) => ep.id))),
       title: groupField,
       ...(type === "SERIES"
         ? { summary: item.parentSummary ?? item.summary }
         : {}),
-      parentTitle: null,
       seasonNumber: null,
       episodeNumber: null,
       playCount: totalPlays,
@@ -255,7 +281,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
       // "Series Last Played" — MAX(lastPlayedAt) across the episodes.
       seriesLastPlayedAt: latestPlayed?.toISOString() ?? null,
       addedAt: earliestAdded?.toISOString() ?? null,
-      originallyAvailableAt: null,
+      // A per-member value, as the other per-item fields spread from the item:
+      // each member's own when the group is judged through its members.
+      originallyAvailableAt: item.originallyAvailableAt?.toISOString() ?? null,
       episodeCount: allItems.length,
       matchedEpisodes: allItems.length,
       watchedEpisodeCount: watchedCount,
@@ -267,12 +295,12 @@ export const POST = withSession(async (session, request: NextRequest) => {
       lastEpisodeAiredAt: latestEpisodeAired?.toISOString() ?? null,
       streams: allStreams,
       watchedByUsers,
-    };
+    });
   }
 
-  // What the criteria and values are reported for: the group in group scope;
-  // in a forced-aggregate run, the episode carrying the series aggregates.
-  const serialized: Record<string, unknown> =
+  // What is evaluated: the group in group scope; in a forced-aggregate run,
+  // the episode carrying the series aggregates.
+  const evaluated: Record<string, unknown> =
     group && aggregateForced
       ? {
           ...single,
@@ -287,7 +315,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
       : (group ?? single);
 
   // Evaluate rules against the item
-  const externalIds = (serialized.externalIds as Array<{
+  const externalIds = (evaluated.externalIds as Array<{
     source: string;
     externalId: string;
   }>) ?? [];
@@ -299,12 +327,30 @@ export const POST = withSession(async (session, request: NextRequest) => {
   // making the `matches` result disagree with matchedCriteria for Seerr rules.
   const seerrMeta = lookupSeerrMeta(externalIds, seerrData, type);
 
-  const matches =
-    // Forced aggregate: the series must match, then this episode with the
-    // series aggregates injected — the two checks detection makes.
-    (!(group && aggregateForced) ||
-      evaluateAllRulesInMemory(typedRules, group, arrMeta, seerrMeta)) &&
-    evaluateAllRulesInMemory(typedRules, serialized, arrMeta, seerrMeta);
+  // What the criteria and values are reported for: what the match was
+  // selected on.
+  let serialized = evaluated;
+  let matches: boolean;
+  if (group && !aggregateForced) {
+    // Group scope: the show or artist matches when one member, seen as the
+    // group carrying its own per-member values, satisfies the rules — the
+    // first such member (lowest id) reported, as detection stores it — and,
+    // for a cross-system criterion, only when every member does with its own
+    // cross-system values, which are reported per member either way. When it
+    // does not match, the group's own values are reported.
+    const selection = evaluateGroupThroughMembers(
+      typedRules, group, groupMembers, hasMemberValueRules(typedRules), arrMeta, seerrMeta, everyMember,
+    );
+    matches = selection !== null;
+    serialized = selection
+      ? selection.record
+      : withEveryMemberValues({ ...group }, everyMember ? groupMembers.map(everyMember) : undefined);
+  } else {
+    // A single item, or — forced aggregate — this episode on its own with the
+    // series aggregates injected: the check detection makes per episode
+    // (episodesMatchingIndividually). The show's own record is no gate.
+    matches = evaluateAllRulesInMemory(typedRules, evaluated, arrMeta, seerrMeta);
+  }
 
   // Get matched criteria and actual values
   const criteriaMap = getMatchedCriteriaForItems(

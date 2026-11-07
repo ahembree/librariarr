@@ -84,7 +84,8 @@ vi.mock("@/lib/cache/invalidate", () => ({
 }));
 
 import { logger } from "@/lib/logger";
-import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
+import { importTracearrRecords, syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
+import type { TracearrJoinIndex } from "@/lib/sync/tracearr-join";
 
 const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
 const HOUR_MS = 60 * 60 * 1000;
@@ -990,6 +991,60 @@ describe("syncTracearrHistory", () => {
       expect(purges[0][1]).toBe("server-1");
     });
 
+    /**
+     * Answers the mapping check (`FOR SHARE`) from `answers`, in call order —
+     * true while the server is still mapped to the run's Tracearr server.
+     */
+    function mappingChecksAnswer(...answers: boolean[]) {
+      const base = mockPrisma.$queryRawUnsafe.getMockImplementation()!;
+      let call = 0;
+      mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+        if (sql.includes("FOR SHARE")) return (answers[call++] ?? false) ? [{ id: params[0] }] : [];
+        return base(sql, ...params);
+      });
+    }
+
+    function nativePurges() {
+      return mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes(`DELETE FROM "WatchHistory"`),
+      );
+    }
+
+    it("keeps native rows when a write found the mapping moved mid-run", async () => {
+      // The admin unlinked Tracearr after page 1 was written; the PUT wiped the
+      // server's rows and a Refresh wrote its native history. Those NATIVE
+      // rows are the server's history now, not a leftover stratum.
+      neverBackfilled();
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-2" })], nextCursor: null });
+      mappingChecksAnswer(true, false);
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(result).toMatchObject({ count: 1, backfillOutcome: "stopped" });
+      expect(nativePurges()).toHaveLength(0);
+    });
+
+    it("re-checks the mapping under a row lock in the same transaction as the purge", async () => {
+      // Every write succeeded, then the mapping moved before the purge ran:
+      // only the purge's own check can see it.
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+      mappingChecksAnswer(true, false);
+
+      await syncTracearrHistory("server-1");
+
+      expect(nativePurges()).toHaveLength(0);
+      const checks = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes("FOR SHARE"),
+      );
+      expect(checks).toHaveLength(2);
+      expect(checks[1].slice(1)).toEqual(["server-1", TRACEARR_SERVER_ID]);
+    });
+
     it("does not purge when the import wrote nothing", async () => {
       // A failed or empty run must never leave the server with neither source.
       mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
@@ -1556,11 +1611,24 @@ describe("syncTracearrHistory", () => {
     });
 
     it("backfills from scratch when the flag says complete but no rows remain", async () => {
-      // "Complete" with zero stored rows is a contradiction — the rows are what
-      // the flag describes. Something removed them out from under it (a manual
-      // delete, a partial restore), and trusting the flag would mean importing
-      // nothing, forever, on a server whose history is entirely missing.
+      // The rows were removed out from under the flag — a config-only restore
+      // brings the server row back verbatim without its history, and withdraws
+      // the established marker from every server left without plays. Trusting
+      // the flag would mean importing nothing, forever, on a server whose
+      // history is entirely missing.
       watermark = { maxWatchedAt: null, minWatchedAt: null, oldestOpenChain: null };
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        id: "server-1",
+        name: "Test Plex",
+        enabled: true,
+        tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrBackfillComplete: true,
+        tracearrOldestPlayAt: null,
+        tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00.000Z"),
+        tracearrForwardResumeAt: new Date("2025-07-01T00:00:00.000Z"),
+        watchHistorySyncedAt: null,
+        userId: "user-1",
+      });
       mockGetHistoryPage.mockResolvedValueOnce({
         records: [historyRecord({ id: "chain-1" })],
         nextCursor: null,
@@ -1575,10 +1643,16 @@ describe("syncTracearrHistory", () => {
 
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
       expect(historyOptions()[0].until).toBeUndefined();
-      // The stale state is reset in the DATABASE first, not only for this run.
+      // The stale state is reset in the DATABASE first, not only for this run —
+      // an unfinished forward window included, since it describes rows that
+      // are gone too.
       expect(mockPrisma.mediaServer.updateMany.mock.calls[0][0]).toEqual({
         where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
-        data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: null },
+        data: {
+          tracearrBackfillComplete: false,
+          tracearrBackfillCursorAt: null,
+          tracearrForwardResumeAt: null,
+        },
       });
       expect(mockPrisma.mediaServer.updateMany).toHaveBeenCalledWith({
         // Guarded on the mapping this run walked — see `persistMappedState`.
@@ -2433,6 +2507,7 @@ describe("syncTracearrHistory", () => {
       expect(writes[0].data).toEqual({
         tracearrBackfillComplete: false,
         tracearrBackfillCursorAt: null,
+        tracearrForwardResumeAt: null,
       });
       const cursor = writes[1].data.tracearrBackfillCursorAt as Date;
       expect(cursor).toEqual(new Date("2026-09-30T00:00:00.000Z"));
@@ -2526,6 +2601,36 @@ describe("syncTracearrHistory", () => {
       // Established in the SAME guarded statement as the completion flag, so
       // one can never land without the other.
       expect(write.data.watchHistorySyncedAt).toBeInstanceOf(Date);
+    });
+
+    it("is not walked again by the next run when it completed having stored nothing", async () => {
+      // The walk above marks the history established and records a forward
+      // watermark. "Complete with no rows" is then the archive's honest state,
+      // not a wiped one: resetting it re-walked the whole archive after every
+      // forward sync, completed, and reset again — forever.
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        id: "server-1",
+        name: "Test Plex",
+        enabled: true,
+        tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrBackfillComplete: true,
+        tracearrOldestPlayAt: null,
+        tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00.000Z"),
+        tracearrForwardResumeAt: new Date("2025-07-10T11:00:00.000Z"),
+        watchHistorySyncedAt: new Date("2025-07-10T12:00:00.000Z"),
+        userId: "user-1",
+      });
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "backfill" }),
+      ).resolves.toMatchObject({ backfillPending: false });
+
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ tracearrBackfillComplete: false }),
+        }),
+      );
     });
 
     it("completes normally once the server already holds rows from earlier slices", async () => {
@@ -2802,6 +2907,71 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+
+  describe("a forward pass that stops short of its window's start", () => {
+    // Newest first: a forward walk that stops after a page has stored the
+    // newest plays of its window and none of the older ones. The next window
+    // is derived from the newest stored play, so without a record of where
+    // this one started the stretch below would never be asked for again.
+    const MIN = new Date("2021-03-04T08:00:00.000Z");
+    const MAX = new Date("2025-07-10T12:00:00.000Z");
+
+    function interruptedForwardThenArchiveEnd() {
+      mockGetHistoryPage
+        // Forward page 1: more pages follow.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T13:00:00.000Z" })],
+          nextCursor: "forward-2",
+        })
+        // Forward page 2 (requested while page 1 is written): never arrives.
+        .mockRejectedValueOnce(new Error("read ECONNRESET"))
+        // Backfill: the archive's last page.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-old", started_at: "2021-03-01T00:00:00.000Z" })],
+          nextCursor: null,
+        });
+    }
+
+    it("records the window's start before committing the page that opens the gap", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      interruptedForwardThenArchiveEnd();
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((call) => call[0]);
+      const resume = writes.find((write) => "tracearrForwardResumeAt" in write.data);
+      expect(resume).toMatchObject({
+        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
+        data: { tracearrForwardResumeAt: new Date(MAX.getTime() - HOUR_MS) },
+      });
+      // Before the rows it protects.
+      const resumeOrder = mockPrisma.mediaServer.updateMany.mock.invocationCallOrder[
+        writes.indexOf(resume!)
+      ];
+      expect(resumeOrder).toBeLessThan(mockPrisma.$executeRawUnsafe.mock.invocationCallOrder[0]);
+    });
+
+    it("finishes the archive without vouching for a history it left a gap in", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      interruptedForwardThenArchiveEnd();
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "both" }),
+      ).resolves.toMatchObject({ backfillPending: false });
+
+      const completion = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .find((write) => write.data.tracearrBackfillComplete === true);
+      expect(completion).toBeDefined();
+      // The archive is walked, but plays newer than it are still unread.
+      expect(completion!.data).not.toHaveProperty("watchHistorySyncedAt");
+      expect(
+        mockPrisma.mediaServer.updateMany.mock.calls.some(
+          (call) => "watchHistorySyncedAt" in (call[0] as { data: object }).data,
+        ),
+      ).toBe(false);
+    });
+  });
 
   describe("the run is reported as live while it imports", () => {
     // Settings shows a running import beside the sync status: the stored rows
@@ -3333,6 +3503,100 @@ describe("syncTracearrHistory", () => {
         "WatchHistory",
         expect.stringContaining('from "B"'),
       );
+    });
+  });
+
+  describe("a targeted import holds the forward watermark", () => {
+    const index = {
+      serverId: "server-1",
+      byRatingKey: new Map(),
+      byExternalId: new Map(),
+      itemCount: 0,
+      externalIdCount: 0,
+    } as unknown as TracearrJoinIndex;
+    const accounts = new Map([["srv-user-1", "weingart"]]);
+    const newestStored = new Date("2025-07-01T20:00:00.000Z");
+
+    /** The `tracearrForwardResumeAt` writes, with their place in the call order. */
+    function resumeWrites() {
+      return mockPrisma.mediaServer.updateMany.mock.calls
+        .map(([arg], i) => ({ arg, order: mockPrisma.mediaServer.updateMany.mock.invocationCallOrder[i] }))
+        .filter(({ arg }) => "tracearrForwardResumeAt" in arg.data);
+    }
+
+    beforeEach(() => {
+      watermark = { maxWatchedAt: newestStored, minWatchedAt: new Date("2025-01-01T00:00:00Z"), oldestOpenChain: null };
+    });
+
+    it("records the old watermark before writing a play newer than every stored one", async () => {
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      const writes = resumeWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0].arg).toEqual({
+        where: {
+          id: "server-1",
+          tracearrServerId: TRACEARR_SERVER_ID,
+          OR: [
+            { tracearrForwardResumeAt: null },
+            { tracearrForwardResumeAt: { gt: new Date(newestStored.getTime() - HOUR_MS) } },
+          ],
+        },
+        data: { tracearrForwardResumeAt: new Date(newestStored.getTime() - HOUR_MS) },
+      });
+      // Before the write's transaction: a crash between the two must leave the
+      // point, not the play without it.
+      expect(insertCalls()).toHaveLength(1);
+      expect(writes[0].order).toBeLessThan(mockPrisma.$transaction.mock.invocationCallOrder[0]);
+    });
+
+    it("reaches back to an open chain, as the forward window would", async () => {
+      const openChain = new Date(newestStored.getTime() - 2 * DAY_MS);
+      watermark = { ...watermark, oldestOpenChain: openChain };
+
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()[0].arg.data).toEqual({ tracearrForwardResumeAt: openChain });
+    });
+
+    it("records nothing for plays no newer than the newest stored one", async () => {
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: newestStored.toISOString() })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()).toEqual([]);
+      expect(insertCalls()).toHaveLength(1);
+    });
+
+    it("records nothing on a server holding no Tracearr rows, whose recorded point is its watermark", async () => {
+      watermark = { maxWatchedAt: null, minWatchedAt: null, oldestOpenChain: null };
+
+      await importTracearrRecords(
+        "server-1",
+        [historyRecord({ started_at: "2025-07-04T20:00:00.000Z" })],
+        index,
+        accounts,
+        TRACEARR_SERVER_ID,
+      );
+
+      expect(resumeWrites()).toEqual([]);
+      expect(insertCalls()).toHaveLength(1);
     });
   });
 });

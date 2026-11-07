@@ -111,6 +111,31 @@ describe("ssoConfigSchema", () => {
       ssoConfigSchema.safeParse({ forwardAuthNameHeader: "" }).success
     ).toBe(false);
   });
+
+  // The login copies the email and name headers into the account, which a
+  // signed-in session reads back: naming the proxy secret (or Basic auth, or
+  // the cookies) there would hand the credential to a cookie holder.
+  it("refuses a credential header for every forward-auth header setting, in any case", () => {
+    const names = [
+      "X-Librariarr-Proxy-Secret",
+      "x-librariarr-proxy-secret",
+      "Authorization",
+      "AUTHORIZATION",
+      "Proxy-Authorization",
+      "Cookie",
+      " cookie ",
+    ];
+    for (const field of ["forwardAuthUserHeader", "forwardAuthEmailHeader", "forwardAuthNameHeader"]) {
+      for (const name of names) {
+        const result = ssoConfigSchema.safeParse({ [field]: name });
+        expect(result.success, `${field}: ${name}`).toBe(false);
+        expect(issuesOf(result)).toEqual([
+          `${field}: Cannot be a header that carries a credential (X-Librariarr-Proxy-Secret, Authorization, Proxy-Authorization or Cookie)`,
+        ]);
+      }
+      expect(ssoConfigSchema.safeParse({ [field]: "X-Authorization-User" }).success).toBe(true);
+    }
+  });
 });
 
 describe("ssoTestSchema", () => {

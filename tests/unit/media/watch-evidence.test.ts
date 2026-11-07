@@ -23,6 +23,7 @@ import {
   invalidateServersWithoutWatchHistory,
   markWatchHistoryEstablished,
   restartTracearrBackfill,
+  restartTracearrBackfillWithoutPlays,
 } from "@/lib/media/watch-evidence";
 
 const NOW = new Date("2026-03-01T12:00:00.000Z");
@@ -140,10 +141,60 @@ describe("restartTracearrBackfill", () => {
     // below the oldest stored row, which after a partial purge is the far end of
     // the archive — so nothing purged would be walked again.
     expect(arg.data.tracearrBackfillCursorAt).toEqual(NOW);
+    // The restarted walk reads everything older than now, so an unfinished
+    // forward window is covered by it — and would otherwise keep the play
+    // history from being re-established once the walk completes.
+    expect(arg.data).toHaveProperty("tracearrForwardResumeAt", null);
   });
 
   it("issues no UPDATE at all for an empty list", async () => {
     await expect(restartTracearrBackfill([])).resolves.toBe(0);
+    expect(m.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("restartTracearrBackfillWithoutPlays", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 0 });
+    m.findMany.mockResolvedValue([]);
+  });
+
+  it("restarts the mapped servers that hold no Tracearr plays, through the client it is given", async () => {
+    // Restore passes its transaction, so the restored walk state is never
+    // visible un-restarted.
+    vi.useFakeTimers({ now: NOW });
+    const tx = {
+      mediaServer: {
+        findMany: vi.fn().mockResolvedValue([{ id: "s1" }]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    await expect(
+      restartTracearrBackfillWithoutPlays(tx as unknown as Parameters<typeof restartTracearrBackfillWithoutPlays>[0]),
+    ).resolves.toBe(1);
+
+    // Native plays say nothing about how far a Tracearr walk got.
+    expect(tx.mediaServer.findMany.mock.calls[0][0].where).toEqual({
+      tracearrServerId: { not: null },
+      watchHistory: { none: { source: "TRACEARR" } },
+    });
+    expect(tx.mediaServer.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["s1"] }, tracearrServerId: { not: null } },
+      data: {
+        tracearrBackfillComplete: false,
+        tracearrBackfillCursorAt: NOW,
+        tracearrForwardResumeAt: null,
+      },
+    });
+    expect(m.findMany).not.toHaveBeenCalled();
+    expect(m.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("restarts nothing when every mapped server still holds Tracearr plays", async () => {
+    await expect(restartTracearrBackfillWithoutPlays()).resolves.toBe(0);
+    expect(m.findMany).toHaveBeenCalledTimes(1);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 });

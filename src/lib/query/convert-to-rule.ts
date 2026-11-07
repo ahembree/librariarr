@@ -1,5 +1,10 @@
 import type { z } from "zod/v4";
 import type { ConditionGroup, LibraryType } from "@/lib/conditions";
+import {
+  findGroupScopeBlockedCriteria,
+  groupScopeBlockedLabels,
+  groupScopeViolation,
+} from "@/lib/conditions/group-scope";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
 import {
@@ -65,6 +70,7 @@ export function convertQueryToRuleSetBody(
     opts.targetLibraryType,
     query.arrServerIds,
   );
+  const scope = convertedScope(query, opts.targetLibraryType, cleaned);
   return {
     name: opts.name.trim(),
     type: opts.targetLibraryType,
@@ -72,13 +78,69 @@ export function convertQueryToRuleSetBody(
     serverIds: opts.serverIds,
     enabled: true,
     actionEnabled: false,
-    // `includeEpisodes: true` in the query means "match individual episodes",
-    // which corresponds to `seriesScope: false` on the rule set side.
-    ...(opts.targetLibraryType === "SERIES"
-      ? { seriesScope: !query.includeEpisodes }
-      : {}),
+    ...(scope ? { seriesScope: scope.seriesScope } : {}),
     ...(arrInstanceId ? { arrInstanceId } : {}),
   };
+}
+
+/** The scope a converted Series or Music rule set gets, and why. */
+export interface ConvertedScope {
+  /** The rule set's `seriesScope`: whole shows or artists (true), or episodes or tracks. */
+  seriesScope: boolean;
+  /**
+   * The query's criteria that describe one episode or track
+   * (`groupScopeBlockedLabels`), which a whole-show or whole-artist rule may
+   * not use and which therefore turned the scope off; empty when they did not.
+   */
+  blockedLabels: string[];
+}
+
+/**
+ * The scope of the rule set a query converts to, or null for a movie rule set
+ * (which has none). Shared by the body above and the dialog, which says it.
+ *
+ * - Series: `includeEpisodes` ("match individual episodes") is series scope
+ *   off; a query grouped by show is series scope on.
+ * - Music: artist scope on, the rule set default.
+ *
+ * Either is turned off when the query uses a criterion a whole-show or
+ * whole-artist rule may not use (`groupScopeViolation`: Resolution, Year,
+ * Genre, a stream query, …). The query evaluates those per episode or track,
+ * so with the scope off the rule set selects what the query listed; with it
+ * on, saving would be refused.
+ *
+ * The rule set is created with its action off and none chosen
+ * (`convertQueryToRuleSetBody`), so no conversion arms an action that acts
+ * on the whole show or artist; the rule editor's gate then keeps one from
+ * following the per-episode criteria (`convertedWholeRecordLimit`).
+ */
+export function convertedScope(
+  query: QueryDefinition,
+  targetLibraryType: LibraryType,
+  cleanedGroups: ConditionGroup[],
+): ConvertedScope | null {
+  if (targetLibraryType === "MOVIE") return null;
+  const wanted = targetLibraryType === "SERIES" ? !query.includeEpisodes : true;
+  const violation = groupScopeViolation(targetLibraryType, wanted, cleanedGroups);
+  if (!violation) return { seriesScope: wanted, blockedLabels: [] };
+  return { seriesScope: false, blockedLabels: groupScopeBlockedLabels(violation) };
+}
+
+/**
+ * With the converted scope off, the query's criteria that keep an action on
+ * the whole show or artist (Delete from Sonarr, Change Quality Profile, Arr
+ * tags, …) off the rule set — every criterion of one episode or track
+ * (`groupScopeViolation`'s member judgement) — or null when there are none or
+ * the scope is on. The dialog says so before the rule set is created.
+ */
+export function convertedWholeRecordLimit(
+  targetLibraryType: LibraryType,
+  scope: ConvertedScope | null,
+  cleanedGroups: ConditionGroup[],
+): string[] | null {
+  if (!scope || scope.seriesScope || targetLibraryType === "MOVIE") return null;
+  const blocked = findGroupScopeBlockedCriteria(cleanedGroups, targetLibraryType, "member");
+  return blocked ? groupScopeBlockedLabels(blocked) : null;
 }
 
 /**

@@ -21,6 +21,7 @@ import { ruleBuilderConfig } from "@/components/rule-builder";
 import type { MatchedCriterion } from "@/components/media-detail-side-panel";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import type { GroupScopeAction } from "@/lib/conditions/group-scope";
 
 /**
  * The rule editor's dialogs that hold what the user types — a pasted import,
@@ -167,6 +168,11 @@ export interface TestMediaDialogProps {
   arrInstanceId: string;
   /** The saved rule set being edited, if any. */
   ruleSetId: string | null;
+  /**
+   * The editor's action as a save would send it: the route refuses
+   * per-episode criteria under an action on the whole show, as the save does.
+   */
+  action: GroupScopeAction;
 }
 
 /** "Test Media": search one item and evaluate it against the editor's rules. */
@@ -179,6 +185,7 @@ export function TestMediaDialog({
   serverIds,
   arrInstanceId,
   ruleSetId,
+  action,
 }: TestMediaDialogProps) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<TestMediaItem[]>([]);
@@ -255,6 +262,7 @@ export function TestMediaDialog({
           mediaItemId: itemId,
           serverIds,
           arrInstanceId: arrInstanceId || null,
+          ...action,
           ...(ruleSetId ? { ruleSetId } : {}),
         }),
       });

@@ -14,7 +14,13 @@ import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 import type { ServerPresence } from "@/lib/dedup/deduplicate";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
-import { ARTIST_KEY_SQL, audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
+import {
+  ARTIST_KEY_SQL,
+  albumTitleKeySql,
+  audioCodecLabelSql,
+  foldCodecCounts,
+  type CodecCountRow,
+} from "@/lib/media/music-sql";
 
 interface ArtistGroupRow {
   group_key: string;
@@ -136,13 +142,18 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // `ORDER BY group_key`: the list is sorted below with a stable sort, so
   // this is the order of ties — artists with equal track counts — and a page
   // boundary falls in the same place on every request.
+  //
+  // `albumCount` counts the album cards the artist page shows (`albumTitleKeySql`:
+  // case and surrounding spaces ignored, tracks with no or a blank album one "Unknown
+  // Album"), where an exact `COUNT(DISTINCT NULLIF("albumTitle", ''))` read
+  // "Abbey Road" and "abbey road " as two and the Unknown Album as none.
   const [groups, representatives, codecRows, groupServerPresence] = await Promise.all([
     prisma.$queryRawUnsafe<ArtistGroupRow[]>(
       `SELECT
         group_key,
         MIN("parentTitle") as "parentTitle",
         COUNT(*)::int as "trackCount",
-        COUNT(DISTINCT NULLIF("albumTitle", ''))::int as "albumCount",
+        COUNT(DISTINCT ${albumTitleKeySql('"albumTitle"')})::int as "albumCount",
         COALESCE(SUM("fileSize"), 0)::text as "totalSize",
         MAX("lastPlayedAt") as "lastPlayed",
         MAX("addedAt") as "addedAt",

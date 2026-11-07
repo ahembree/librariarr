@@ -392,6 +392,14 @@ Two shapes, never interchangeable:
 
 `ColorChip` does not forward a ref, so under a Radix `TooltipTrigger asChild` wrap it in a `<span className="inline-flex">`. Give a chip a `title` when its text abbreviates something.
 
+### Table Rows
+
+Data rows take their background, hover and change tone from `rowSurfaceClass` (`src/lib/table-row-surface.ts`), never from hand-written classes:
+
+- **Zebra stripe** — `bg-white/1.5` on every odd row *index*. Never `even:`/`odd:`: the tables are virtualized, so a row's DOM position moves as you scroll and an `:nth-child` stripe flips on every row.
+- **Hover** — clickable rows get `hover:bg-white/3 hover:ring-1 hover:ring-primary/20` and a pointer cursor.
+- **Change tones** (the rule editor's preview: new and removed matches) — `added` is a `bg-green-dim` fill with an inset `ring-green/40`, `removed` the amber pair at 60% opacity. A toned row takes no stripe and keeps its fill on hover (the ring strengthens in its own hue). A tone is never colour alone: `RowToneChip` puts **+ New** / **− Removed** in words and shape before the title, and on a card's top-right corner over a solid backdrop.
+
 ### Badges
 
 Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`. See Chips vs Badges above for when a `Badge` is the right shape.
@@ -440,7 +448,7 @@ An "Are you sure?" prompt is a `ConfirmDialog` (`src/components/confirm-dialog.t
 - **Button labels are Title Case** ("New Rule Set", "Reset to Defaults", "Test Connection", "Clear All"); descriptions, toasts and dialog bodies are sentence case.
 - **A button that starts an action is a `LoadingButton`** (`src/components/loading-button.tsx`): its `icon` turns into a spinner of the same size while `loading`, and the button is disabled meanwhile, so the label never moves. Don't write `{busy ? <Loader2 … /> : <Icon … />}` by hand. Size an icon smaller than 16px with a `size-*` class (`iconClassName="size-3.5"`): `Button` makes every icon without one `size-4`, which overrides `h-3.5 w-3.5`.
 - **A failure message inside a form or a card is an `InlineError`** (`src/components/inline-error.tsx`): the red box with an alert icon. Use `multiline` when the message can wrap, so the icon stays on the first line. A failure that is not tied to a form is a toast.
-- **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2"). A test that is not a connection passes its own `label` (the OIDC discovery check reads "Discovery OK: <issuer>"). The badge wraps a long answer instead of running past the card.
+- **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2"). A test that is not a connection passes its own `label` (the OIDC discovery check reads `Discovery OK: <issuer>`). The badge wraps a long answer instead of running past the card.
 
 ### Toasts
 

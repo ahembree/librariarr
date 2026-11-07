@@ -435,6 +435,51 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     expect(refreshed?.email).toBe("keep@example.com");
   });
 
+  // The settings schema refuses these names; a value stored before that (or
+  // restored from a backup) must still never be read. The account's username
+  // and email are read back by any signed-in session, so the proxy secret
+  // copied there would be handed to a cookie holder.
+  it("never copies a header that carries a credential into the account", async () => {
+    const user = await createTestUser({ username: "Keep", email: "keep@example.com" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await seedForwardAuth(user.id, {
+      forwardAuthNameHeader: "X-Librariarr-Proxy-Secret",
+      forwardAuthEmailHeader: "Authorization",
+    });
+
+    const res = await callRoute(GET, {
+      method: "GET",
+      headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", Authorization: "basic@example.com" },
+    });
+    // The sign-in itself still succeeds; only the claims are skipped.
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+
+    const refreshed = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(refreshed.username).toBe("Keep");
+    expect(refreshed.email).toBe("keep@example.com");
+  });
+
+  // As the subject, the credential would also be logged on a refused sign-in.
+  it("refuses a stored user header that carries a credential, without logging its value", async () => {
+    const { apiLogger } = await import("@/lib/logger");
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+    });
+    await seedForwardAuth(user.id, { forwardAuthUserHeader: "x-librariarr-proxy-secret" });
+
+    const res = await callRoute(GET, { method: "GET", headers: SAME_ORIGIN_HEADERS });
+    expect(new URL(res.headers.get("location")!).searchParams.get("sso_error")).toBe("sso_not_configured");
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(JSON.stringify(vi.mocked(apiLogger.warn).mock.calls)).not.toContain(secret);
+    expect(mockSucceeded).not.toHaveBeenCalled();
+  });
+
   it("ignores bogus email shapes from the proxy", async () => {
     const user = await createTestUser({ email: "keep@example.com" });
     await prisma.user.update({

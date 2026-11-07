@@ -56,10 +56,13 @@ export function actionHonorsMemberIds(actionType: string): boolean {
 
 /**
  * Sonarr actions Sonarr can apply to single episodes as well as to a series.
- * The Query page's episode view and a Series rule set with series scope off
- * run them on the matched episodes only (`ActionRecord.episodeScope`).
+ * The Query page's episode view (or a query with a per-episode criterion) and
+ * a Series rule set with series scope off (`ruleSetActsOnEpisodes`,
+ * episode-scope.ts) run them on the matched episodes only
+ * (`ActionRecord.episodeScope`): Unmonitor & Delete Files then unmonitors the
+ * matched episodes instead of the series before deleting their files.
  */
-const EPISODE_SCOPABLE_ACTION_TYPES = new Set<string>(["UNMONITOR_SONARR", "SEARCH_SONARR"]);
+const EPISODE_SCOPABLE_ACTION_TYPES = new Set<string>(["UNMONITOR_SONARR", "SEARCH_SONARR", "UNMONITOR_DELETE_FILES_SONARR"]);
 
 export function actionCanScopeToEpisodes(actionType: string): boolean {
   return EPISODE_SCOPABLE_ACTION_TYPES.has(actionType);
@@ -72,14 +75,6 @@ export function actionCanScopeToEpisodes(actionType: string): boolean {
  */
 export function actsOnMembers(actionType: string, episodeScope?: boolean | null): boolean {
   return actionHonorsMemberIds(actionType) || (!!episodeScope && actionCanScopeToEpisodes(actionType));
-}
-
-/** Whether a rule set's action acts on its matched episodes rather than the series. */
-export function ruleSetActsOnEpisodes(
-  actionType: string,
-  ruleSet: { type: string; seriesScope: boolean },
-): boolean {
-  return ruleSet.type === "SERIES" && !ruleSet.seriesScope && actionCanScopeToEpisodes(actionType);
 }
 
 /**

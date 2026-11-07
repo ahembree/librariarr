@@ -7,8 +7,16 @@
  *
  * Key priority for movies: TMDB > IMDB > title+year
  * Series episodes: TVDB + season+episode > parentTitle + season+episode
- * Music tracks: parentTitle (artist) + track title
+ * Music tracks: parentTitle (artist) + albumTitle + track title
  */
+
+/**
+ * Every track key starts with this. The key named no album before
+ * (`music:<artist>:<title>`); `runBackfillIfNeeded` re-keys a row still
+ * carrying that shape, which this prefix tells apart from the current one.
+ */
+export const TRACK_DEDUP_KEY_PREFIX = "track:";
+export const LEGACY_TRACK_DEDUP_KEY_PREFIX = "music:";
 
 export function normalizeTitle(title: string): string {
   return title.toLowerCase().trim().replace(/\s+/g, " ");
@@ -20,6 +28,8 @@ export function computeDedupKey(
   opts: {
     year?: number | null;
     parentTitle?: string | null;
+    /** A track's album. Read for MUSIC only. */
+    albumTitle?: string | null;
     seasonNumber?: number | null;
     episodeNumber?: number | null;
     externalIds?: { source: string; id: string }[];
@@ -52,10 +62,17 @@ export function computeDedupKey(
   }
 
   if (type === "MUSIC") {
+    // The album is part of a track's identity: without it a song's studio,
+    // live and compilation versions — or two "Intro" tracks by one artist on
+    // different albums — shared one key, and every deduplicated listing showed
+    // only the canonical one of them, even on a single server.
     const parent = opts.parentTitle
       ? normalizeTitle(opts.parentTitle)
       : "unknown";
-    return `music:${parent}:${normalizeTitle(title)}`;
+    const album = opts.albumTitle
+      ? normalizeTitle(opts.albumTitle)
+      : "unknown";
+    return `${TRACK_DEDUP_KEY_PREFIX}${parent}:${album}:${normalizeTitle(title)}`;
   }
 
   return `title:${normalizeTitle(title)}:${opts.year ?? ""}`;

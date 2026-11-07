@@ -752,6 +752,75 @@ describe("POST /api/tools/trash/sync", () => {
     expect(body.report.items).toHaveLength(0);
     expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
   });
+
+  // The instance reaches another app now (or the app was restored from an
+  // older backup): the managed format and profile are not there by name, and
+  // the ids their rows recorded belong to the user's own format and profile.
+  it("a recorded id naming another resource: status says missing, apply creates instead of overwriting", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const prisma = getTestPrisma();
+    await prisma.trashManagedResource.createMany({
+      data: [
+        {
+          userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+          resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", arrId: 1,
+          lastSyncHash: trashCfHash(CATALOG.customFormats[0] as TrashCustomFormat), lastSyncedAt: new Date(),
+        },
+        {
+          userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+          resourceType: "QUALITY_PROFILE", trashId: "qp1", name: "HD Bluray + WEB", arrId: 1, lastSyncedAt: new Date(),
+        },
+      ],
+    });
+    clientMock.getCustomFormats.mockResolvedValue([
+      {
+        id: 1,
+        name: "My Release Group",
+        includeCustomFormatWhenRenaming: false,
+        specifications: [{ name: "Group", implementation: "ReleaseGroupSpecification", negate: false, required: true, fields: [{ name: "value", value: "^(GRP)$" }] }],
+      },
+    ]);
+    clientMock.getQualityProfiles.mockResolvedValue([
+      {
+        id: 1,
+        name: "My Profile",
+        cutoff: 7,
+        upgradeAllowed: false,
+        minFormatScore: 0,
+        cutoffFormatScore: 0,
+        items: [{ quality: { id: 7, name: "Bluray-1080p" }, items: [], allowed: true }],
+        formatItems: [{ format: 55, name: "AMZN", score: 0 }],
+        language: { id: -1, name: "Any" },
+      },
+    ]);
+
+    const status = await expectJson<{ status: { items: { resourceType: string; status: string; existsInArr: boolean }[] } }>(
+      await callRoute(getStatus, { searchParams: { serviceType: "RADARR", instanceId: radarr.id } }),
+    );
+    const byType = Object.fromEntries(status.status.items.map((i) => [i.resourceType, i]));
+    expect(byType.CUSTOM_FORMAT).toMatchObject({ status: "MANAGED_MISSING", existsInArr: false });
+    expect(byType.QUALITY_PROFILE).toMatchObject({ status: "MANAGED_MISSING", existsInArr: false });
+
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false },
+    });
+    const body = await expectJson<{ report: { items: { resourceType: string; action: string }[] } }>(res);
+    expect(body.report.items.map((i) => [i.resourceType, i.action])).toEqual([
+      ["CUSTOM_FORMAT", "CREATE"],
+      ["QUALITY_PROFILE", "CREATE"],
+    ]);
+    expect(clientMock.updateCustomFormat).not.toHaveBeenCalled();
+    expect(clientMock.updateQualityProfile).not.toHaveBeenCalled();
+    expect(clientMock.createCustomFormat).toHaveBeenCalledWith(expect.objectContaining({ name: "AMZN" }));
+    expect(clientMock.createQualityProfile).toHaveBeenCalledWith(expect.objectContaining({ name: "HD Bluray + WEB" }));
+
+    const rows = await prisma.trashManagedResource.findMany({ orderBy: { resourceType: "asc" } });
+    expect(rows.map((r) => [r.resourceType, r.arrId, r.name])).toEqual([
+      ["CUSTOM_FORMAT", 500, "AMZN"],
+      ["QUALITY_PROFILE", 600, "HD Bluray + WEB"],
+    ]);
+  });
 });
 
 describe("Profile custom formats (PROFILE_CF)", () => {
@@ -830,5 +899,42 @@ describe("Profile custom formats (PROFILE_CF)", () => {
     expect(id).toBe(9);
     expect(payload.formatItems.find((f) => f.name === "AMZN")?.score).toBe(500);
     expect(payload.formatItems.find((f) => f.name === "Other")?.score).toBe(100);
+  });
+
+  it("re-saving a profile's formats keeps the name its last sync recorded, so a profile renamed in the app is still found", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const prisma = getTestPrisma();
+    // An earlier sync followed profile 9 through its rename to "Movies HD".
+    await prisma.trashManagedResource.create({
+      data: {
+        userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id,
+        resourceType: "PROFILE_CF", trashId: "My Profile", name: "Movies HD", arrId: 9,
+        selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 500 }] },
+      },
+    });
+    // The Profile Formats tab re-sends the assigned profile name on save.
+    const saved = await callRoute(postAssignment, {
+      method: "POST",
+      body: {
+        serviceType: "RADARR",
+        instanceId: radarr.id,
+        items: [{ resourceType: "PROFILE_CF", trashId: "My Profile", name: "My Profile", selection: { formats: [{ trashId: "cf1", name: "AMZN", score: 250 }] } }],
+      },
+    });
+    await expectJson(saved, 201);
+    const row = await prisma.trashManagedResource.findFirstOrThrow();
+    expect(row.name).toBe("Movies HD");
+    expect(row.selection).toEqual({ formats: [{ trashId: "cf1", name: "AMZN", score: 250 }] });
+
+    clientMock.getQualityProfiles.mockResolvedValue([
+      { id: 9, name: "Movies HD", formatItems: [{ format: 55, name: "AMZN", score: 500 }] },
+    ]);
+    const res = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false, items: [{ resourceType: "PROFILE_CF", trashId: "My Profile" }] },
+    });
+    const body = await expectJson<{ report: { items: { action: string }[] } }>(res);
+    expect(body.report.items[0].action).toBe("UPDATE");
+    expect(clientMock.updateQualityProfile).toHaveBeenCalledWith(9, expect.objectContaining({ name: "Movies HD" }));
   });
 });

@@ -22,7 +22,7 @@ A compact row of live operational tiles at the top of the page. Each tile links 
 |-|-|-|
 | Streams | Active playback session count; warns when a media server is unreachable | Tools → Streams |
 | Sync | Whether a sync is running, when the last one finished, and the next scheduled sync | Settings → Scheduling |
-| Integrations | How many Sonarr/Radarr/Lidarr/Seerr instances are reachable, naming any that are down. Re-checked every minute while the page is open | Settings → Integrations |
+| Integrations | How many Sonarr/Radarr/Lidarr/Seerr instances are reachable, naming any that are down. Re-checked every minute while the page is open; adding, editing or removing an instance shows on the next check | Settings → Integrations |
 | Next runs | Countdown to the next lifecycle detection and execution runs | Settings → Scheduling |
 | Update | Appears only when a newer Librariarr version is available | Settings → System |
 
@@ -132,7 +132,7 @@ When multiple servers are connected, the server selector in the page header scop
 
 When multiple servers are connected, the **Deduplicate stats across servers** setting in **Settings → General** controls how items are counted:
 
-- **On**: Media that exists on multiple servers is counted once. Artists and albums are counted by name, as the music library groups them, so an artist whose albums are spread across servers counts once
+- **On**: Media that exists on multiple servers is counted once. Artists and albums are counted by name, as the music library groups them, so an artist whose albums are spread across servers counts once. **Top Played** lists each title once, with the plays of all its copies added together — a film watched on one server counts even when another server's copy is the one the library shows
 - **Off**: Every copy on every server is counted separately
 
 <Aside>

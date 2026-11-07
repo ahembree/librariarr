@@ -129,13 +129,14 @@ describe("detail child lists by item id", () => {
     }
   });
 
-  it("answers an empty list for a record that names no season or album", async () => {
+  it("answers an empty list for an episode of no show, and a track with no album's artist's Unknown Album", async () => {
     const orphanEpisode = await createTestMediaItem(seriesLib, { type: "SERIES", title: "Lost", parentTitle: null, seriesKey: null });
     const looseTrack = await createTestMediaItem(musicLib, { type: "MUSIC", title: "Loose", parentTitle: "Band" });
     await prisma.mediaItem.update({ where: { id: looseTrack.id }, data: { albumTitle: null } });
 
     expect((await read(seriesGet, `/api/media/series?itemId=${orphanEpisode.id}`)).items).toEqual([]);
-    expect((await read(musicGet, `/api/media/music?itemId=${looseTrack.id}`)).items).toEqual([]);
+    // The album listings show it on an "Unknown Album" card, which opens here.
+    expect((await read(musicGet, `/api/media/music?itemId=${looseTrack.id}`)).items).toMatchObject([{ id: looseTrack.id }]);
   });
 
   describe("season and album summaries", () => {

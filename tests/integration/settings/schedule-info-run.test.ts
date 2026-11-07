@@ -26,6 +26,7 @@ const { mockEnqueueJob } = vi.hoisted(() => ({
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
 
 import { POST } from "@/app/api/settings/schedule-info/run/route";
+import { beginSyncRun, endSyncRun } from "@/lib/sync/live-sync-runs";
 import {
   TASK_SYNC_SERVER,
   TASK_LIFECYCLE_DETECTION,
@@ -98,10 +99,15 @@ describe("POST /api/settings/schedule-info/run", () => {
     const enabled = await createTestServer(user.id, { name: "Enabled" });
     await createTestServer(user.id, { name: "Disabled", enabled: false });
     const busy = await createTestServer(user.id, { name: "Busy" });
-    await prisma.syncJob.create({ data: { mediaServerId: busy.id, status: "RUNNING" } });
+    const running = await prisma.syncJob.create({ data: { mediaServerId: busy.id, status: "RUNNING" } });
+    beginSyncRun(running.id);
 
-    const res = await callRoute(POST, { method: "POST", body: { job: "sync" } });
-    await expectJson(res, 200);
+    try {
+      const res = await callRoute(POST, { method: "POST", body: { job: "sync" } });
+      await expectJson(res, 200);
+    } finally {
+      endSyncRun(running.id);
+    }
 
     // Only the one enabled, idle server is enqueued.
     expect(mockEnqueueJob).toHaveBeenCalledTimes(1);

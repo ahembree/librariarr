@@ -47,7 +47,7 @@ const {
     mockEnqueueJob: vi.fn<(identifier: string, payload: unknown, spec?: unknown) => Promise<boolean>>(
       async () => true,
     ),
-    mockEmitUpdated: vi.fn<(serverId: string, meta?: Record<string, unknown>) => Promise<void>>(
+    mockEmitUpdated: vi.fn<(serverId: string) => Promise<void>>(
       async () => {},
     ),
   };
@@ -146,7 +146,7 @@ describe("syncWatchHistory", () => {
       // that is not a full sync asks for no server-wide pass on top. Open pages
       // are told the plays moved.
       expect(mockReconcile).not.toHaveBeenCalled();
-      expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 7 });
+      expect(mockEmitUpdated).toHaveBeenCalledExactlyOnceWith("server-1");
     });
 
     it("reconciles the whole server after the import when the full sync asks for it, even with nothing imported", async () => {
@@ -309,7 +309,7 @@ describe("syncWatchHistory", () => {
     expect(params).not.toContain("User2");
     // Timestamps go as UTC ISO text, cast to timestamp(3) in SQL.
     expect(params).toEqual(expect.arrayContaining(["2024-01-01T00:00:00.000Z", "2024-01-02T00:00:00.000Z"]));
-    expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 2 });
+    expect(mockEmitUpdated).toHaveBeenCalledExactlyOnceWith("server-1");
   });
 
   it("handles entries in batches", async () => {
@@ -1079,7 +1079,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     expect(result).toEqual({ count: 1 });
-    expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 1 });
+    expect(mockEmitUpdated).toHaveBeenCalledExactlyOnceWith("server-1");
     // since = newest − 1h
     expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({
       since: new Date("2024-06-01T11:00:00.000Z"),

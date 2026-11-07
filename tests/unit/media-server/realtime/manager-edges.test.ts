@@ -96,21 +96,34 @@ describe("RealtimeManager — settings and reconcile failures", () => {
     mgr.stopAll();
   });
 
-  it("treats an unreadable setting as disabled and closes live connections", async () => {
+  // An unreadable setting used to read as "disabled": the pass stopped every
+  // connection and disposed every debouncer with its pending work — library
+  // changes handed back after a refused enqueue included — so a database
+  // outage longer than one 60 s tick lost them for good. A read that fails
+  // says nothing about what the DB wants, so the pass changes nothing; only an
+  // explicit `realtimeSync: false` or a removed/disabled server tears down.
+  it("keeps live connections when the setting cannot be read, and tries again next pass", async () => {
     const { f, sockets } = factory();
     const mgr = new RealtimeManager(f);
     await mgr.reconcile();
     expect(sockets).toHaveLength(1);
 
     h.appSettings.findFirst.mockRejectedValue(new Error("db down"));
+    await expect(mgr.reconcile()).resolves.toBeUndefined();
+    expect(sockets[0].closed).toBe(false);
+    expect(mgr.getStatuses().map((s) => s.serverId)).toEqual(["j1"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Realtime",
+      "Could not read the realtime setting or the server list — keeping 1 connection(s) and " +
+        "their pending work as they are; the next reconcile tries again",
+      { error: "Error: db down" },
+    );
+
+    // The next pass reads again, and an explicit "off" still tears down.
+    h.appSettings.findFirst.mockResolvedValue({ realtimeSync: false });
     await mgr.reconcile();
     expect(sockets[0].closed).toBe(true);
     expect(mgr.getStatuses()).toEqual([]);
-    expect(logger.debug).toHaveBeenCalledWith(
-      "Realtime",
-      "Could not read realtime setting; treating as disabled",
-      { error: "Error: db down" },
-    );
   });
 
   it("logs and keeps existing connections when the server list cannot be read", async () => {
@@ -120,9 +133,54 @@ describe("RealtimeManager — settings and reconcile failures", () => {
 
     h.mediaServer.findMany.mockRejectedValue(new Error("boom"));
     await expect(mgr.reconcile()).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalledWith("Realtime", "Reconcile failed", { error: "Error: boom" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Realtime",
+      expect.stringContaining("Could not read the realtime setting or the server list"),
+      { error: "Error: boom" },
+    );
     expect(sockets[0].closed).toBe(false);
     expect(mgr.getStatuses()).toHaveLength(1);
+    mgr.stopAll();
+  });
+
+  it("delivers a refused batch once the database is back, across a reconcile during the outage", async () => {
+    const { f, sockets } = factory();
+    const mgr = new RealtimeManager(f);
+    await mgr.reconcile();
+
+    // The outage begins: the queue refuses the batch, which goes back to the
+    // accumulator with its debouncer re-armed.
+    h.enqueueJob.mockResolvedValue(false);
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"], ItemsRemoved: ["gone"] } });
+    sockets[0].fire({ MessageType: "UserDataChanged" });
+    vi.advanceTimersByTime(30_000);
+    await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
+    expect(h.enqueueJob.mock.calls.map((c) => c[0]).sort()).toEqual(
+      [TASK_SYNC_INCREMENTAL, TASK_SYNC_WATCH_HISTORY].sort(),
+    );
+
+    // The 60 s reconcile tick lands while the database is still down.
+    h.appSettings.findFirst.mockRejectedValue(new Error("db down"));
+    await mgr.reconcile();
+    expect(sockets[0].closed).toBe(false);
+
+    // The database is back: the next retries are queued, ids and refresh intact.
+    h.appSettings.findFirst.mockResolvedValue({ realtimeSync: true });
+    h.enqueueJob.mockClear();
+    h.enqueueJob.mockResolvedValue(true);
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_INCREMENTAL,
+      { serverId: "j1", changedIds: ["a"], removedIds: ["gone"] },
+      { queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    expect(h.enqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_WATCH_HISTORY,
+      { serverId: "j1", incremental: true },
+      { jobKey: "watch-history:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    await mgr.reconcile();
+    expect(sockets[0].closed).toBe(false);
     mgr.stopAll();
   });
 
@@ -219,7 +277,7 @@ describe("RealtimeManager — side-effect edges", () => {
     mgr.stopAll();
   });
 
-  it("logs nothing when an enqueue reports it did not queue", async () => {
+  it("logs nothing when an enqueue reports it did not queue, and retries after a quiet window", async () => {
     h.enqueueJob.mockResolvedValue(false);
     const { f, sockets } = factory();
     const mgr = new RealtimeManager(f);
@@ -236,6 +294,78 @@ describe("RealtimeManager — side-effect edges", () => {
     // once they have all settled here its handlers have run.
     await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
     expect(logger.info).not.toHaveBeenCalledWith("Realtime", expect.stringContaining("Enqueued"));
+
+    // Neither batch was dropped: each is retried once its quiet window passes.
+    h.enqueueJob.mockClear();
+    h.enqueueJob.mockResolvedValue(true);
+    vi.advanceTimersByTime(5_000);
+    expect(h.enqueueJob).toHaveBeenCalledExactlyOnceWith(
+      TASK_SYNC_SERVER,
+      { serverId: "j1", trigger: "realtime library change: 151 changed item(s) exceeds the 100-item incremental limit" },
+      { jobKey: "sync:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    vi.advanceTimersByTime(25_000);
+    expect(h.enqueueJob).toHaveBeenLastCalledWith(
+      TASK_SYNC_WATCH_HISTORY,
+      { serverId: "j1", incremental: true },
+      { jobKey: "watch-history:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+    mgr.stopAll();
+  });
+
+  it("merges a refused batch with the ids that arrived meanwhile, and waits a quiet window to retry", async () => {
+    let refuse!: (ok: boolean) => void;
+    h.enqueueJob.mockReturnValueOnce(new Promise<boolean>((r) => (refuse = r)));
+    const { f, sockets } = factory();
+    const mgr = new RealtimeManager(f);
+    await mgr.reconcile();
+
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"], ItemsRemoved: ["gone"] } });
+    vi.advanceTimersByTime(5_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(1);
+    // A new change arrives while the enqueue is still out.
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["b"] } });
+    refuse(false);
+    await h.enqueueJob.mock.results[0].value;
+
+    // No hot loop: nothing is retried before the quiet window closes.
+    vi.advanceTimersByTime(4_999);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+    const [task, payload] = h.enqueueJob.mock.calls[1];
+    expect(task).toBe(TASK_SYNC_INCREMENTAL);
+    expect({ ...payload, changedIds: [...payload.changedIds].sort() }).toEqual({
+      serverId: "j1",
+      changedIds: ["a", "b"],
+      removedIds: ["gone"],
+    });
+    mgr.stopAll();
+  });
+
+  it("does not retry a refused batch or refresh for a server removed meanwhile", async () => {
+    let refuseSync!: (ok: boolean) => void;
+    let refuseWatch!: (ok: boolean) => void;
+    h.enqueueJob
+      .mockReturnValueOnce(new Promise<boolean>((r) => (refuseSync = r)))
+      .mockReturnValueOnce(new Promise<boolean>((r) => (refuseWatch = r)));
+    const { f, sockets } = factory();
+    const mgr = new RealtimeManager(f);
+    await mgr.reconcile();
+
+    sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: ["a"] } });
+    sockets[0].fire({ MessageType: "UserDataChanged" });
+    vi.advanceTimersByTime(30_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
+
+    h.mediaServer.findMany.mockResolvedValue([]);
+    await mgr.reconcile();
+    refuseSync(false);
+    refuseWatch(false);
+    await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(h.enqueueJob).toHaveBeenCalledTimes(2);
     mgr.stopAll();
   });
 

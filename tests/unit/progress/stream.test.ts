@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createGunzip, gunzipSync } from "node:zlib";
-import { progressStreamResponse } from "@/lib/progress/stream";
+import { progressStreamResponse, HEARTBEAT_INTERVAL_MS } from "@/lib/progress/stream";
 
 async function readLines(response: Response): Promise<Array<Record<string, unknown>>> {
   const text = await response.text();
@@ -12,6 +12,33 @@ async function readLines(response: Response): Promise<Array<Record<string, unkno
 }
 
 describe("progressStreamResponse", () => {
+  // A slow run writes nothing for minutes; the heartbeat keeps reverse proxies
+  // from closing the idle stream, and stops once the run settles.
+  it("writes heartbeats while the run is quiet, none while it is busy or after it ends", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (v: { ok: true }) => void;
+      let emitNow!: (u: { type: "phase"; key: string }) => void;
+      const response = progressStreamResponse((emit) => {
+        emitNow = emit;
+        return new Promise((r) => { finish = r; });
+      });
+      const text = response.text();
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      // Busy: an event every half interval leaves no gap for a heartbeat.
+      for (let i = 0; i < 4; i++) {
+        emitNow({ type: "phase", key: `p${i}` });
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS / 2);
+      }
+      finish({ ok: true });
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 3);
+      const types = (await text).split("\n").filter(Boolean).map((l) => JSON.parse(l).type);
+      expect(types).toEqual(["heartbeat", "heartbeat", "heartbeat", "phase", "phase", "phase", "phase", "result"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sets NDJSON streaming headers", () => {
     const response = progressStreamResponse(async () => ({ ok: true }));
     expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
@@ -72,7 +99,7 @@ describe("progressStreamResponse", () => {
       vi.useRealTimers();
     });
 
-    it("aborts the task's signal at the lifetime cap and sends no error line for it", async () => {
+    it("aborts the task's signal at the lifetime cap, and tells the reader still there why it ended", async () => {
       vi.useFakeTimers();
       let seen: AbortSignal | undefined;
       const response = progressStreamResponse(
@@ -88,8 +115,25 @@ describe("progressStreamResponse", () => {
       expect(seen?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(seen?.aborted).toBe(true);
-      // Nobody is left to read an error, so the stream just ends.
-      expect(await read).toEqual([]);
+      // The client is still reading: it gets the reason, not a stream that
+      // ends without a result.
+      expect(await read).toEqual([{ type: "error", message: "aborted" }]);
+    });
+
+    it("still sends the error of a run that goes on past the lifetime cap and fails", async () => {
+      vi.useFakeTimers();
+      let fail!: (error: Error) => void;
+      // Ignores the signal (as a lifecycle Execute does: it must not stop
+      // half-way through a delete).
+      const response = progressStreamResponse(
+        () => new Promise((_resolve, reject) => { fail = reject; }),
+        { maxLifetimeMs: 1_000 },
+      );
+      const read = readLines(response);
+      await vi.advanceTimersByTimeAsync(5_000);
+      fail(new Error("database went away"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await read).toContainEqual({ type: "error", message: "database went away" });
     });
 
     it("aborts the task's signal when the request's signal aborts", async () => {

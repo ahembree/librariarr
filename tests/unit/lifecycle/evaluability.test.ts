@@ -73,6 +73,64 @@ describe("checkLifecycleRuleEvaluability", () => {
     mockServerFindMany.mockResolvedValue([]);
   });
 
+  describe("per-episode and per-track criteria at series or artist scope", () => {
+    it("skips a series- or artist-scoped rule set using one, transiently and before any lookup", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      for (const [type, member] of [["SERIES", "episode"], ["MUSIC", "track"]] as const) {
+        const result = await checkLifecycleRuleEvaluability("u1", type, groupsWith("resolution"), ["s1"], null, true);
+        expect(result).toEqual({
+          evaluable: false,
+          // An edit resolves it: matches and actions are left in place (held).
+          permanent: false,
+          reason: expect.stringMatching(new RegExp(`^This rule set uses per-${member} criteria \\(Resolution\\)`)),
+        });
+      }
+      expect(mockHasEnabledArrInstances).not.toHaveBeenCalled();
+      expect(mockServerFindMany).not.toHaveBeenCalled();
+    });
+
+    it("reads an omitted scope as on, the rule set default", async () => {
+      const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("year"));
+      expect(result.evaluable).toBe(false);
+    });
+
+    it("evaluates the same rules with the scope off, and on a movie rule set", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false)).toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "MUSIC", groupsWith("audioCodec"), ["s1"], null, false)).toEqual({ evaluable: true });
+      expect(await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("resolution"), ["s1"], null, true)).toEqual({ evaluable: true });
+    });
+
+    it("evaluates show-level criteria with the scope on", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("title"), ["s1"], null, true)).toEqual({ evaluable: true });
+    });
+
+    it("skips one whose genre, content rating or studio is read at series scope: episodes carry their own", async () => {
+      for (const field of ["genre", "contentRating", "studio", "labels", "isWatchlisted"]) {
+        const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), ["s1"], null, true);
+        expect(result.evaluable, field).toBe(false);
+      }
+    });
+
+    it("skips one whose action acts on the whole show while its scope is off, with the reason", async () => {
+      const deleteSeries = { actionEnabled: true, actionType: "DELETE_SONARR", addArrTags: [], removeArrTags: [], searchAfterAction: false };
+      const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false, deleteSeries);
+      expect(result).toEqual({
+        evaluable: false,
+        permanent: false,
+        reason: expect.stringMatching(/^This rule set's action \("Delete from Sonarr"\) acts on the whole show but follows per-episode criteria \(Resolution\) with series scope off/),
+      });
+      // An action on the matched episodes only, or the action turned off, is evaluated.
+      for (const action of [
+        { ...deleteSeries, actionType: "DELETE_FILES_SONARR" },
+        { ...deleteSeries, actionEnabled: false },
+      ]) {
+        expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false, action)).toEqual({ evaluable: true });
+      }
+      // Left out, only the scope is judged.
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("resolution"), ["s1"], null, false)).toEqual({ evaluable: true });
+    });
+  });
+
   it("is evaluable for plain DB rules without touching instance lookups", async () => {
     const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("title"));
     expect(result).toEqual({ evaluable: true });
@@ -106,6 +164,70 @@ describe("checkLifecycleRuleEvaluability", () => {
       expect(result.permanent).toBe(false);
       expect(result.reason).toMatch(/instance "Radarr 4K" is disabled/);
     }
+  });
+
+  describe("season and episode criteria", () => {
+    // Criteria of one episode under the group-scope gate, like Resolution:
+    // skipped (transient — the actions are held, `actionHoldOf`) at series
+    // scope and under an action on the whole series.
+    it.each(["seasonNumber", "episodeNumber", "seasonsBehindLatest"])(
+      "refuses %s on a SERIES rule set in series scope, transiently",
+      async (field) => {
+        const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), undefined, undefined, true);
+        if (result.evaluable) throw new Error("expected not evaluable");
+        expect(result.permanent).toBe(false);
+        expect(result.reason).toMatch(/per-episode criteria/);
+        expect(result.reason).toMatch(/turn series scope off/);
+      },
+    );
+
+    it.each(["seasonNumber", "episodeNumber", "seasonsBehindLatest"])(
+      "refuses %s with series scope off under an action on the whole series",
+      async (field) => {
+        for (const action of [
+          { actionEnabled: true, actionType: "DELETE_SONARR" },
+          { actionEnabled: true, actionType: "MONITOR_DELETE_FILES_SONARR" },
+          { actionEnabled: true, actionType: "DELETE_FILES_SONARR", addArrTags: ["old"], removeArrTags: ["keep"] },
+        ]) {
+          const result = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith(field), undefined, undefined, false, action);
+          if (result.evaluable) throw new Error(`expected not evaluable under ${JSON.stringify(action)}`);
+          expect(result.permanent).toBe(false);
+        }
+      },
+    );
+
+    it("evaluates them with series scope off under an action on the matched episodes, or none", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("seasonNumber"), undefined, undefined, false))
+        .toEqual({ evaluable: true });
+      for (const actionType of ["DELETE_FILES_SONARR", "UNMONITOR_SONARR", "SEARCH_SONARR"]) {
+        expect(await checkLifecycleRuleEvaluability(
+          "u1", "SERIES", groupsWith("seasonsBehindLatest"), undefined, undefined, false, { actionEnabled: true, actionType },
+        )).toEqual({ evaluable: true });
+      }
+    });
+
+    it("reads a scope left out as on, so a caller that forgets it refuses them", async () => {
+      expect((await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("seasonNumber"))).evaluable).toBe(false);
+    });
+
+    it("ignores series scope for rule sets without them, and refuses them on music at artist scope too", async () => {
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("title"), undefined, undefined, true))
+        .toEqual({ evaluable: true });
+      // A track keeps its disc and track numbers in those columns; the gate
+      // blocks them at artist scope as well (the save refuses them as invalid
+      // for music already).
+      expect((await checkLifecycleRuleEvaluability("u1", "MUSIC", groupsWith("seasonNumber"), undefined, undefined, true)).evaluable)
+        .toBe(false);
+    });
+
+    it("counts a disabled per-episode rule: it is one click from being evaluated", async () => {
+      const rules = groupsWith("seasonNumber");
+      rules[0].rules[0].enabled = false;
+      rules[0].rules.push({ id: "r2", field: "title", operator: "contains", value: "x", condition: "AND" });
+      expect((await checkLifecycleRuleEvaluability("u1", "SERIES", rules, undefined, undefined, true)).evaluable).toBe(false);
+      expect(await checkLifecycleRuleEvaluability("u1", "SERIES", rules, undefined, undefined, false))
+        .toEqual({ evaluable: true });
+    });
   });
 
   it("names the right Arr family per library type", async () => {

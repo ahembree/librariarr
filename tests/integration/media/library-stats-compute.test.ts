@@ -88,6 +88,86 @@ describe("computeLibraryStats", () => {
     expect(all.totalSize).toBe("150");
   });
 
+  describe("most played with dedup on", () => {
+    /** Two servers, each with a library of `type`. */
+    async function twoServers(type: "MOVIE" | "SERIES" | "MUSIC") {
+      const user = await createTestUser();
+      const a = await createTestServer(user.id, { name: "A" });
+      const b = await createTestServer(user.id, { name: "B" });
+      return {
+        serverIds: [a.id, b.id],
+        libA: (await createTestLibrary(a.id, { type })).id,
+        libB: (await createTestLibrary(b.id, { type })).id,
+      };
+    }
+
+    async function copy(
+      lib: string,
+      dedupKey: string,
+      canonical: boolean,
+      fields: Parameters<typeof createTestMediaItem>[1],
+    ) {
+      const row = await createTestMediaItem(lib, fields);
+      await getTestPrisma().mediaItem.update({ where: { id: row.id }, data: { dedupKey, dedupCanonical: canonical } });
+      return row;
+    }
+
+    it("lists a film canonical on one server and watched on another, once, under its canonical copy", async () => {
+      const { serverIds, libA, libB } = await twoServers("MOVIE");
+      const canonical = await copy(libA, "movie:tmdb:1", true, { title: "Heat", year: 1995, playCount: 0 });
+      await copy(libB, "movie:tmdb:1", false, { title: "Heat", year: 1995, playCount: 10 });
+      // Both copies played: the plays add up, the title still listed once.
+      const both = await copy(libA, "movie:tmdb:2", true, { title: "Ronin", year: 1998, playCount: 3 });
+      await copy(libB, "movie:tmdb:2", false, { title: "Ronin", year: 1998, playCount: 4 });
+      // A film on one server only, with no dedup key.
+      const alone = await createTestMediaItem(libB, { title: "Thief", year: 1981, playCount: 1 });
+      await getTestPrisma().mediaItem.update({ where: { id: alone.id }, data: { dedupKey: null } });
+
+      const stats = await computeLibraryStats(serverIds, true);
+      expect(stats.topMovies).toEqual([
+        { id: canonical.id, title: "Heat", year: 1995, playCount: 10, thumbUrl: null },
+        { id: both.id, title: "Ronin", year: 1998, playCount: 7, thumbUrl: null },
+        { id: alone.id, title: "Thief", year: 1981, playCount: 1, thumbUrl: null },
+      ]);
+    });
+
+    it("sums a show's and an artist's plays over every copy and links a canonical copy", async () => {
+      const show = await twoServers("SERIES");
+      const canonicalEp = await copy(show.libA, "series:tvdb:7:s1e1", true, {
+        type: "SERIES", title: "Pilot", parentTitle: "Lost", seriesKey: "tvdb:7", seasonNumber: 1, episodeNumber: 1, playCount: 1,
+      });
+      await copy(show.libB, "series:tvdb:7:s1e1", false, {
+        type: "SERIES", title: "Pilot", parentTitle: "Lost", seriesKey: "tvdb:7", seasonNumber: 1, episodeNumber: 1, playCount: 5,
+      });
+      // An episode whose only plays are on its non-canonical copy.
+      await copy(show.libA, "series:tvdb:7:s1e2", true, {
+        type: "SERIES", title: "Two", parentTitle: "Lost", seriesKey: "tvdb:7", seasonNumber: 1, episodeNumber: 2, playCount: 0,
+      });
+      await copy(show.libB, "series:tvdb:7:s1e2", false, {
+        type: "SERIES", title: "Two", parentTitle: "Lost", seriesKey: "tvdb:7", seasonNumber: 1, episodeNumber: 2, playCount: 2,
+      });
+
+      const showStats = await computeLibraryStats(show.serverIds, true);
+      expect(showStats.topSeries).toEqual([
+        { parentTitle: "Lost", totalPlays: 8, thumbUrl: null, mediaItemId: canonicalEp.id },
+      ]);
+
+      await cleanDatabase();
+      const music = await twoServers("MUSIC");
+      const canonicalTrack = await copy(music.libA, "track:air:moon safari:la femme", true, {
+        type: "MUSIC", title: "La Femme d'Argent", parentTitle: "Air", albumTitle: "Moon Safari", playCount: 0,
+      });
+      await copy(music.libB, "track:air:moon safari:la femme", false, {
+        type: "MUSIC", title: "La Femme d'Argent", parentTitle: "Air", albumTitle: "Moon Safari", playCount: 6,
+      });
+
+      const musicStats = await computeLibraryStats(music.serverIds, true);
+      expect(musicStats.topMusic).toEqual([
+        { parentTitle: "Air", totalPlays: 6, mediaItemId: canonicalTrack.id, thumbUrl: null },
+      ]);
+    });
+  });
+
   it("with dedup on but no canonical rows falls back to every copy's total size", async () => {
     const { server, movies } = await setup();
     const prisma = getTestPrisma();

@@ -17,17 +17,33 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from "@/components/rule-builder";
+import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules, groupScopeGateOf } from "@/components/rule-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules, groupScopeViolation } from "@/lib/conditions";
+import {
+  ActionTypeSelect,
+  BlockedReason,
+  EvaluationScopeCard,
+  PreviewRuleSetButton,
+  SaveRuleSetButton,
+  TestMediaButton,
+  actionTypeOptionStates,
+  groupScopeBlockedReason,
+  wholeRecordSwitchReason,
+  type ScopeConfig,
+} from "@/components/rule-scope-gate";
+import { responseErrorMessage } from "@/lib/api/error-message";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { releasesStoredMatches } from "@/lib/lifecycle/rule-set-matching";
+import { ArrTagPicker } from "@/components/arr-tag-picker";
+import { withoutTags } from "@/lib/lifecycle/arr-tag-lists";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -52,7 +68,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Save, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, FileText, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -189,15 +205,6 @@ interface RuleSetExport {
   discordNotifyOnMatch?: boolean;
   stickyMatches?: boolean;
   serverIds?: string[];
-}
-
-interface ScopeConfig {
-  id: string;
-  label: string;
-  enabledDescription: string;
-  disabledDescription: string;
-  ruleSetEnabledLabel: string;
-  ruleSetDisabledLabel: string;
 }
 
 interface ActionTypeOption {
@@ -362,7 +369,6 @@ export function LifecycleRulePage({
   const [addArrTags, setAddArrTags] = useState<string[]>([]);
   const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
   const [manageTagsEnabled, setManageTagsEnabled] = useState(false);
-  const [tagMode, setTagMode] = useState<"add" | "remove">("add");
   const arrType = arrTypeForMediaType(mediaType);
   const arrInstances = editorData.integrations?.[arrType] ?? [];
   // Seerr data is never read for music (its fields are invalid there).
@@ -399,6 +405,50 @@ export function LifecycleRulePage({
   // is the SAME shared predicate the server-side guard triggers on, so the
   // banner can't come to a different conclusion about which rules count.
   const ruleUsesPlayActivity = useMemo(() => hasPlayActivityRules(groups), [groups]);
+  // A criterion describing one episode or track may never make a whole show
+  // or artist the action's target: with series or artist scope on a rule
+  // judges a whole show or artist, and with it off an action acting on the
+  // whole show or artist (Delete from Sonarr, Arr tags, …) may not follow
+  // such a criterion either — the same predicate the server refuses the save
+  // with and skips detection on (`groupScopeViolation`). While the rule set
+  // breaks it, the scope card warns with the valid ways out, and Save, Preview
+  // and Test Media stay off with the reason.
+  const hasScope = !!scopeConfig;
+  // The action as a save would send it (a whole-record delete sends no tags).
+  const savedAction = useMemo(
+    () => ({
+      actionEnabled,
+      actionType: actionType || null,
+      addArrTags: deletesArrRecord(actionType) ? [] : addArrTags,
+      removeArrTags: deletesArrRecord(actionType) ? [] : removeArrTags,
+      searchAfterAction,
+    }),
+    [actionEnabled, actionType, addArrTags, removeArrTags, searchAfterAction],
+  );
+  const scopeViolation = useMemo(
+    () => (hasScope ? groupScopeViolation(mediaType, seriesScope, groups, savedAction) : null),
+    [hasScope, mediaType, seriesScope, groups, savedAction],
+  );
+  const scopeBlockedReason = scopeViolation ? groupScopeBlockedReason(scopeViolation) : null;
+  // The builder's gate: per-episode/per-track criteria are disabled while the
+  // rule set judges whole shows or artists, or while its action acts on them.
+  const builderGroupScope = useMemo(
+    () => (hasScope ? groupScopeGateOf(mediaType, seriesScope, savedAction) : null),
+    [hasScope, mediaType, seriesScope, savedAction],
+  );
+  // With the scope off, an action on the whole show or artist may not follow
+  // per-episode/per-track criteria: the action picker offers such actions,
+  // and the Arr tags switch and Lidarr's search after (which make any action
+  // act on the whole record), disabled with the reason while they would.
+  const actionTypeOptions = useMemo(
+    () => actionTypeOptionStates(hasScope ? mediaType : "MOVIE", seriesScope, groups, actionTypes, !!arrInstanceId),
+    [hasScope, mediaType, seriesScope, groups, actionTypes, arrInstanceId],
+  );
+  const tagsBlockedReason = hasScope ? wholeRecordSwitchReason(mediaType, seriesScope, groups, "Arr tags") : null;
+  const searchAfterBlockedReason =
+    hasScope && actionType === "DELETE_FILES_LIDARR"
+      ? wholeRecordSwitchReason(mediaType, seriesScope, groups, "Search after")
+      : null;
 
   // Recycle bin safety check
   const [recycleBinStatus, setRecycleBinStatus] = useState<{
@@ -508,16 +558,20 @@ export function LifecycleRulePage({
   // Whether rule logic (rules/scope/servers) changed vs only config fields.
   // With Arr criteria the Arr instance is rule logic too: the criteria are read
   // from it, so the matches judged on the old one must not be kept (the PUT
-  // clears them in that case whatever this sends).
+  // clears them in that case whatever this sends). Turning sticky matches off
+  // or enabling the rule set again counts too (`releasesStoredMatches`): the
+  // PUT holds the actions until detection re-checks the stored matches, so the
+  // save offers "Save and re-detect" and says what "Save only" holds.
   const rulesChanged = useMemo(() => {
     if (!snapshot) return true;
     return (
       snapshot.groups !== JSON.stringify(groups) ||
       snapshot.seriesScope !== seriesScope ||
       snapshot.serverIds !== JSON.stringify([...serverIds].sort()) ||
-      (ruleUsesArr && snapshot.arrInstanceId !== arrInstanceId)
+      (ruleUsesArr && snapshot.arrInstanceId !== arrInstanceId) ||
+      releasesStoredMatches(snapshot, { stickyMatches, enabled })
     );
-  }, [snapshot, groups, seriesScope, serverIds, ruleUsesArr, arrInstanceId]);
+  }, [snapshot, groups, seriesScope, serverIds, ruleUsesArr, arrInstanceId, stickyMatches, enabled]);
 
   // The saved targetQualityProfileId no longer exists on the selected Arr
   // instance (e.g. the user deleted the profile from Sonarr/Radarr/Lidarr,
@@ -860,8 +914,10 @@ export function LifecycleRulePage({
       }
 
       if (!response.ok) {
-        const data = await response.json();
-        setSaveError(data.error || "Failed to save rule set");
+        const data = await response.json().catch(() => null);
+        // A refused validation names the problem in its first detail (a
+        // per-episode criterion at series scope, say).
+        setSaveError(responseErrorMessage(data, "Failed to save rule set"));
         return;
       }
       const data = await response.json();
@@ -953,11 +1009,14 @@ export function LifecycleRulePage({
     resetPreviewProgress();
     try {
       // arrInstanceId: Arr criteria are read from the rule set's own instance.
+      // The action as a save would send it: the routes refuse per-episode
+      // criteria under an action on the whole show, as the save does.
       const previewBody: Record<string, unknown> = {
         rules: groups,
         type: mediaType,
         serverIds,
         arrInstanceId: arrInstanceId || null,
+        ...savedAction,
         ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
       };
       if (scopeConfig) {
@@ -977,7 +1036,7 @@ export function LifecycleRulePage({
         ? fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...previewBody, actionEnabled, actionType }),
+            body: JSON.stringify(previewBody),
           }).catch(() => null)
         : null;
 
@@ -1119,7 +1178,6 @@ export function LifecycleRulePage({
     setAddArrTags(ruleSet.addArrTags ?? []);
     setRemoveArrTags(ruleSet.removeArrTags ?? []);
     setManageTagsEnabled((ruleSet.addArrTags ?? []).length > 0 || (ruleSet.removeArrTags ?? []).length > 0);
-    setTagMode((ruleSet.addArrTags ?? []).length > 0 ? "add" : (ruleSet.removeArrTags ?? []).length > 0 ? "remove" : "add");
     setPreview([]);
 
     // Collection: settings come from the linked collection definition (the
@@ -1295,7 +1353,6 @@ export function LifecycleRulePage({
     setAddArrTags([]);
     setRemoveArrTags([]);
     setManageTagsEnabled(false);
-    setTagMode("add");
     setCollectionEnabled(false);
     setSelectedCollectionId("");
     setCollectionName("");
@@ -1380,7 +1437,6 @@ export function LifecycleRulePage({
       setAddArrTags(data.addArrTags ?? []);
       setRemoveArrTags(data.removeArrTags ?? []);
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
-      setTagMode((data.addArrTags ?? []).length > 0 ? "add" : (data.removeArrTags ?? []).length > 0 ? "remove" : "add");
       // Imported collection settings populate a fresh collection definition;
       // saving creates a collection of that name, and the create route
       // answers 409 when one exists (the user then picks it in the dropdown).
@@ -1471,10 +1527,11 @@ export function LifecycleRulePage({
           seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
           seerrUnreachable={seerrUnreachable}
           libraryType={mediaType}
+          groupScope={builderGroupScope}
         />
       </BuilderWithPseudocode>
     ),
-    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable],
+    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable, builderGroupScope],
   );
 
   return (
@@ -1677,25 +1734,12 @@ export function LifecycleRulePage({
 
           {/* Evaluation Scope (series/music only) */}
           {scopeConfig && (
-            <div className="rounded-lg border p-4">
-              <div className="flex items-center gap-3">
-                <Switch
-                  id={scopeConfig.id}
-                  checked={seriesScope}
-                  onCheckedChange={setSeriesScope}
-                />
-                <div>
-                  <Label htmlFor={scopeConfig.id} className="font-medium">
-                    {scopeConfig.label}
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {seriesScope
-                      ? scopeConfig.enabledDescription
-                      : scopeConfig.disabledDescription}
-                  </p>
-                </div>
-              </div>
-            </div>
+            <EvaluationScopeCard
+              config={scopeConfig}
+              seriesScope={seriesScope}
+              onSeriesScopeChange={setSeriesScope}
+              violation={scopeViolation}
+            />
           )}
 
           <IntegrationUnreachableBanner
@@ -1727,43 +1771,13 @@ export function LifecycleRulePage({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
                     <Label>Action type</Label>
-                    <Select
-                      value={actionType}
-                      onValueChange={setActionType}
-                    >
-                      <SelectTrigger className="mt-1.5">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {actionTypes.map((opt) => {
-                          const needsArr = opt.value !== "DO_NOTHING";
-                          const disabled = needsArr && !arrInstanceId;
-                          if (disabled) {
-                            return (
-                              <TooltipProvider key={opt.value}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <div>
-                                      <SelectItem value={opt.value} disabled>
-                                        {opt.label}
-                                      </SelectItem>
-                                    </div>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left">
-                                    Select an Arr server above to enable this action
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            );
-                          }
-                          return (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <ActionTypeSelect value={actionType} onValueChange={setActionType} options={actionTypeOptions} />
+                    {scopeViolation?.judgement === "member" && (
+                      <p role="alert" className="mt-2 text-xs text-amber flex items-start gap-1.5">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        {scopeBlockedReason}
+                      </p>
+                    )}
                     {recycleBinStatus?.enabled === false && isDestructiveAction(actionType) && (
                       <p className="mt-2 text-xs text-amber flex items-center gap-1.5">
                         <AlertTriangle className="h-3.5 w-3.5" />
@@ -1865,11 +1879,16 @@ export function LifecycleRulePage({
 
                 {actionType.includes("DELETE_FILES") && (
                   <div className="flex items-center gap-3">
-                    <Switch
-                      id="search-after-file-delete"
-                      checked={searchAfterAction}
-                      onCheckedChange={setSearchAfterAction}
-                    />
+                    {/* Lidarr searches the whole artist after a file delete:
+                        offered off while it would follow per-track criteria. */}
+                    <BlockedReason reason={!searchAfterAction ? searchAfterBlockedReason : null}>
+                      <Switch
+                        id="search-after-file-delete"
+                        checked={searchAfterAction}
+                        onCheckedChange={setSearchAfterAction}
+                        disabled={!searchAfterAction && !!searchAfterBlockedReason}
+                      />
+                    </BlockedReason>
                     <Label htmlFor="search-after-file-delete">
                       Search for new copy after file deletion
                     </Label>
@@ -1910,20 +1929,25 @@ export function LifecycleRulePage({
 
                 {/* Manage Tags */}
                 <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      id="manage-tags"
-                      checked={manageTagsEnabled}
-                      onCheckedChange={(checked) => {
-                        setManageTagsEnabled(checked);
-                        if (!checked) {
-                          setAddArrTags([]);
-                          setRemoveArrTags([]);
-                        }
-                      }}
-                      disabled={deletesArrRecord(actionType) || !arrInstanceId}
-                    />
-                    <Label htmlFor="manage-tags" className={(deletesArrRecord(actionType) || !arrInstanceId) ? "text-muted-foreground" : ""}>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Tags are set on the whole series or artist: offered
+                        off while they would follow per-episode/per-track
+                        criteria (an existing tag list can still be cleared). */}
+                    <BlockedReason reason={!manageTagsEnabled && !deletesArrRecord(actionType) && arrInstanceId ? tagsBlockedReason : null}>
+                      <Switch
+                        id="manage-tags"
+                        checked={manageTagsEnabled}
+                        onCheckedChange={(checked) => {
+                          setManageTagsEnabled(checked);
+                          if (!checked) {
+                            setAddArrTags([]);
+                            setRemoveArrTags([]);
+                          }
+                        }}
+                        disabled={deletesArrRecord(actionType) || !arrInstanceId || (!manageTagsEnabled && !!tagsBlockedReason)}
+                      />
+                    </BlockedReason>
+                    <Label htmlFor="manage-tags" className={(deletesArrRecord(actionType) || !arrInstanceId || (!manageTagsEnabled && !!tagsBlockedReason)) ? "text-muted-foreground" : ""}>
                       Manage Tags
                     </Label>
                     {deletesArrRecord(actionType) && (
@@ -1932,108 +1956,36 @@ export function LifecycleRulePage({
                     {!deletesArrRecord(actionType) && !arrInstanceId && (
                       <span className="text-xs text-muted-foreground">(select a {arrServiceName} server above)</span>
                     )}
+                    {!deletesArrRecord(actionType) && arrInstanceId && !manageTagsEnabled && tagsBlockedReason && (
+                      <span className="text-xs text-muted-foreground">(tags apply to the whole {mediaType === "MUSIC" ? "artist" : "show"})</span>
+                    )}
                   </div>
 
                   {manageTagsEnabled && !deletesArrRecord(actionType) && arrInstanceId && (
                     <div className="ml-7 space-y-3">
-                      <Select value={tagMode} onValueChange={(v) => setTagMode(v as "add" | "remove")}>
-                        <SelectTrigger className="w-full sm:w-56">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="add">Add Arr Tag(s)</SelectItem>
-                          <SelectItem value="remove">Remove Arr Tag(s)</SelectItem>
-                        </SelectContent>
-                      </Select>
-
-                      {/* Tag multi-select dropdown */}
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
-                            <span className="truncate text-muted-foreground">
-                              {(tagMode === "add" ? addArrTags : removeArrTags).length === 0
-                                ? "Select tags..."
-                                : `${(tagMode === "add" ? addArrTags : removeArrTags).length} tag${(tagMode === "add" ? addArrTags : removeArrTags).length === 1 ? "" : "s"} selected`}
-                            </span>
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                          <Command>
-                            <CommandInput placeholder="Search or type new tag..." />
-                            <CommandList>
-                              <CommandEmpty>
-                                <button
-                                  className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded-sm"
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    const input = (e.currentTarget.closest("[cmdk-root]")?.querySelector("[cmdk-input]") as HTMLInputElement)?.value?.trim();
-                                    if (!input) return;
-                                    if (tagMode === "add") {
-                                      if (!addArrTags.includes(input)) setAddArrTags([...addArrTags, input]);
-                                    } else {
-                                      if (!removeArrTags.includes(input)) setRemoveArrTags([...removeArrTags, input]);
-                                    }
-                                  }}
-                                >
-                                  Add new tag
-                                </button>
-                              </CommandEmpty>
-                              <CommandGroup>
-                                {(distinctValues.arrTag ?? []).map((tag) => {
-                                  const selected = (tagMode === "add" ? addArrTags : removeArrTags).includes(tag);
-                                  return (
-                                    <CommandItem
-                                      key={tag}
-                                      value={tag}
-                                      onSelect={() => {
-                                        if (tagMode === "add") {
-                                          setAddArrTags(selected ? addArrTags.filter((t) => t !== tag) : [...addArrTags, tag]);
-                                        } else {
-                                          setRemoveArrTags(selected ? removeArrTags.filter((t) => t !== tag) : [...removeArrTags, tag]);
-                                        }
-                                      }}
-                                    >
-                                      <Check className={`mr-2 h-4 w-4 ${selected ? "opacity-100" : "opacity-0"}`} />
-                                      {tag}
-                                    </CommandItem>
-                                  );
-                                })}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-
-                      {/* Selected tag badges */}
-                      {(tagMode === "add" ? addArrTags : removeArrTags).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {(tagMode === "add" ? addArrTags : removeArrTags).map((tag) => (
-                            <ColorChip
-                              key={tag}
-                              className={`gap-1 ${
-                                tagMode === "add"
-                                  ? "border-green/30 bg-green-dim text-green"
-                                  : "border-red/30 bg-red-dim text-red"
-                              }`}
-                            >
-                              {tagMode === "add" ? "+" : "-"}{tag}
-                              <button
-                                onClick={() => {
-                                  if (tagMode === "add") {
-                                    setAddArrTags(addArrTags.filter((t) => t !== tag));
-                                  } else {
-                                    setRemoveArrTags(removeArrTags.filter((t) => t !== tag));
-                                  }
-                                }}
-                                className={tagMode === "add" ? "hover:text-green" : "hover:text-red"}
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </ColorChip>
-                          ))}
-                        </div>
-                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Tags can be added and removed in the same action. A tag picked in one list is taken out of the other.
+                      </p>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <ArrTagPicker
+                          mode="add"
+                          options={distinctValues.arrTag ?? []}
+                          selected={addArrTags}
+                          onChange={(tags) => {
+                            setAddArrTags(tags);
+                            setRemoveArrTags((prev) => withoutTags(prev, tags));
+                          }}
+                        />
+                        <ArrTagPicker
+                          mode="remove"
+                          options={distinctValues.arrTag ?? []}
+                          selected={removeArrTags}
+                          onChange={(tags) => {
+                            setRemoveArrTags(tags);
+                            setAddArrTags((prev) => withoutTags(prev, tags));
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2307,25 +2259,22 @@ export function LifecycleRulePage({
           )}
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <LoadingButton
-              onClick={handlePreview}
+            <PreviewRuleSetButton
+              blockedReason={scopeBlockedReason}
+              onPreview={handlePreview}
               loading={previewing}
-              icon={Eye}
               disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              variant="secondary"
-            >
-              Preview
-            </LoadingButton>
-            <Button
-              onClick={() => setShowTestMediaDialog(true)}
+            />
+            <TestMediaButton
+              blockedReason={scopeBlockedReason}
+              onTest={() => setShowTestMediaDialog(true)}
               disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              variant="secondary"
-            >
-              <FlaskConical className="mr-2 h-4 w-4" />
-              Test Media
-            </Button>
-            <LoadingButton
-              onClick={() => {
+            />
+            <SaveRuleSetButton
+              blockedReason={scopeBlockedReason}
+              loading={loading}
+              justSaved={justSaved}
+              onSave={() => {
                 if (activeRuleSetId && !rulesChanged) {
                   // Config-only change — skip detection, just save
                   handleSave({ clearMatches: false, runDetection: false });
@@ -2336,12 +2285,7 @@ export function LifecycleRulePage({
                 }
               }}
               disabled={!isDirty || justSaved || !name || groups.length === 0 || !validateAllRules(groups) || loading || serverIds.length === 0 || (actionEnabled && (actionType !== "DO_NOTHING" || addArrTags.length > 0 || removeArrTags.length > 0) && !arrInstanceId) || (actionEnabled && isQualityProfileChangeAction(actionType) && targetQualityProfileId === null) || (actionEnabled && targetProfileMissing) || (actionEnabled && isQualityProfileChangeAction(actionType) && !!arrInstanceId && arrProfilesStatus !== "ready") || (collectionEnabled && !collectionName?.trim()) || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
-              className={justSaved ? "bg-green text-background hover:bg-green" : ""}
-              loading={loading}
-              icon={justSaved ? Check : Save}
-            >
-              {justSaved ? "Saved" : "Save"}
-            </LoadingButton>
+            />
             <div className="ml-auto flex gap-2">
               <Button
                 onClick={() => { setSaveError(null); setShowImportDialog(true); }}
@@ -2402,6 +2346,7 @@ export function LifecycleRulePage({
         serverIds={serverIds}
         arrInstanceId={arrInstanceId}
         ruleSetId={activeRuleSetId}
+        action={savedAction}
       />
 
       {/* Unsaved edits: confirm before switching rule sets */}
@@ -2484,7 +2429,10 @@ export function LifecycleRulePage({
           <AlertDialogHeader>
             <AlertDialogTitle>Save Rule Set</AlertDialogTitle>
             <AlertDialogDescription>
-              How should existing matches be handled?
+              How should existing matches be handled? <strong>Save only</strong> keeps the current
+              matches until the next detection run re-checks them against what you saved — until
+              then this rule set&rsquo;s pending actions are held and won&rsquo;t run, even from the
+              Pending page.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-2 py-2">
@@ -2496,7 +2444,7 @@ export function LifecycleRulePage({
                 if (!activeRuleSetId) return;
                 setLoadingDiff(true);
                 try {
-                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType, arrInstanceId: arrInstanceId || null };
+                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, ...savedAction, arrInstanceId: arrInstanceId || null };
                   if (scopeConfig) diffBody.seriesScope = seriesScope;
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
                     method: "POST",

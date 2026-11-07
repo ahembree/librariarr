@@ -5,7 +5,15 @@ const mockPrisma = vi.hoisted(() => ({
   ruleSet: {
     findMany: vi.fn(),
     update: vi.fn(),
+    // Scheduling locks the rule set and reads it back to check it is still
+    // the version detection evaluated: answered with the row the run read.
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+      const rows = (await mockPrisma.ruleSet.findMany.mock.results.at(-1)?.value) as Array<{ id: string }> | undefined;
+      return rows?.find((r) => r.id === where.id) ?? null;
+    }),
   },
+  // The row lock scheduling takes on the rule set.
+  $queryRawUnsafe: vi.fn().mockResolvedValue([]),
   lifecycleAction: {
     findMany: vi.fn(),
     deleteMany: vi.fn(),
@@ -166,6 +174,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   // `WatchHistory` makes negative `watchedByUser` rules match everything.
   hasWatchedByUserRules: vi.fn(() => false),
   hasPlayActivityRules: vi.fn(() => false),
+  hasEpisodeLevelRules: vi.fn(() => false),
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasCustomFormatScoreRules: () => false,
 }));

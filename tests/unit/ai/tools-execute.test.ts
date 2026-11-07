@@ -106,7 +106,15 @@ describe("get_library_overview", () => {
         { videoCodec: "hevc", type: "MOVIE", _count: 2 },
         { videoCodec: null, type: "MUSIC", _count: 40 },
       ],
-      genreBreakdown: Array.from({ length: 12 }, (_, i) => ({ value: `G${i}`, _count: 12 - i })),
+      // One row per (genre, type), each type counted in its own unit: movies,
+      // shows, artists. Drama is in all three.
+      genreBreakdown: [
+        ...Array.from({ length: 12 }, (_, i) => ({ value: `G${i}`, type: "MOVIE", _count: 40 - i })),
+        { value: "Drama", type: "MOVIE", _count: 50 },
+        { value: "Drama", type: "SERIES", _count: 4 },
+        { value: "Comedy", type: "SERIES", _count: 6 },
+        { value: "Drama", type: "MUSIC", _count: 1 },
+      ],
       topMovies: [{ title: "Heat", playCount: 4 }],
       topSeries: [{ parentTitle: "Lost", totalPlays: 9 }],
     });
@@ -124,8 +132,13 @@ describe("get_library_overview", () => {
       { value: "Unknown", count: 1 },
     ]);
     expect(data.topVideoCodecs).toEqual([{ value: "hevc", count: 2 }]);
-    // The ten largest of twelve, in the order the stats came back.
-    expect(data.topGenres).toEqual(Array.from({ length: 10 }, (_, i) => ({ value: `G${i}`, count: 12 - i })));
+    // Per type, the ten largest of each, never a genre twice in one list or a
+    // movie count beside a show count.
+    expect(data.topGenres).toEqual({
+      movies: [{ value: "Drama", count: 50 }, ...Array.from({ length: 9 }, (_, i) => ({ value: `G${i}`, count: 40 - i }))],
+      shows: [{ value: "Comedy", count: 6 }, { value: "Drama", count: 4 }],
+      artists: [{ value: "Drama", count: 1 }],
+    });
     expect(data.topPlayedMovies).toEqual([{ title: "Heat", plays: 4 }]);
     expect(data.topPlayedSeries).toEqual([{ title: "Lost", plays: 9 }]);
     expect(result.evidence).toEqual({ tool: "get_library_overview", kind: "overview", title: "Library overview", data });
