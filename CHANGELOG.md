@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.34.0](https://github.com/ahembree/librariarr/compare/v0.33.0...v0.34.0) (2026-11-07)
+
+
+### Features
+
+* add dashboard card display preferences and layout editor ([#515](https://github.com/ahembree/librariarr/issues/515)) ([eef5669](https://github.com/ahembree/librariarr/commit/eef56697eb4f7a9c7f47acf57887df644a39999e))
+* add live preview to custom card dialog ([#504](https://github.com/ahembree/librariarr/issues/504)) ([0acff49](https://github.com/ahembree/librariarr/commit/0acff495a031135dd68cb0c9ffc1be5d0383f4d4))
+* add per-episode criteria (Season Number, Episode Number, Seasons Behind Latest) ([#531](https://github.com/ahembree/librariarr/issues/531)) ([3467aa4](https://github.com/ahembree/librariarr/commit/3467aa4bcf48eec35f05bffa659e2debe913f587))
+* add row tone system for diff visualization in tables ([#534](https://github.com/ahembree/librariarr/issues/534)) ([3e5bbd7](https://github.com/ahembree/librariarr/commit/3e5bbd759e45395aa73c78d857e73bd26e31ff57))
+* add useLibraryList hook to consolidate library page logic ([#512](https://github.com/ahembree/librariarr/issues/512)) ([ba86027](https://github.com/ahembree/librariarr/commit/ba860273039796915eecc5a45e33f05e6df03d70))
+* episode-scoped Unmonitor with whole-season support and file delete confirmation ([#533](https://github.com/ahembree/librariarr/issues/533)) ([9c0b37c](https://github.com/ahembree/librariarr/commit/9c0b37cbec27e80ecd4ec6891e0db1d433460b19))
+* **lifecycle:** add and remove arr tags in the same rule action ([#532](https://github.com/ahembree/librariarr/issues/532)) ([8cd0e0d](https://github.com/ahembree/librariarr/commit/8cd0e0d98177c06a9d6d6a40a2c702ceb3f062e7))
+* support thinking models and improve AI provider resilience ([#516](https://github.com/ahembree/librariarr/issues/516)) ([336d27c](https://github.com/ahembree/librariarr/commit/336d27c3600ab8e6bbdf6f4181217a5dbeb0416c))
+* **ui:** bring tools, Seerr, login, onboarding and charts onto the design system ([#517](https://github.com/ahembree/librariarr/issues/517)) ([83a1954](https://github.com/ahembree/librariarr/commit/83a1954cc03bb1b6011f18b950fbb68b40144535))
+
+
+### Bug Fixes
+
+* **ai:** count a show's episodes once in search_media when dedup is on ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **ai:** list the overview's top genres per media type ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **api:** omit owner's userId from API responses and add search query length limit ([#513](https://github.com/ahembree/librariarr/issues/513)) ([27ca3e7](https://github.com/ahembree/librariarr/commit/27ca3e7999ea8fb9e9531ad3c7ac696b472affc4))
+* **backup:** keep row values out of restore insert errors ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **backup:** restart the tracearr walk of a server a restore leaves without plays ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **dedup:** key a track by its album as well as artist and title ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **docs:** repair the docs build and build the docs on every pull request ([#529](https://github.com/ahembree/librariarr/issues/529)) ([8c0021e](https://github.com/ahembree/librariarr/commit/8c0021e8e350e183000f4490c2e52fd637f03e96))
+* **enforcer:** run a catch-up pass for a tick requested mid-pass ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **events:** carry only serverId on watch-history:updated ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **integrations:** drop the cached health answer when an Arr instance changes ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **jobs:** retry making the worker utils after a failed attempt ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **lifecycle:** hold a rule set's actions after a save changes what it matches ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **lifecycle:** hold actions when sticky matches are turned off or a rule set is enabled again ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **lifecycle:** mark held actions on the pending page and disable their execute ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **lifecycle:** never act on matches a run computed from a rule set's old rules ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **media:** look up multi-server presence with one array parameter ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **media:** open album and season pages onto the group their card counts ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **preroll:** track the applied preroll path per Plex server ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **query:** measure table rows so long lists stop jumping while scrolling ([#494](https://github.com/ahembree/librariarr/issues/494)) ([f7bae8c](https://github.com/ahembree/librariarr/commit/f7bae8c326c29e89ab08e0f49b651ac0571d6545))
+* **query:** narrow series-aggregate results to the episodes that match ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **query:** refuse whole-show query actions that follow per-episode criteria ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **realtime:** apply queued changes before recycling a server's connection ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **realtime:** keep connections and queued work when a reconcile cannot read the database ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **realtime:** retry a library sync or watch refresh the queue refused ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **realtime:** stop answering Jellyfin's KeepAlive replies ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** answer artist / series with the group's own name ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** judge a whole show's cross-system criteria through every episode ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** keep per-episode criteria from deciding a whole-show or whole-artist action ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** match a show or artist through any of its members ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** negate an all-streams query inside a NOT group exactly ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** refuse per-episode criteria in series- and artist-scoped rule sets ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **rules:** refuse preview and test media of a whole-show action on per-episode criteria ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **seerr:** look up requesters' plays with one array parameter ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **servers:** drop a server's cached artwork failures when its connection changes ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **servers:** drop cached connection details when a server edit changes them ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sso:** guard forward-auth email and name headers against credential read-back ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sso:** honour ssoEnabled in the forward-auth lockout guard ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **stats:** sum most-played plays across every copy of a title ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sync:** adopt an unclaimed sync row only for a queued run that lost its id ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sync:** close a sync job left RUNNING by a run that died ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sync:** keep a queued full watch-history replace when a play finishes ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **sync:** keep an item the incremental sync just found present ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **tracearr:** hold the forward watermark when recovery stores a newer play ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **tracearr:** purge the native stratum only while the mapping holds ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **tracearr:** recover the earlier plays of a re-added item played again first ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **tracearr:** resume an interrupted forward pass instead of skipping its plays ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **tracearr:** stop re-walking an archive whose plays can never be joined ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+* **trash:** never overwrite an app resource found only by a stale recorded id ([fbcd6b0](https://github.com/ahembree/librariarr/commit/fbcd6b01758511f7c7d1de417e868acfac321e8d))
+
+
+### Performance Improvements
+
+* server-render dashboard figures to eliminate skeleton delay ([#511](https://github.com/ahembree/librariarr/issues/511)) ([0e542f8](https://github.com/ahembree/librariarr/commit/0e542f842f1b48946fc5f22b8ded844051654ff4))
+
 ## [0.33.0](https://github.com/ahembree/librariarr/compare/v0.32.0...v0.33.0) (2026-10-29)
 
 
