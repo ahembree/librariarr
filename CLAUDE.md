@@ -41,13 +41,13 @@ pnpm exec vitest run tests/path/to/file.test.ts
 
 ### Testing
 
-Vitest 4 against a real PostgreSQL test database (`librariarr_test`, auto-created by global setup).
+Vitest 5 against a real PostgreSQL test database (`librariarr_test`, auto-created by global setup).
 
 - `tests/setup/` — global setup, test DB client, session mocks, data factories. `tests/unit/` — pure logic. `tests/unit/hooks/` — React hooks: each file starts with `// @vitest-environment happy-dom` and uses `renderHook`/`act` from `@testing-library/react` (the rest of the suite runs in `node`). `tests/integration/` — route handlers against the real DB with external services mocked.
 - Every integration test mocks `@/lib/db` (test Prisma client) and `@/lib/logger`. External services (Plex, Sonarr, Radarr, Lidarr, …) are mocked with `vi.mock()`. Route imports come after all `vi.mock()` calls.
 - Auth: `setMockSession()` / `clearMockSession()` (`tests/setup/mock-session.ts`). The mock mirrors the real module, including the API-key branch (`rotateSession` throws, `isSessionValid` is true), `authenticatedAt` stamping, and a session object that answers `in`, spreads and `delete` like the real one.
 - `cleanDatabase()` (`tests/setup/test-db.ts`) truncates every table in `public` except `_prisma_migrations` (read from `pg_tables`) and drops the cached library listings (`media-list:`). A test that writes rows directly and then lists again must call `invalidateMediaCaches()`, as the app's writers do.
-- Constructor mocks use the `function()` keyword, not arrow functions (Vitest 4). Use `vi.hoisted()` for variables referenced inside `vi.mock()` factories.
+- Constructor mocks use the `function()` keyword, not arrow functions (since Vitest 4). Use `vi.hoisted()` for variables referenced inside `vi.mock()` factories. `vi.mock()`, `vi.unmock()` and `vi.hoisted()` must sit at module top level — Vitest 5 throws when one is nested in a function, block or `describe`/`test` (`vi.doMock` is the in-test form). Mock call history is cleared before every test (`clearMocks` defaults to true in Vitest 5); implementations are kept.
 - Call handlers directly: `callRoute(GET, opts)` / `callRouteWithParams(POST, { id }, opts)`; `expectJson<T>(response, status)` parses and asserts the status.
 - Factories (`tests/setup/test-helpers.ts`): `createTestUser`, `createTestServer`, `createTestLibrary`, `createTestMediaItem`, `createTestRuleSet`, `createTestSonarrInstance`, `createTestRadarrInstance`, `createTestLidarrInstance`, `createTestSeerrInstance`, `createTestExternalId`, `createTestLogEntry`, `createTestApiKey` (returns `{ key, row }`).
 - Test files are type-checked by `pnpm build` (tsconfig includes `tests/`): a test that runs but fails `tsc` breaks the build.
