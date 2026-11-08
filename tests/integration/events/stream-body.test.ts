@@ -123,16 +123,25 @@ describe("GET /api/events/stream — the SSE body", () => {
     vi.advanceTimersByTime(15_000);
     expect(await readChunk(r)).toBe(": heartbeat\n\n");
 
-    vi.advanceTimersByTime(3_600_000);
-    // Heartbeats queued before the lifetime cap fired — one every 15s from the
-    // 30s mark through the hour mark itself — then the stream closes.
+    // Up to 1 ms before the hour: one heartbeat every 15s from the 30s mark
+    // to the 59:45 mark, and the stream is still open.
+    vi.advanceTimersByTime(3_600_000 - 15_000 - 1);
+    for (let i = 0; i < 238; i++) {
+      expect(await readChunk(r)).toBe(": heartbeat\n\n");
+    }
+    expect(eventBus.listenerCount).toBe(before + 1);
+
+    // The hour-mark heartbeat and the lifetime cap fall due at the same
+    // instant, and fake timers order such a tie differently across Vitest
+    // versions: at most that one heartbeat, then the stream closes.
+    vi.advanceTimersByTime(1);
     let chunk: string | null;
-    let heartbeats = 0;
+    let atTheHour = 0;
     while ((chunk = await readChunk(r)) !== null) {
       expect(chunk).toBe(": heartbeat\n\n");
-      heartbeats++;
+      atTheHour++;
     }
-    expect(heartbeats).toBe(239);
+    expect(atTheHour).toBeLessThanOrEqual(1);
     expect(eventBus.listenerCount).toBe(before);
 
     // Nothing is sent once the stream has been torn down.
