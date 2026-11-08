@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromSeriesGroup } from "@/components/media-hover-popover";
 import { useServers } from "@/hooks/use-servers";
 import { useLibraryList } from "@/hooks/use-library-list";
@@ -62,8 +62,9 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-// Module-level: built inline, the columns were new on every render and the
-// table re-sorted the whole list on each alphabet scroll.
+// Module-level: built inline, the columns were new on every render. Each
+// sortable column's id is a sort the route answers (`sortSeriesList`): the
+// table shows the server's order, since the page holds only the pages read.
 const SERIES_TABLE_COLUMNS: DataTableColumn<GroupedSeries>[] = [
   {
     id: "parentTitle",
@@ -124,6 +125,8 @@ const SERIES_TABLE_COLUMNS: DataTableColumn<GroupedSeries>[] = [
 ];
 
 const seriesKeyOf = (s: GroupedSeries) => s.seriesKey ?? s.parentTitle;
+const seriesTitleOf = (s: GroupedSeries) => s.parentTitle;
+const POSTER_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="poster" />;
 
 // The table's popover carries the show's poster as its hero; the card's passes
 // the same fields (the card already shows the poster).
@@ -146,6 +149,7 @@ export default function SeriesPage() {
     sortOrder,
     toggleSort,
     toggleOrder,
+    setSort,
     filters,
     externalFilters,
     onFilterChange,
@@ -158,7 +162,6 @@ export default function SeriesPage() {
   const listParams = new URLSearchParams();
   listParams.set("sortBy", sortBy);
   listParams.set("sortOrder", sortOrder);
-  listParams.set("limit", "0");
   if (selectedServerId !== "all") {
     listParams.set("serverId", selectedServerId);
   }
@@ -170,10 +173,9 @@ export default function SeriesPage() {
   for (const [key, value] of Object.entries(filters)) {
     if (value) listParams.set(key, value);
   }
-  const { items: seriesList, loading, refetch: fetchSeries } = useLibraryList({
+  const { items: seriesList, index, loading, requestRange, refetch: fetchSeries } = useLibraryList({
     url: "/api/media/series/grouped",
     params: listParams,
-    mode: "grouped",
     select: selectSeries,
     syncScope: { types: "SERIES", serverId: selectedServerId },
   });
@@ -192,19 +194,17 @@ export default function SeriesPage() {
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabetItems = useMemo(() => seriesList.map((s) => ({ title: s.parentTitle })), [seriesList]);
-  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
+  const alphabet = useLibraryAlphabet({
+    letters: index?.letters,
+    items: seriesList,
+    titleOf: seriesTitleOf,
+    titleSorted: sortBy === "parentTitle",
+    grid,
+    viewMode,
+  });
 
-  // Summed once per list, not on every render (each alphabet scroll re-renders).
-  const totals = useMemo(() => {
-    let seasons = 0;
-    let episodes = 0;
-    for (const s of seriesList) {
-      seasons += s.seasonCount;
-      episodes += s.episodeCount;
-    }
-    return { seasons, episodes };
-  }, [seriesList]);
+  // Summed over every show by the server: the page holds only the pages read.
+  const totals = { seasons: index?.sums?.seasons ?? 0, episodes: index?.sums?.episodes ?? 0 };
 
   const openShow = useCallback(
     (s: GroupedSeries) => {
@@ -301,14 +301,24 @@ export default function SeriesPage() {
           columns={SERIES_TABLE_COLUMNS}
           data={seriesList}
           keyExtractor={seriesKeyOf}
-          defaultSortId="parentTitle"
+          defaultSortId={sortBy}
+          defaultSortOrder={sortOrder}
+          onSortChange={setSort}
           resizeStorageKey="dt-widths-series"
           onRowClick={openShow}
           scrollToIndexRef={alphabet.tableScrollToIndexRef}
           renderHoverContent={seriesTableHover}
+          onVisibleRange={requestRange}
         />
       ) : (
-        <VirtualCardGrid grid={grid} items={seriesList} getKey={seriesKeyOf} renderItem={renderCard} />
+        <VirtualCardGrid
+          grid={grid}
+          items={seriesList}
+          getKey={seriesKeyOf}
+          renderItem={renderCard}
+          placeholder={POSTER_PLACEHOLDER}
+          onVisibleRange={requestRange}
+        />
       )}
 
       <AlphabetFilter activeLetter={alphabet.activeLetter} onLetterClick={alphabet.onLetterClick} availableLetters={alphabet.availableLetters} />

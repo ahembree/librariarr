@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, type ReactNode } from "react";
+import { memo, useEffect, type ReactNode } from "react";
 import { PRIORITY_ROWS } from "@/components/media-card";
 import type { VirtualPosterGrid } from "@/hooks/use-virtual-poster-grid";
 
@@ -36,12 +36,23 @@ const GridCell = memo(function GridCell<T>({ item, index, priority, renderItem }
 export interface VirtualCardGridProps<T> {
   /** `useVirtualPosterGrid`'s result for the same `items` and columns. */
   grid: VirtualPosterGrid;
-  items: readonly T[];
+  /**
+   * The cards, in order. `undefined` is a row whose page has not loaded yet
+   * (a paged library listing, `useLibraryList`): `placeholder` stands in.
+   */
+  items: readonly (T | undefined)[];
   getKey: (item: T) => string;
   /** Stable across renders (see `GridCell`). */
   renderItem: RenderGridCard<T>;
   /** Rows whose artwork loads eagerly. */
   priorityRows?: number;
+  /** In place of a card whose row has not loaded (`MediaCardPlaceholder`). */
+  placeholder?: ReactNode;
+  /**
+   * The item range `[start, end]` the rendered rows hold, whenever it changes —
+   * a paged listing's `requestRange`, so the pages on screen are read.
+   */
+  onVisibleRange?: (start: number, end: number) => void;
   /**
    * On the outer element — the scroll box itself for a grid with its own
    * (`scrollElement: "own"`), e.g. `"md:max-h-[60dvh] overflow-y-auto"`.
@@ -59,9 +70,18 @@ export function VirtualCardGrid<T>({
   getKey,
   renderItem,
   priorityRows = PRIORITY_ROWS,
+  placeholder = null,
+  onVisibleRange,
   className,
 }: VirtualCardGridProps<T>) {
   const { containerRef, virtualizer, rows, columns, gap, rowRange, rowOffset } = grid;
+  const firstRow = rows.length > 0 ? rows[0].index : -1;
+  const lastRow = rows.length > 0 ? rows[rows.length - 1].index : -1;
+  const visibleStart = firstRow >= 0 ? rowRange(firstRow)[0] : -1;
+  const visibleEnd = lastRow >= 0 ? rowRange(lastRow)[1] - 1 : -1;
+  useEffect(() => {
+    if (onVisibleRange && visibleStart >= 0 && visibleEnd >= visibleStart) onVisibleRange(visibleStart, visibleEnd);
+  }, [onVisibleRange, visibleStart, visibleEnd]);
   return (
     <div ref={containerRef} className={className}>
       <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
@@ -72,7 +92,11 @@ export function VirtualCardGrid<T>({
           for (let index = start; index < end && index < items.length; index++) {
             const item = items[index];
             cells.push(
-              <GridCell key={getKey(item)} item={item} index={index} priority={priority} renderItem={renderItem} />,
+              item === undefined ? (
+                <div key={`placeholder-${index}`}>{placeholder}</div>
+              ) : (
+                <GridCell key={getKey(item)} item={item} index={index} priority={priority} renderItem={renderItem} />
+              ),
             );
           }
           return (

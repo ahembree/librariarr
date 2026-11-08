@@ -12,6 +12,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
+import { wantsListIndex } from "@/lib/media/list-index";
 import { ARTIST_KEY_SQL, UNKNOWN_ARTIST, albumArtistKeySql, albumTitleKeySql } from "@/lib/media/music-sql";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
@@ -51,6 +52,7 @@ const SORT_COLUMNS = new Set([
 const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
+  const withIndex = wantsListIndex(searchParams);
   let parentTitle = searchParams.get("parentTitle");
   let albumTitle = searchParams.get("albumTitle");
   const search = searchParams.get("search");
@@ -76,7 +78,11 @@ const listGet = withSession(async (session, request: NextRequest) => {
 
   const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
-    return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
+    return NextResponse.json({
+      items: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: { total: 0 } }),
+    });
   }
 
   const where: Prisma.MediaItemWhereInput = {
@@ -178,18 +184,23 @@ const listGet = withSession(async (session, request: NextRequest) => {
     where.dedupCanonical = true;
   }
 
-  const items = await prisma.mediaItem.findMany({
-    where,
-    ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
-    // `id` is the tiebreaker, not decoration: without a total order Postgres is
-    // free to return tied rows in any order, and the two passes of a progressive
-    // load are planned differently (bounded top-N heapsort vs full quicksort or
-    // external merge). The tie block straddling the page boundary then permutes
-    // between the passes, so the stitched list shows some rows twice and drops
-    // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
-    orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
-    select: selectBase,
-  });
+  // The index (`?index=1`, the All Tracks tab's first page): the count it
+  // sizes its list with, beside the page.
+  const [items, total] = await Promise.all([
+    prisma.mediaItem.findMany({
+      where,
+      ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
+      // `id` is the tiebreaker, not decoration: without a total order Postgres is
+      // free to return tied rows in any order, and the pages of a listing are
+      // planned differently (bounded top-N heapsort vs full quicksort or external
+      // merge). The tie block straddling a page boundary then permutes between
+      // the requests, so the paged list shows some rows twice and drops others
+      // entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+      orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
+      select: selectBase,
+    }),
+    withIndex ? prisma.mediaItem.count({ where }) : null,
+  ]);
 
   const hasMore = limit > 0 && items.length > limit;
   if (hasMore) items.pop();
@@ -216,6 +227,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
   return jsonResponse(request, {
     items: serializedItems,
     pagination: { page, limit, hasMore },
+    ...(total !== null && { index: { total } }),
   });
 });
 

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromSeason } from "@/components/media-hover-popover";
 import { seasonHoverTitle } from "@/lib/media/hover-data";
 import { MediaFilters } from "@/components/media-filters";
@@ -62,8 +62,9 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-// Module-level: built inline, the columns were new on every render and the
-// table re-sorted the whole list each time.
+// Module-level: built inline, the columns were new on every render. Each
+// sortable column's id is a sort the route answers: the table shows the
+// server's order, since the page holds only the pages read.
 const SEASON_TABLE_COLUMNS: DataTableColumn<SeasonEntry>[] = [
   {
     id: "parentTitle",
@@ -138,6 +139,7 @@ const SEASON_TABLE_COLUMNS: DataTableColumn<SeasonEntry>[] = [
 const SEASONS_FROM = `?from=${encodeURIComponent("/library/series/seasons")}`;
 
 const seasonKeyOf = (s: SeasonEntry) => `${s.seriesKey ?? s.parentTitle}::${s.seasonNumber}`;
+const POSTER_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="poster" />;
 
 // The same popover, with the season's poster as its hero, in both views.
 function seasonHover(season: SeasonEntry) {
@@ -153,7 +155,7 @@ export default function AllSeasonsPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_SEASONS");
   const { servers } = useServers();
-  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, filters, onFilterChange, clearFilters, hasFilters } =
+  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, setSort, filters, onFilterChange, clearFilters, hasFilters } =
     useLibraryListState("seasons", "parentTitle");
   const filterPanel = useFilterPanelReset(undefined, clearFilters);
   const { size, setSize, columns } = useCardSize();
@@ -163,10 +165,9 @@ export default function AllSeasonsPage() {
   for (const [key, value] of Object.entries(filters)) {
     if (value) listParams.set(key, value);
   }
-  const { items: seasons, loading } = useLibraryList({
+  const { items: seasons, loading, requestRange } = useLibraryList({
     url: "/api/media/series/all-seasons",
     params: listParams,
-    mode: "grouped",
     select: selectSeasons,
     syncScope: { types: "SERIES" },
   });
@@ -260,7 +261,7 @@ export default function AllSeasonsPage() {
       ) : (
         <>
           <p className="mb-3 text-sm text-muted-foreground">
-            {seasons.length} {seasons.length === 1 ? "season" : "seasons"}
+            {seasons.length.toLocaleString()} {seasons.length === 1 ? "season" : "seasons"}
           </p>
 
           {viewMode === "table" ? (
@@ -268,13 +269,23 @@ export default function AllSeasonsPage() {
               columns={SEASON_TABLE_COLUMNS}
               data={seasons}
               keyExtractor={seasonKeyOf}
-              defaultSortId="parentTitle"
+              defaultSortId={sortBy}
+              defaultSortOrder={sortOrder}
+              onSortChange={setSort}
               resizeStorageKey="dt-widths-seasons"
               onRowClick={navigateToSeason}
               renderHoverContent={seasonHover}
+              onVisibleRange={requestRange}
             />
           ) : (
-            <VirtualCardGrid grid={grid} items={seasons} getKey={seasonKeyOf} renderItem={renderCard} />
+            <VirtualCardGrid
+              grid={grid}
+              items={seasons}
+              getKey={seasonKeyOf}
+              renderItem={renderCard}
+              placeholder={POSTER_PLACEHOLDER}
+              onVisibleRange={requestRange}
+            />
           )}
         </>
       )}

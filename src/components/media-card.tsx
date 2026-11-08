@@ -237,3 +237,30 @@ export const MediaCard = memo(function MediaCard({
     </HoverCard>
   );
 });
+
+/**
+ * A card whose row has not loaded yet: a library grid reads its listing a
+ * page at a time, so the cards past the pages loaded so far stand in as
+ * these until their page answers. The same height as a `MediaCard` of the
+ * same `aspectRatio` (artwork, quality bar, content block, border), so the
+ * virtualizer's rows do not move when the real cards replace them.
+ */
+export function MediaCardPlaceholder({ aspectRatio = "poster" }: { aspectRatio?: "poster" | "square" | "landscape" }) {
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card" aria-hidden="true" data-placeholder="">
+      <div
+        className={cn(
+          "w-full animate-pulse bg-muted",
+          aspectRatio === "poster" && "aspect-2/3",
+          aspectRatio === "square" && "aspect-square",
+          aspectRatio === "landscape" && "aspect-video",
+        )}
+      />
+      <QualityBar />
+      <div className="space-y-1.5 px-2.5 pt-1.5 pb-2" style={{ height: CARD_CONTENT_HEIGHT }}>
+        <div className="h-4 w-3/4 animate-pulse rounded-md bg-muted" />
+        <div className="h-3 w-1/2 animate-pulse rounded-md bg-muted" />
+      </div>
+    </div>
+  );
+}

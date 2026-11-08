@@ -2,8 +2,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useTableAlphabet } from "@/hooks/use-table-alphabet";
+import { letterOffsets } from "@/lib/media/list-index";
+import { getLetterForTitle } from "@/lib/utils";
 
 const ITEMS = [{ title: "Alien" }, { title: "Arrival" }, { title: "Blade Runner" }, { title: "12 Monkeys" }, { title: "" }, { title: "Dune" }];
+// What the listing's index sends: each letter's first row.
+const LETTERS = letterOffsets(ITEMS.map((i) => i.title));
+const LETTER_AT = (index: number) => (ITEMS[index]?.title ? getLetterForTitle(ITEMS[index].title) : null);
+const BASE = { letters: LETTERS, letterAt: LETTER_AT };
+const noTable = () => ({ current: null });
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -42,7 +49,7 @@ function scrollEl(scrollTop = 0, clientHeight = 1000) {
 
 describe("useTableAlphabet", () => {
   it("lists the letters present, '#' for non-alpha, ignoring empty titles", () => {
-    const { result } = renderHook(() => useTableAlphabet({ items: ITEMS }));
+    const { result } = renderHook(() => useTableAlphabet({ ...BASE, scrollToIndexRef: noTable() }));
     expect([...result.current.availableLetters].sort()).toEqual(["#", "A", "B", "D"]);
     expect(result.current.activeLetter).toBeNull();
   });
@@ -50,7 +57,7 @@ describe("useTableAlphabet", () => {
   it("scrolls a virtualized table to the first item of a letter", () => {
     const scrollToIndex = vi.fn();
     const ref = { current: scrollToIndex };
-    const { result } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollToIndexRef: ref }));
+    const { result } = renderHook(() => useTableAlphabet({ ...BASE, scrollToIndexRef: ref }));
     act(() => result.current.scrollToLetter("B"));
     expect(scrollToIndex).toHaveBeenCalledWith(2);
     expect(result.current.activeLetter).toBe("B");
@@ -60,26 +67,20 @@ describe("useTableAlphabet", () => {
     expect(scrollToIndex).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to scrolling the first matching DOM row", () => {
-    const table = document.createElement("table");
-    const tbody = document.createElement("tbody");
-    const rows = ["", "Alien", "Blade Runner", "Brazil"].map((t) => {
-      const tr = document.createElement("tr");
-      if (t) {
-        const td = document.createElement("td");
-        td.textContent = `  ${t} `;
-        tr.append(td);
-      }
-      tr.scrollIntoView = vi.fn();
-      tbody.append(tr);
-      return tr;
-    });
-    table.append(tbody);
-    document.body.append(table);
-    const { result } = renderHook(() => useTableAlphabet({ items: ITEMS }));
+  it("jumps to a letter far past the rows loaded, from the index", () => {
+    const scrollToIndex = vi.fn();
+    const { result } = renderHook(() =>
+      useTableAlphabet({ letters: { A: 0, Q: 31_000 }, letterAt: () => null, scrollToIndexRef: { current: scrollToIndex } }),
+    );
+    expect([...result.current.availableLetters]).toEqual(["A", "Q"]);
+    act(() => result.current.scrollToLetter("Q"));
+    expect(scrollToIndex).toHaveBeenCalledWith(31_000);
+  });
+
+  it("does nothing before the table is there to scroll", () => {
+    const { result } = renderHook(() => useTableAlphabet({ ...BASE, scrollToIndexRef: noTable() }));
     act(() => result.current.scrollToLetter("B"));
-    expect(rows[2].scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
-    expect(rows[3].scrollIntoView).not.toHaveBeenCalled();
+    expect(result.current.activeLetter).toBeNull();
   });
 
   it("is inert when disabled", () => {
@@ -87,7 +88,7 @@ describe("useTableAlphabet", () => {
     const el = scrollEl();
     const add = vi.spyOn(el, "addEventListener");
     const { result } = renderHook(() =>
-      useTableAlphabet({ items: ITEMS, enabled: false, scrollToIndexRef: { current: scrollToIndex }, scrollElement: el }),
+      useTableAlphabet({ ...BASE, enabled: false, scrollToIndexRef: { current: scrollToIndex }, scrollElement: el }),
     );
     act(() => result.current.scrollToLetter("A"));
     expect(scrollToIndex).not.toHaveBeenCalled();
@@ -99,7 +100,7 @@ describe("useTableAlphabet", () => {
     // Items: 0 A, 1 A, 2 B, 3 #, 5 D. Target = 0 + 1000 * 0.4 = 400.
     virtualRows([[0, 0], [2, 300], [3, 380], [5, 450]]);
     const el = scrollEl();
-    const { result } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollElement: el }));
+    const { result } = renderHook(() => useTableAlphabet({ ...BASE, scrollToIndexRef: noTable(), scrollElement: el }));
     act(() => {
       el.dispatchEvent(new Event("scroll"));
       el.dispatchEvent(new Event("scroll"));
@@ -113,7 +114,9 @@ describe("useTableAlphabet", () => {
 
   it("clears the letter when no virtual rows are rendered, and ignores bad indexes", () => {
     const el = scrollEl();
-    const { result } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollElement: el }));
+    const { result } = renderHook(() =>
+      useTableAlphabet({ ...BASE, scrollToIndexRef: { current: vi.fn() }, scrollElement: el }),
+    );
     act(() => result.current.scrollToLetter("A"));
     act(() => {
       vi.advanceTimersByTime(100);
@@ -133,7 +136,8 @@ describe("useTableAlphabet", () => {
       el.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(16);
     });
-    // An out-of-range index yields no letter, so the previous one stays.
+    // A row with no letter (out of range, not loaded and before every
+    // letter) changes nothing, so the previous one stays.
     expect(result.current.activeLetter).toBe("D");
   });
 
@@ -141,7 +145,7 @@ describe("useTableAlphabet", () => {
     virtualRows([[0, 0]]);
     const el = scrollEl();
     const { result } = renderHook(() =>
-      useTableAlphabet({ items: ITEMS, scrollElement: el, scrollToIndexRef: { current: vi.fn() } }),
+      useTableAlphabet({ ...BASE, scrollElement: el, scrollToIndexRef: { current: vi.fn() } }),
     );
     act(() => result.current.scrollToLetter("D"));
     act(() => {
@@ -163,7 +167,7 @@ describe("useTableAlphabet", () => {
     const el = scrollEl();
     const add = vi.spyOn(el, "addEventListener");
     const remove = vi.spyOn(el, "removeEventListener");
-    const { unmount } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollElement: el }));
+    const { unmount } = renderHook(() => useTableAlphabet({ ...BASE, scrollToIndexRef: noTable(), scrollElement: el }));
     expect(add).toHaveBeenCalledTimes(1);
     const listener = add.mock.calls[0][1];
     unmount();

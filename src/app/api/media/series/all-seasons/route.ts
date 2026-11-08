@@ -5,6 +5,9 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { letterOffsets, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
+import { memoListRows } from "@/lib/api/list-rows-memo";
+import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
@@ -69,15 +72,57 @@ const first = (col: string) => firstNonNullSql(col, `"episodeNumber", id`);
 
 const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
-  const search = searchParams.get("search");
-  const sortBy = searchParams.get("sortBy") || "parentTitle";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
+  // Paged like the other listings, so the All Seasons tab reads it a page at a
+  // time as it scrolls. Without a `limit` the whole listing is answered, as
+  // before this route was paged (`limit=0` says the same).
+  const { page, limit, skip } = searchParams.has("limit")
+    ? parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT })
+    : { page: 1, limit: 0, skip: 0 };
   const serverId = searchParams.get("serverId");
+  const withIndex = wantsListIndex(searchParams);
 
   const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
-    return NextResponse.json({ seasons: [] });
+    return NextResponse.json({
+      seasons: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: seasonIndex([]) }),
+    });
   }
+
+  // A page of a listing the tab is scrolling through reads the sorted seasons
+  // kept from its previous page (`memoListRows`).
+  const seasons = limit > 0
+    ? await memoListRows("series-all-seasons", searchParams, () => loadSortedSeasons(sf, searchParams))
+    : await loadSortedSeasons(sf, searchParams);
+  const index = withIndex ? seasonIndex(seasons) : undefined;
+
+  if (limit > 0) {
+    return jsonResponse(request, {
+      seasons: seasons.slice(skip, skip + limit),
+      pagination: { page, limit, hasMore: seasons.length > skip + limit },
+      ...(index && { index }),
+    });
+  }
+  return jsonResponse(request, {
+    seasons: seasons.slice(skip),
+    pagination: { page, limit, hasMore: false },
+    ...(index && { index }),
+  });
+});
+
+type ServerFilter = NonNullable<Awaited<ReturnType<typeof resolveServerFilter>>>;
+
+/** The index the All Seasons tab reads: the season count and the A–Z offsets of the show titles. */
+function seasonIndex(rows: readonly { parentTitle: string }[]): ListIndex {
+  return { total: rows.length, letters: letterOffsets(rows.map((r) => r.parentTitle)) };
+}
+
+/** Every season of the listing, filtered and sorted. */
+async function loadSortedSeasons(sf: ServerFilter, searchParams: URLSearchParams) {
+  const search = searchParams.get("search");
+  const sortBy = searchParams.get("sortBy") || "parentTitle";
+  const sortOrder = searchParams.get("sortOrder") || "asc";
 
   // Aggregated in SQL rather than by loading every episode row (with its
   // `summary` text) into Node and folding in JS: measured on a 28k-episode
@@ -284,6 +329,10 @@ const listGet = withSession(async (session, request: NextRequest) => {
           return (a.episodeCount - b.episodeCount) * dir;
         case "totalSize":
           return (Number(a.totalSize) - Number(b.totalSize)) * dir;
+        // The All Seasons table's Plays column, sorted here now that the table
+        // shows the server's order (it sorted its own copy of the whole list).
+        case "totalPlayCount":
+          return (a.totalPlayCount - b.totalPlayCount) * dir;
         case "lastPlayed": {
           const aTime = a.lastPlayed ? new Date(a.lastPlayed).getTime() : 0;
           const bTime = b.lastPlayed ? new Date(b.lastPlayed).getTime() : 0;
@@ -301,8 +350,8 @@ const listGet = withSession(async (session, request: NextRequest) => {
       }
     });
 
-  return jsonResponse(request, { seasons: seasonsList });
-});
+  return seasonsList;
+}
 
 /**
  * Answered from the list response cache when the same listing was asked for

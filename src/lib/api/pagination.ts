@@ -3,14 +3,13 @@
  *
  * The list routes share one contract: `page` is 1-based, `limit` is clamped to
  * `MAX_LIST_LIMIT` (`MAX_GROUPED_LIST_LIMIT` on the grouped listings), and
- * `limit=0` means "return everything". `offset` is the escape
- * hatch that makes progressive loading possible — the library views ask for a
- * first screenful, render it, then ask for `limit=0&offset=<first chunk>` to
- * fill in the rest without refetching what they already have. Without it the
- * only way to express "everything after the first N" is to refetch all of it.
+ * `limit=0` means "return everything" — kept for the public API's clients; the
+ * library pages never send it. `offset` overrides the page-derived skip: the
+ * library pages read a listing as `limit=<LIST_PAGE_SIZE>&offset=<n>` pages as
+ * the user scrolls (`src/lib/media/paged-list.ts`), so every answer is one page.
  */
 
-/** Upper bound on `limit` for the flat lists. `limit=0` bypasses it entirely. */
+/** Upper bound on `limit` for the flat lists. `limit=0` (the public API's whole listing) bypasses it. */
 export const MAX_LIST_LIMIT = 100;
 /**
  * Upper bound on `limit` for the grouped listings (shows, artists), whose rows

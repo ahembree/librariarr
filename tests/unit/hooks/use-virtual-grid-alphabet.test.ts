@@ -3,9 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
+import { letterOffsets } from "@/lib/media/list-index";
+import { getLetterForTitle } from "@/lib/utils";
 
 // 3 columns: row 0 = A A B, row 1 = B C 1, row 2 = D
 const ITEMS = ["Alien", "Arrival", "Brazil", "Blade", "Cars", "1917", "Dune"].map((title) => ({ title }));
+// What the listing's index sends: each letter's first item.
+const LETTERS = letterOffsets(ITEMS.map((i) => i.title));
+const LETTER_AT = (index: number) => (ITEMS[index] ? getLetterForTitle(ITEMS[index].title) : null);
 
 interface FakeVirtualizer {
   scrollToIndex: ReturnType<typeof vi.fn>;
@@ -51,10 +56,21 @@ afterEach(() => {
 });
 
 describe("useVirtualGridAlphabet", () => {
+  it("lists the letters of the whole list from the index, not from the rows loaded", () => {
+    const v = makeVirtualizer();
+    const { result } = renderHook(() =>
+      useVirtualGridAlphabet({ letters: { A: 0, Q: 400 }, letterAt: () => null, columns: 3, virtualizer: asV(v), scrollElement: null }),
+    );
+    expect([...result.current.availableLetters].sort()).toEqual(["A", "Q"]);
+    // A letter far past anything loaded jumps to its row all the same.
+    act(() => result.current.scrollToLetter("Q"));
+    expect(v.scrollToIndex).toHaveBeenCalledWith(133, { align: "start" });
+  });
+
   it("lists available letters", () => {
     const v = makeVirtualizer();
     const { result } = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: null }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: null }),
     );
     expect([...result.current.availableLetters].sort()).toEqual(["#", "A", "B", "C", "D"]);
   });
@@ -62,7 +78,7 @@ describe("useVirtualGridAlphabet", () => {
   it("scrolls to the row holding a letter's first item", () => {
     const v = makeVirtualizer();
     const { result, rerender } = renderHook(
-      ({ columns }) => useVirtualGridAlphabet({ items: ITEMS, columns, virtualizer: asV(v), scrollElement: null }),
+      ({ columns }) => useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns, virtualizer: asV(v), scrollElement: null }),
       { initialProps: { columns: 3 } },
     );
     act(() => result.current.scrollToLetter("C"));
@@ -84,7 +100,7 @@ describe("useVirtualGridAlphabet", () => {
     const v = makeVirtualizer([{ index: 0, start: 300 }, { index: 1, start: 700 }, { index: 2, start: 900 }], 500, 100);
     const el = scrollEl();
     const { result } = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: el }),
     );
     fire(el);
     expect(result.current.activeLetter).toBe("B");
@@ -95,7 +111,7 @@ describe("useVirtualGridAlphabet", () => {
     const v = makeVirtualizer(rows, null);
     const el = scrollEl();
     const { result } = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: el }),
     );
     fire(el);
     expect(result.current.activeLetter).toBe("A");
@@ -108,7 +124,7 @@ describe("useVirtualGridAlphabet", () => {
     const v = makeVirtualizer([{ index: 0, start: 0 }]);
     const el = scrollEl();
     const { result } = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: el }),
     );
     act(() => result.current.scrollToLetter("D"));
     fire(el);
@@ -126,12 +142,12 @@ describe("useVirtualGridAlphabet", () => {
     const add = vi.spyOn(el, "addEventListener");
     const remove = vi.spyOn(el, "removeEventListener");
     const disabled = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el, enabled: false }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: el, enabled: false }),
     );
     expect(add).not.toHaveBeenCalled();
     disabled.unmount();
     const enabled = renderHook(() =>
-      useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el }),
+      useVirtualGridAlphabet({ letters: LETTERS, letterAt: LETTER_AT, columns: 3, virtualizer: asV(v), scrollElement: el }),
     );
     expect(add).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledWith("scroll", expect.any(Function), { passive: true });

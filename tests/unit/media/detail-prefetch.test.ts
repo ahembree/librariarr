@@ -148,8 +148,13 @@ describe("detail prefetches", () => {
 
   it("names each detail page's child list by the page's own id", () => {
     expect(detailChildrenUrl("seasons", "s 1")).toBe("/api/media/series/seasons?itemId=s%201");
-    expect(detailChildrenUrl("episodes", "e1")).toBe("/api/media/series?itemId=e1&sortBy=episodeNumber&sortOrder=asc&limit=0");
-    expect(detailChildrenUrl("tracks", "t1")).toBe("/api/media/music?itemId=t1&sortBy=episodeNumber&sortOrder=asc&limit=0");
+    // A season's episodes and an album's tracks are read a page at a time —
+    // never `limit=0` — the first page with the list's length (`index=1`) and
+    // no offset, so the prefetch and the page's first read are one URL.
+    expect(detailChildrenUrl("episodes", "e1")).toBe("/api/media/series?itemId=e1&sortBy=episodeNumber&sortOrder=asc&limit=100&index=1");
+    expect(detailChildrenUrl("tracks", "t1")).toBe("/api/media/music?itemId=t1&sortBy=episodeNumber&sortOrder=asc&limit=100&index=1");
+    expect(detailChildrenUrl("tracks", "t1", 100)).toBe("/api/media/music?itemId=t1&sortBy=episodeNumber&sortOrder=asc&limit=100&offset=100");
+    expect(detailChildrenUrl("albums", "a1", 100)).toBe("/api/media/music/albums?itemId=a1");
     expect(detailChildrenUrl("albums", "a1")).toBe("/api/media/music/albums?itemId=a1");
   });
 

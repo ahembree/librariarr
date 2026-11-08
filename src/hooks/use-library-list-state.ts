@@ -26,6 +26,11 @@ export interface LibraryListState {
   /** A sort header or picker: the same field flips the order, another starts ascending. */
   toggleSort: (field: string) => void;
   toggleOrder: () => void;
+  /**
+   * Set both at once — a server-sorted `DataTable`'s `onSortChange`, which
+   * works out the next order itself.
+   */
+  setSort: (field: string, order: SortOrder) => void;
   filters: Record<string, string>;
   /** The restored filters, for `MediaFilters`' `externalFilters` (undefined when none). */
   externalFilters: Record<string, string> | undefined;
@@ -80,6 +85,10 @@ export function useLibraryListState(
     [sortBy],
   );
   const toggleOrder = useCallback(() => setSortOrder((o) => (o === "asc" ? "desc" : "asc")), []);
+  const setSort = useCallback((field: string, order: SortOrder) => {
+    setSortBy(field);
+    setSortOrder(order);
+  }, []);
 
   const onFilterChange = useCallback(
     (next: Record<string, string>) => {
@@ -97,6 +106,7 @@ export function useLibraryListState(
     sortOrder,
     toggleSort,
     toggleOrder,
+    setSort,
     filters,
     externalFilters: Object.keys(restored).length > 0 ? restored : undefined,
     onFilterChange,

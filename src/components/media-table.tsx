@@ -52,7 +52,11 @@ import { RowToneChip } from "@/components/row-tone-chip";
  * never sent.
  */
 interface MediaTableProps<T extends MediaListItem = MediaListItem> {
-  items: T[];
+  /**
+   * The rows, in order. `undefined` is a row whose page has not loaded yet (a
+   * paged library listing, `useLibraryList`): a placeholder row stands in.
+   */
+  items: readonly (T | undefined)[];
   onItemClick: (item: T) => void;
   sortBy?: string;
   sortOrder?: "asc" | "desc";
@@ -74,7 +78,15 @@ interface MediaTableProps<T extends MediaListItem = MediaListItem> {
   rowTone?: (item: T) => RowTone | undefined;
   /** Optional render function for hover popover content on each row */
   renderHoverContent?: (item: T) => React.ReactNode;
+  /**
+   * The row range `[start, end]` the table renders, whenever it changes — a
+   * paged listing's `requestRange`, so the pages on screen are read.
+   */
+  onVisibleRange?: (start: number, end: number) => void;
 }
+
+/** A row's height before it is measured — a placeholder row takes exactly this. */
+const ROW_HEIGHT = 41;
 
 // --- Column Definitions ---
 
@@ -419,7 +431,7 @@ const VIDEO_COLUMN_IDS = new Set([
   "aspectRatio",
 ]);
 
-function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowTone, renderHoverContent }: MediaTableProps<T>) {
+function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowTone, renderHoverContent, onVisibleRange }: MediaTableProps<T>) {
   const allColumns = useMemo(() => buildColumns(), []);
   // Inside the shell the saved columns are the settings store's: the layout
   // seeded it, so the table opens with them (fetched after mount, it drew the
@@ -491,10 +503,17 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 41,
+    estimateSize: () => ROW_HEIGHT,
     overscan: 15,
     scrollMargin,
   });
+
+  const renderedRows = virtualizer.getVirtualItems();
+  const firstRendered = renderedRows.length > 0 ? renderedRows[0].index : -1;
+  const lastRendered = renderedRows.length > 0 ? renderedRows[renderedRows.length - 1].index : -1;
+  useEffect(() => {
+    if (onVisibleRange && firstRendered >= 0) onVisibleRange(firstRendered, lastRendered);
+  }, [onVisibleRange, firstRendered, lastRendered]);
 
   useEffect(() => {
     if (!scrollToIndexRef) return;
@@ -576,8 +595,15 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
 
   const visibleColumns = availableColumns.filter((col) => columnVisibility[col.id]);
 
-  const isShowView = items.some((i) => i.parentTitle);
-  const isGroupedShowView = items.some((i) => i.matchedEpisodes);
+  // Once per list, not per render: a paged listing is as long as the whole
+  // library, and the table re-renders on every range change while scrolling.
+  const { isShowView, isGroupedShowView } = useMemo(
+    () => ({
+      isShowView: items.some((i) => i?.parentTitle),
+      isGroupedShowView: items.some((i) => i?.matchedEpisodes),
+    }),
+    [items],
+  );
 
   // Total column count for spacer row colSpan
   const totalColumnCount = 1 + (isShowView && !isGroupedShowView ? 1 : 0)
@@ -736,6 +762,22 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                   )}
                   {virtualRows.map((virtualRow) => {
                     const item = items[virtualRow.index];
+                    if (item === undefined) {
+                      return (
+                        <tr
+                          key={`placeholder-${virtualRow.index}`}
+                          data-index={virtualRow.index}
+                          data-placeholder=""
+                          aria-hidden="true"
+                          className={rowSurfaceClass({ index: virtualRow.index })}
+                          style={{ height: ROW_HEIGHT }}
+                        >
+                          <td colSpan={totalColumnCount} className="px-2">
+                            <div className="h-3.5 w-48 max-w-full animate-pulse rounded-md bg-muted" />
+                          </td>
+                        </tr>
+                      );
+                    }
                     const epLabel = formatEpisodeLabel(item, isMusic);
                     const hoverContent = renderHoverContent?.(item);
                     const tone = rowTone?.(item);

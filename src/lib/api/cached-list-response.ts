@@ -14,14 +14,14 @@ const gunzipAsync = promisify(gunzip);
 export const LIST_RESPONSE_CACHE_TTL_MS = 60_000;
 
 /**
- * How many listings are kept at once. An entry is a whole compressed library —
- * megabytes, where an `appCache` entry is usually a few figures — so these get
- * a bound of their own. A page's first screenful and its remainder are two
- * entries and the grouped listings one each, so this covers moving between
- * every library page and back; a filter typed letter by letter cycles through
- * it instead of growing.
+ * How many listing responses are kept at once. The library pages read a
+ * listing a page at a time as the user scrolls, so each page they have seen is
+ * an entry (a few KB compressed); this keeps a few thousand rows of every
+ * library page for moving between them and back, while a filter typed letter
+ * by letter cycles through it instead of growing. A `limit=0` read (the public
+ * API) is a whole library in one entry, which the byte bounds below cover.
  */
-export const LIST_RESPONSE_CACHE_MAX_ENTRIES = 24;
+export const LIST_RESPONSE_CACHE_MAX_ENTRIES = 256;
 
 /**
  * Bodies past this many (compressed) bytes are answered but not kept: one

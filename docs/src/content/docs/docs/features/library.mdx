@@ -56,13 +56,13 @@ Toggle between two view modes:
 | **Table** | Detailed rows with columns for title, year, resolution, codec, audio, file size, play count, and more. Columns are resizable via drag-to-resize. The columns you show are saved per library type and follow you to every other open tab and device. |
 | **Card** | Poster cards in a responsive grid. Three sizes (S, M, L), plus a control for which details each card shows. |
 
-Both views use smooth scrolling, so libraries of any size load and render without pagination. On desktop, the toolbar — search, sort, view controls, and filters — stays pinned to the top of the page while you scroll; on mobile it scrolls with the page to leave more room for content.
+Both views scroll smoothly through libraries of any size without page buttons. A library page reads its list from the server 100 items at a time as you scroll: the first answer brings the library's size, so the page is the full length at once, and an item further down shows as a grey placeholder for the moment its page takes to arrive. No request ever carries the whole library, however large it is. On desktop, the toolbar — search, sort, view controls, and filters — stays pinned to the top of the page while you scroll; on mobile it scrolls with the page to leave more room for content.
 
 ![Movie library in card view with poster artwork, quality color strips, and alphabet navigation](/screenshots/movies.webp)
 
 ## Alphabet Navigation
 
-A clickable alphabet bar (A–Z plus `#` for non-alphabetic titles) lets you jump directly to a letter. The bar highlights which letters have matching items.
+A clickable alphabet bar (A–Z plus `#` for non-alphabetic titles) lets you jump directly to a letter. The bar highlights which letters have matching items. The server works out where each letter starts across the whole list — under the current sort and filters — so a jump goes straight to a letter you have not scrolled near yet, and its items load as they come into view.
 
 ## Filters
 
@@ -151,7 +151,9 @@ The sort menu offers, in ascending or descending order:
 | Music (artists) | Name, Albums, Tracks, Size, Last Played, Date Added |
 | Albums | Name, Artist, Tracks, Size |
 
-In table view, every column with a sort arrow sorts — Dynamic Range, Audio Profile, Channels, Container, Studio, Bit Depth, Frame Rate, Video Bitrate, Aspect Ratio and Release Date included.
+In table view, every column with a sort arrow sorts — Dynamic Range, Audio Profile, Channels, Container, Studio, Bit Depth, Frame Rate, Video Bitrate, Aspect Ratio and Release Date included. A table header and the sort menu are the same sort: clicking one updates the other, and the whole list is sorted by the server (the **Series**, **All Seasons**, **Music** and **Albums** tables included — they used to re-sort only their own copy of the list). The **All Seasons** table also sorts by **Plays**.
+
+The counts at the top of a page — the number of movies, or a library's series, seasons and episodes, artists, albums and songs — are totals over the whole filtered list, worked out by the server, not over the part you have scrolled through.
 
 ## Detail Panel
 
@@ -180,11 +182,13 @@ Depending on configuration:
 
 Library pages and detail pages avoid repeating work the browser or server has already done:
 
-- **Going back to a library page is instant.** Each library page keeps the list it last loaded for the rest of the browser tab's life. Coming back within a minute (from a detail page, for example) shows it at once without asking the server. After a minute, the kept list still appears at once and is then refreshed in the background. After 15 minutes it is discarded. A sync, a watch-history update or a server change clears every kept list, so a refreshed library is never hidden behind an old one. Your scroll position is restored straight away too, since the whole list is already there.
-- **New items appear in place.** When a sync adds or removes items while a library page is open, the page updates the list where it stands: no loading placeholder, no reset of what you are looking at, and a new item simply takes its slot in the sort order.
-- **The server remembers recent listings.** The server keeps a library listing's answer for up to a minute, so moving between pages or switching back to an earlier sort doesn't recompute it. Any change to the media (a sync, a purge, a server or library being turned on or off, a title or deduplication setting) discards those answers immediately.
+- **Only what you scroll to is loaded.** A library page asks for 100 items at a time — the ones on screen and just past them — so a library of tens of thousands of items costs the same to open as a small one, and the browser holds only what you have looked at. Scrolling quickly far down the list asks only for where you stop, not for everything you passed.
+- **Going back to a library page is instant.** Each library page keeps what it last loaded — the list's size and every part you scrolled through — for the rest of the browser tab's life. Coming back within a minute (from a detail page, for example) shows it at once without asking the server. After a minute, the kept list still appears at once and is then refreshed in the background. After 15 minutes it is discarded. A sync, a watch-history update or a server change clears every kept list, so a refreshed library is never hidden behind an old one. Your scroll position is restored straight away too.
+- **New items appear in place.** When a sync adds or removes items while a library page is open, the page updates the list where it stands: no loading placeholder, no reset of what you are looking at, and a new item simply takes its slot in the sort order. The part of the list on screen is read again as the page refreshes; what you scroll to next is read fresh. A watch-history update or a server or settings change refreshes the page the same way, so a list sorted by **Last Played** never mixes the order from before a play with the order after it.
+- **A part that fails to load is tried again.** If the server cannot answer for part of a list, those items stay placeholders and are asked for again after a few seconds, then less often (at most once a minute) while it keeps failing.
+- **The server remembers recent listings.** The server keeps each part of a library listing it answered for up to a minute, so moving between pages or switching back to an earlier sort doesn't recompute it. The **Series**, **All Seasons**, **Music** and **Albums** tabs, whose order comes from totals over every show, season, artist or album, work out the whole sorted list once and answer each further part from it. Any change to the media (a sync, a purge, a server or library being turned on or off, a title or deduplication setting) discards those answers immediately.
 - **Items load as you point at them.** When the mouse pointer rests on a card or a table row, or you press or focus it, the item's details are fetched before you click. On a touch screen only the tap that opens an item loads it, since every swipe starts with a touch. The detail page or panel then opens with them already in hand. The hover card's summary uses that same request.
-- **A detail page loads everything at once.** The page asks for the item, its play history and its Radarr/Sonarr/Lidarr and Seerr matches together, instead of waiting for the item before asking for the rest. A show, season, artist or album page asks for its seasons, episodes, albums or tracks at the same time too.
+- **A detail page loads everything at once.** The page asks for the item, its play history and its Radarr/Sonarr/Lidarr and Seerr matches together, instead of waiting for the item before asking for the rest. A show, season, artist or album page asks for its seasons, episodes, albums or tracks at the same time too; a season's episodes and an album's tracks come 100 at a time: the first part says how long the season or album is, and the rest are asked for together.
 - **A sync elsewhere leaves an open page alone.** An open library or detail page re-reads what it shows after a sync only when that sync could have changed it: a sync that wrote only another type of library (music while you browse movies), or a sync of another server while the page is filtered to one server, does not reload it.
 - **Posters appear immediately.** A detail page shows the poster the library grid already loaded while the full-size one arrives, and the detail panel uses the grid's poster size, which is already in the browser's cache.
 

@@ -1,25 +1,32 @@
 "use client";
 
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
-import { getLetterForTitle } from "@/lib/utils";
 
 interface UseTableAlphabetOptions {
-  items: { title: string }[];
+  /**
+   * The first row index of each starting letter, over the whole list — the
+   * listing's `index.letters` (`src/lib/media/list-index.ts`), sent by the
+   * server: a paged list holds only the pages scrolled to.
+   */
+  letters: Record<string, number> | undefined;
+  /** The letter of the row at `index` (its title when loaded), for the active letter. */
+  letterAt: (index: number) => string | null;
   /** When false the hook is inert (e.g. in card mode). */
   enabled?: boolean;
-  /** When provided, uses index-based scrolling for virtualized tables. */
-  scrollToIndexRef?: React.RefObject<((index: number) => void) | null>;
+  /** The virtualized table's index scroller (`scrollToIndexRef` on `MediaTable`/`DataTable`). */
+  scrollToIndexRef: React.RefObject<((index: number) => void) | null>;
   /** Scroll container element for tracking active letter on scroll. */
   scrollElement?: HTMLElement | null;
 }
 
 /**
- * Alphabet navigation for table views.
- * Supports both virtualized tables (via scrollToIndexRef) and non-virtualized
- * tables (DOM query fallback).
+ * Alphabet navigation for virtualized table views: the jump scrolls the table
+ * to the letter's first row (its page loads as it comes into view), and the
+ * active letter follows the rendered row at 40% of the viewport.
  */
 export function useTableAlphabet({
-  items,
+  letters,
+  letterAt,
   enabled = true,
   scrollToIndexRef,
   scrollElement,
@@ -28,17 +35,13 @@ export function useTableAlphabet({
   const scrollingRef = useRef(false);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const availableLetters = useMemo(() => {
-    const letters = new Set<string>();
-    for (const item of items) {
-      if (item.title) letters.add(getLetterForTitle(item.title));
-    }
-    return letters;
-  }, [items]);
+  const availableLetters = useMemo(() => new Set(Object.keys(letters ?? {})), [letters]);
 
   const scrollToLetter = useCallback(
     (letter: string) => {
       if (!enabled) return;
+      const targetIndex = letters?.[letter];
+      if (targetIndex === undefined || !scrollToIndexRef.current) return;
 
       scrollingRef.current = true;
       setActiveLetter(letter);
@@ -46,30 +49,9 @@ export function useTableAlphabet({
       scrollTimerRef.current = setTimeout(() => {
         scrollingRef.current = false;
       }, 100);
-
-      // Virtualized path: find index and scroll via ref
-      if (scrollToIndexRef?.current) {
-        const targetIndex = items.findIndex(
-          (item) => getLetterForTitle(item.title) === letter,
-        );
-        if (targetIndex >= 0) scrollToIndexRef.current(targetIndex);
-        return;
-      }
-
-      // Non-virtualized fallback: DOM query
-      const rows = document.querySelectorAll("tbody tr");
-      for (const row of rows) {
-        const cell = row.querySelector("td");
-        if (!cell) continue;
-        const text = cell.textContent?.trim() ?? "";
-        const rowLetter = getLetterForTitle(text);
-        if (rowLetter === letter) {
-          row.scrollIntoView({ behavior: "smooth", block: "start" });
-          return;
-        }
-      }
+      scrollToIndexRef.current(targetIndex);
     },
-    [enabled, items, scrollToIndexRef],
+    [enabled, letters, scrollToIndexRef],
   );
 
   // Track active letter from scroll position
@@ -94,9 +76,7 @@ export function useTableAlphabet({
         const rowTop = row.getBoundingClientRect().top + scrollTop - scrollElement.getBoundingClientRect().top;
         if (rowTop <= viewportTarget) {
           const index = parseInt(row.dataset.index ?? "", 10);
-          if (!isNaN(index) && index < items.length) {
-            currentLetter = getLetterForTitle(items[index].title);
-          }
+          if (!isNaN(index)) currentLetter = letterAt(index) ?? currentLetter;
         } else {
           break;
         }
@@ -123,7 +103,7 @@ export function useTableAlphabet({
       scrollElement.removeEventListener("scroll", throttledScroll);
       clearTimeout(scrollTimerRef.current);
     };
-  }, [scrollElement, enabled, items]);
+  }, [scrollElement, enabled, letterAt]);
 
   return { activeLetter, availableLetters, scrollToLetter };
 }

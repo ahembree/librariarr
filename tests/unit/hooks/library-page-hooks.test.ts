@@ -69,19 +69,22 @@ describe("useFilterPanelReset", () => {
 
 describe("useLibraryAlphabet", () => {
   const items = [{ title: "Alien" }, { title: "Blade Runner" }, { title: "Brazil" }, { title: "Zodiac" }];
+  // What the listing's index sends for those rows.
+  const letters = { A: 0, B: 1, Z: 3 };
+  const titleOf = (item: { title: string }) => item.title;
 
-  function fakeGrid(scrollToIndex = vi.fn()): VirtualPosterGrid {
+  function fakeGrid(scrollToIndex = vi.fn(), extra: Record<string, unknown> = {}, scrollElement: HTMLElement | null = null): VirtualPosterGrid {
     return {
       columns: 2,
-      scrollElement: null,
-      virtualizer: { scrollToIndex, getVirtualItems: () => [], options: { scrollMargin: 0 } },
+      scrollElement,
+      virtualizer: { scrollToIndex, getVirtualItems: () => [], options: { scrollMargin: 0 }, ...extra },
     } as unknown as VirtualPosterGrid;
   }
 
   it("jumps the grid by row in the card view", () => {
     const scrollToIndex = vi.fn();
     const grid = fakeGrid(scrollToIndex);
-    const { result } = renderHook(() => useLibraryAlphabet(items, grid, "cards"));
+    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, titleSorted: true, grid, viewMode: "cards" }));
     expect([...result.current.availableLetters].sort()).toEqual(["A", "B", "Z"]);
     act(() => result.current.onLetterClick("Z"));
     // Zodiac is the fourth item: the second row of two.
@@ -91,12 +94,52 @@ describe("useLibraryAlphabet", () => {
   it("jumps the table by item in the table view", () => {
     const scrollToIndex = vi.fn();
     const grid = fakeGrid(scrollToIndex);
-    const { result } = renderHook(() => useLibraryAlphabet(items, grid, "table"));
+    const { result } = renderHook(() => useLibraryAlphabet({ letters, items, titleOf, titleSorted: true, grid, viewMode: "table" }));
     const tableScroll = vi.fn();
     result.current.tableScrollToIndexRef.current = tableScroll;
     act(() => result.current.onLetterClick("B"));
     expect(tableScroll).toHaveBeenCalledWith(1);
     expect(scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("reads the active letter off a loaded row's title, and off the index for a row not loaded yet in a title sort", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16) as unknown as number);
+    try {
+      const main = document.createElement("div");
+      Object.defineProperty(main, "clientHeight", { value: 0, configurable: true });
+      const rows = [{ index: 0, start: 0 }, { index: 1, start: 100 }];
+      const grid = fakeGrid(vi.fn(), { getVirtualItems: () => rows, scrollOffset: 150 }, main);
+      // Rows 2 and 3 have not loaded: row 1 (items 2–3) reads its letter off the index.
+      const paged = [items[0], items[1], undefined, undefined];
+      const { result, rerender } = renderHook(({ titleSorted }) =>
+        useLibraryAlphabet({ letters, items: paged, titleOf, titleSorted, grid, viewMode: "cards" }),
+        { initialProps: { titleSorted: true } },
+      );
+      act(() => {
+        main.dispatchEvent(new Event("scroll"));
+        vi.advanceTimersByTime(16);
+      });
+      expect(result.current.activeLetter).toBe("B");
+
+      // Under another sort the letters interleave: a row not loaded has none.
+      rerender({ titleSorted: false });
+      act(() => {
+        main.dispatchEvent(new Event("scroll"));
+        vi.advanceTimersByTime(16);
+      });
+      expect(result.current.activeLetter).toBeNull();
+
+      rows.splice(1, 1);
+      act(() => {
+        main.dispatchEvent(new Event("scroll"));
+        vi.advanceTimersByTime(16);
+      });
+      expect(result.current.activeLetter).toBe("A");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("sizes a library card's content as the content block, quality bar and border", () => {

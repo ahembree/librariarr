@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { detailChildrenUrl, detailPrefetch, type DetailChildList } from "@/lib/media/detail-prefetch";
+import { LIST_PAGE_SIZE } from "@/lib/media/paged-list";
 
 export interface DetailChildren<T> {
   /** The list for this id; empty until it has answered. */
@@ -20,8 +21,10 @@ export interface DetailChildren<T> {
  * parallel with the record's own re-read.
  *
  * `pick` takes the list out of the route's answer (`seasons`, `items`, …). A
- * request that never answered keeps what is on screen; an answer without the
- * list (a 404 for an id that is gone) shows none, as the pages always did.
+ * paged list (a season's episodes, an album's tracks) is read page after page
+ * while the route says `hasMore`, and handed over whole. A request that never
+ * answered keeps what is on screen; an answer without the list (a 404 for an
+ * id that is gone) shows none, as the pages always did.
  */
 export function useDetailChildren<T>(
   id: string,
@@ -38,13 +41,55 @@ export function useDetailChildren<T>(
 
   useEffect(() => {
     const token = latest.begin();
-    void detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id)).then(({ body }) => {
+    void (async () => {
+      const { body } = await detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id));
       if (!latest.isCurrent(token)) return;
-      setState((prev) => ({
-        forId: id,
-        items: body ? (pickRef.current(body) ?? []) : prev.forId === id ? prev.items : [],
-      }));
-    });
+      if (!body) {
+        setState((prev) => ({ forId: id, items: prev.forId === id ? prev.items : [] }));
+        return;
+      }
+      // A season's episodes and an album's tracks come a page at a time. The
+      // first page carries the list's length (`index.total`), so the rest are
+      // asked for together; a list that grew past it is read on after them.
+      const items = [...(pickRef.current(body) ?? [])];
+      let more = hasMore(body) && items.length > 0;
+      const total = totalOf(body);
+      if (more && total !== null) {
+        const offsets: number[] = [];
+        for (let offset = items.length; offset < total; offset += LIST_PAGE_SIZE) offsets.push(offset);
+        const pages = await Promise.all(
+          offsets.map((offset) => detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id, offset))),
+        );
+        if (!latest.isCurrent(token)) return;
+        if (pages.some((page) => !page.ok || !page.body)) {
+          keepOnScreen(items);
+          return;
+        }
+        for (const page of pages) items.push(...(pickRef.current(page.body!) ?? []));
+        const last = pages.at(-1)?.body;
+        more = !!last && hasMore(last) && items.length > 0;
+      }
+      while (more) {
+        const next = await detailPrefetch.fetch<Record<string, unknown>>(detailChildrenUrl(kind, id, items.length));
+        if (!latest.isCurrent(token)) return;
+        // An error status (a 500, a 429) answers an error body, not the end of
+        // the list: like a page that never answered, it keeps what is on screen.
+        if (!next.ok || !next.body) {
+          keepOnScreen(items);
+          return;
+        }
+        const rows = pickRef.current(next.body) ?? [];
+        items.push(...rows);
+        more = hasMore(next.body) && rows.length > 0;
+      }
+      setState({ forId: id, items });
+    })();
+
+    // A later page failed: the list this id already shows stays; with none,
+    // the pages read so far.
+    function keepOnScreen(read: T[]) {
+      setState((prev) => ({ forId: id, items: prev.forId === id ? prev.items : read }));
+    }
   }, [id, kind, tick, latest]);
 
   const current = state.forId === id;
@@ -53,3 +98,15 @@ export function useDetailChildren<T>(
 
 // One empty list for every not-yet-answered read, so it is stable for memos.
 const NONE: never[] = [];
+
+/** A paged answer's whole length (`index.total`, asked for with its first page), or null. */
+function totalOf(body: Record<string, unknown>): number | null {
+  const index = body.index as { total?: unknown } | undefined;
+  return typeof index?.total === "number" ? index.total : null;
+}
+
+/** Whether a paged answer (`pagination.hasMore`) has rows after it. */
+function hasMore(body: Record<string, unknown>): boolean {
+  const pagination = body.pagination as { hasMore?: unknown } | undefined;
+  return pagination?.hasMore === true;
+}

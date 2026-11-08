@@ -27,7 +27,13 @@ export interface DataTableColumn<T> {
 
 interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
-  data: T[];
+  /**
+   * The rows, in order. `undefined` is a row whose page has not loaded yet (a
+   * paged library listing, `useLibraryList`): a placeholder row stands in.
+   * Such a list is sorted by the server (`onSortChange`); a client-sorted
+   * table keeps its placeholders last.
+   */
+  data: readonly (T | undefined)[];
   onRowClick?: (item: T) => void;
   keyExtractor: (item: T) => string;
   defaultSortId?: string;
@@ -46,7 +52,15 @@ interface DataTableProps<T> {
    * until the user changes them.
    */
   pinning?: { storageKey: string; defaultPinned: string[] };
+  /**
+   * The row range `[start, end]` the table renders, whenever it changes — a
+   * paged listing's `requestRange`, so the pages on screen are read.
+   */
+  onVisibleRange?: (start: number, end: number) => void;
 }
+
+/** A row's height before it is measured — a placeholder row takes exactly this. */
+const ROW_HEIGHT = 37;
 
 function loadPins(pinning: { storageKey: string; defaultPinned: string[] } | undefined): string[] {
   if (!pinning) return [];
@@ -105,6 +119,7 @@ export function DataTable<T>({
   scrollToIndexRef,
   renderHoverContent,
   pinning,
+  onVisibleRange,
 }: DataTableProps<T>) {
   const [internalSortId, setInternalSortId] = useState(defaultSortId ?? "");
   const [internalSortOrder, setInternalSortOrder] = useState<"asc" | "desc">(defaultSortOrder);
@@ -207,7 +222,9 @@ export function DataTable<T>({
     // When controlled (server-side sorting), data is already in correct order
     if (!sortValue) return data;
     const getValue = sortValue;
+    // `sort` keeps `undefined` (a row not loaded) last without asking the comparator.
     return [...data].sort((a, b) => {
+      if (a === undefined || b === undefined) return 0;
       const aVal = getValue(a);
       const bVal = getValue(b);
       if (aVal == null && bVal == null) return 0;
@@ -365,12 +382,18 @@ export function DataTable<T>({
   };
 
   // Stable: the virtualizer rebuilds every row's measurement when it changes.
-  const getItemKey = useCallback((index: number) => keyExtractor(sortedData[index]), [keyExtractor, sortedData]);
+  const getItemKey = useCallback(
+    (index: number) => {
+      const item = sortedData[index];
+      return item === undefined ? `placeholder-${index}` : keyExtractor(item);
+    },
+    [keyExtractor, sortedData],
+  );
 
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 37,
+    estimateSize: () => ROW_HEIGHT,
     // Rows are measured: a cell stacking two lines (the Query title column's
     // title and episode line) makes a row taller than the estimate, and
     // unmeasured the padding rows and the real rows disagreed, so the list
@@ -391,6 +414,11 @@ export function DataTable<T>({
   }, [scrollToIndexRef, virtualizer]);
 
   const virtualRows = virtualizer.getVirtualItems();
+  const firstRendered = virtualRows.length > 0 ? virtualRows[0].index : -1;
+  const lastRendered = virtualRows.length > 0 ? virtualRows[virtualRows.length - 1].index : -1;
+  useEffect(() => {
+    if (onVisibleRange && firstRendered >= 0) onVisibleRange(firstRendered, lastRendered);
+  }, [onVisibleRange, firstRendered, lastRendered]);
   const effectiveMargin = virtualizer.options.scrollMargin ?? 0;
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start - effectiveMargin : 0;
   const paddingBottom = virtualRows.length > 0
@@ -520,6 +548,23 @@ export function DataTable<T>({
           )}
           {virtualRows.map((virtualRow) => {
             const item = sortedData[virtualRow.index];
+            if (item === undefined) {
+              return (
+                <tr
+                  key={`placeholder-${virtualRow.index}`}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  data-placeholder=""
+                  aria-hidden="true"
+                  className={rowSurfaceClass({ index: virtualRow.index })}
+                  style={{ height: ROW_HEIGHT }}
+                >
+                  <td colSpan={orderedColumns.length} className="px-3 py-2">
+                    <div className="h-3.5 w-48 max-w-full animate-pulse rounded-md bg-muted" />
+                  </td>
+                </tr>
+              );
+            }
             const key = keyExtractor(item);
             const hoverContent = renderHoverContent?.(item);
 

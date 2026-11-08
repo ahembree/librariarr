@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { Music, ListMusic, Clock, HardDrive } from "lucide-react";
@@ -27,10 +27,12 @@ import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/com
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { selectListItems } from "@/lib/media/paged-list";
 
 const TRACKS_FROM = `?from=${encodeURIComponent("/library/music/tracks")}`;
 
 const trackKey = (track: MediaListItem) => track.id;
+const SQUARE_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="square" />;
 
 // The table's popover carries the track's art as its hero; the card's passes
 // the same fields (the card already shows the art).
@@ -59,10 +61,10 @@ export default function AllTracksPage() {
     sortOrder,
     ...filters,
   });
-  const { items, loading, loadingRest } = useLibraryList<MediaListItem>({
+  const { items, loading, requestRange } = useLibraryList({
     url: "/api/media/music",
     params: listParams,
-    mode: "progressive",
+    select: selectListItems<MediaListItem>,
     syncScope: { types: "MUSIC" },
   });
 
@@ -75,7 +77,7 @@ export default function AllTracksPage() {
     layoutKey: `${viewMode}:${loading}`,
   });
 
-  const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loadingRest && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/music/tracks", !loading && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
@@ -151,9 +153,17 @@ export default function AllTracksPage() {
           onSort={toggleSort}
           mediaType="MUSIC"
           renderHoverContent={trackTableHover}
+          onVisibleRange={requestRange}
         />
       ) : (
-        <VirtualCardGrid grid={grid} items={items} getKey={trackKey} renderItem={renderCard} />
+        <VirtualCardGrid
+          grid={grid}
+          items={items}
+          placeholder={SQUARE_PLACEHOLDER}
+          onVisibleRange={requestRange}
+          getKey={trackKey}
+          renderItem={renderCard}
+        />
       )}
     </div>
   );

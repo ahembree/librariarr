@@ -67,6 +67,17 @@ function listPaging(maxLimit: number): Param[] {
 const LIST_PAGING = listPaging(DOCUMENTED_LIST_LIMIT.flat);
 const GROUPED_PAGING = listPaging(DOCUMENTED_LIST_LIMIT.grouped);
 
+// Read by every library listing (`wantsListIndex`, src/lib/media/list-index.ts).
+const LIST_INDEX: Param = {
+  name: "index",
+  description:
+    "`1` adds `index` to the answer: `total`, the rows in the whole listing; on the movies and grouped listings " +
+    "`letters`, each starting letter's first row (`#` for titles not starting with a letter) in the listing's order; " +
+    "on the grouped listings `sums` (shows: `seasons` and `episodes`; artists: `albums` and `tracks`). Page through " +
+    "a listing of any size with `limit` and `offset` knowing its length, rather than reading it whole with `limit=0`.",
+  schema: { type: "integer", enum: [0, 1] },
+};
+
 const STARTS_WITH: Param = { name: "startsWith", description: "First letter, or `#` for titles not starting with a letter." };
 const SERVER_ID: Param = { name: "serverId", description: "Limit to one media server." };
 
@@ -153,7 +164,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     description: "The Settings “Run now” job. Servers already syncing are skipped.",
     responses: { "202": "Queued: `{ queued: true, jobs }`, `jobs` being how many servers were queued", "500": "A sync could not be queued" },
   },
-  { method: "get", path: "/media/movies", scope: "media:read", tag: "Library", summary: "Movies", query: [...LIST_PAGING, ...LIBRARY_FILTERS, STARTS_WITH] },
+  { method: "get", path: "/media/movies", scope: "media:read", tag: "Library", summary: "Movies", query: [...LIST_PAGING, LIST_INDEX, ...LIBRARY_FILTERS, STARTS_WITH] },
   {
     method: "get",
     path: "/media/series",
@@ -162,6 +173,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     summary: "Episodes",
     query: [
       ...LIST_PAGING,
+      LIST_INDEX,
       ...LIBRARY_FILTERS,
       { name: "seriesKey", description: "One show." },
       { name: "seasonNumber", description: "One season.", schema: { type: "integer" } },
@@ -174,7 +186,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Shows, with episode and watched counts",
-    query: [...GROUPED_PAGING, { name: "search", description: "Title search." }, STARTS_WITH, SERVER_ID],
+    query: [...GROUPED_PAGING, LIST_INDEX, { name: "search", description: "Title search." }, STARTS_WITH, SERVER_ID],
   },
   {
     method: "get",
@@ -196,6 +208,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     summary: "Tracks",
     query: [
       ...LIST_PAGING,
+      LIST_INDEX,
       ...LIBRARY_FILTERS,
       { name: "parentTitle", description: "Artist." },
       { name: "albumTitle", description: "Album." },
@@ -208,7 +221,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Artists, with track and album counts",
-    query: [...GROUPED_PAGING, { name: "search", description: "Artist search." }, STARTS_WITH, SERVER_ID],
+    query: [...GROUPED_PAGING, LIST_INDEX, { name: "search", description: "Artist search." }, STARTS_WITH, SERVER_ID],
   },
   {
     method: "get",

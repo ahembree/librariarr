@@ -11,6 +11,8 @@ import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { letterOffsets, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
+import { memoListRows } from "@/lib/api/list-rows-memo";
 import {
   UNKNOWN_ARTIST,
   albumArtistKeySql,
@@ -55,9 +57,7 @@ interface AlbumRepresentativeRow {
 const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serverId = searchParams.get("serverId");
-  const search = searchParams.get("search");
-  const sortBy = searchParams.get("sortBy") || "albumTitle";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
+  const withIndex = wantsListIndex(searchParams);
   // The shared parser, as on the artist listing beside it: this route read
   // `limit` with a bare parseInt, so `limit=-1` sliced to nothing and answered
   // `hasMore: true` forever, nothing capped a page, and `offset` was ignored.
@@ -65,8 +65,47 @@ const listGet = withSession(async (session, request: NextRequest) => {
 
   const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
-    return NextResponse.json({ albums: [], pagination: { page, limit, hasMore: false } });
+    return NextResponse.json({
+      albums: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: albumIndex([]) }),
+    });
   }
+
+  // A page of a listing the Albums tab is scrolling through reads the sorted
+  // albums kept from its previous page (`memoListRows`).
+  const albums = limit > 0
+    ? await memoListRows("music-albums-all", searchParams, () => loadSortedAlbums(sf, searchParams))
+    : await loadSortedAlbums(sf, searchParams);
+  const index = withIndex ? albumIndex(albums) : undefined;
+
+  if (limit > 0) {
+    return jsonResponse(request, {
+      albums: albums.slice(skip, skip + limit),
+      pagination: { page, limit, hasMore: albums.length > skip + limit },
+      ...(index && { index }),
+    });
+  }
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, {
+    albums: albums.slice(skip),
+    pagination: { page, limit, hasMore: false },
+    ...(index && { index }),
+  });
+});
+
+type ServerFilter = NonNullable<Awaited<ReturnType<typeof resolveServerFilter>>>;
+
+/** The index the Albums tab reads: the album count and the A–Z offsets of the album titles. */
+function albumIndex(rows: readonly { albumTitle: string }[]): ListIndex {
+  return { total: rows.length, letters: letterOffsets(rows.map((r) => r.albumTitle)) };
+}
+
+/** Every album of the listing, filtered and sorted. */
+async function loadSortedAlbums(sf: ServerFilter, searchParams: URLSearchParams) {
+  const search = searchParams.get("search");
+  const sortBy = searchParams.get("sortBy") || "albumTitle";
+  const sortOrder = searchParams.get("sortOrder") || "asc";
 
   // Aggregated in SQL, like the artist and series listings: this loaded every
   // track — 18 columns and its server through a relation — into Node and
@@ -239,15 +278,8 @@ const listGet = withSession(async (session, request: NextRequest) => {
     }
   });
 
-  if (limit > 0) {
-    const fetched = albums.slice(skip, skip + limit + 1);
-    const hasMore = fetched.length > limit;
-    if (hasMore) fetched.pop();
-    return jsonResponse(request, { albums: fetched, pagination: { page, limit, hasMore } });
-  }
-  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { albums: albums.slice(skip), pagination: { page, limit, hasMore: false } });
-});
+  return albums;
+}
 
 /**
  * Answered from the list response cache when the same listing was asked for

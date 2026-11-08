@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromArtistGroup } from "@/components/media-hover-popover";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
@@ -61,8 +61,9 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-// Module-level: built inline, the columns were new on every render and the
-// table re-sorted the whole list on each alphabet scroll.
+// Module-level: built inline, the columns were new on every render. Each
+// sortable column's id is a sort the route answers: the table shows the
+// server's order, since the page holds only the pages read.
 const ARTIST_TABLE_COLUMNS: DataTableColumn<GroupedArtist>[] = [
   {
     id: "parentTitle",
@@ -123,6 +124,8 @@ const ARTIST_TABLE_COLUMNS: DataTableColumn<GroupedArtist>[] = [
 ];
 
 const artistKey = (a: GroupedArtist) => a.parentTitle;
+const artistTitleOf = (a: GroupedArtist) => a.parentTitle;
+const SQUARE_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="square" />;
 
 // The table's popover carries the artist's art as its hero; the card's passes
 // the same fields (the card already shows the art).
@@ -147,6 +150,7 @@ export default function MusicPage() {
     sortOrder,
     toggleSort,
     toggleOrder,
+    setSort,
     filters,
     externalFilters,
     onFilterChange,
@@ -162,17 +166,15 @@ export default function MusicPage() {
   const listParams = new URLSearchParams();
   listParams.set("sortBy", sortBy);
   listParams.set("sortOrder", sortOrder);
-  listParams.set("limit", "0");
   if (selectedServerId !== "all") {
     listParams.set("serverId", selectedServerId);
   }
   for (const [key, value] of Object.entries(filters)) {
     if (value) listParams.set(key, value);
   }
-  const { items: artistList, loading, refetch: fetchArtists } = useLibraryList({
+  const { items: artistList, index, loading, requestRange, refetch: fetchArtists } = useLibraryList({
     url: "/api/media/music/grouped",
     params: listParams,
-    mode: "grouped",
     select: selectArtists,
     syncScope: { types: "MUSIC", serverId: selectedServerId },
   });
@@ -191,19 +193,17 @@ export default function MusicPage() {
     scrollToIndex: grid.scrollToIndex,
   });
 
-  const alphabetItems = useMemo(() => artistList.map((a) => ({ title: a.parentTitle })), [artistList]);
-  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
+  const alphabet = useLibraryAlphabet({
+    letters: index?.letters,
+    items: artistList,
+    titleOf: artistTitleOf,
+    titleSorted: sortBy === "parentTitle",
+    grid,
+    viewMode,
+  });
 
-  // Summed once per list, not on every render (each alphabet scroll re-renders).
-  const totals = useMemo(() => {
-    let albums = 0;
-    let tracks = 0;
-    for (const a of artistList) {
-      albums += a.albumCount;
-      tracks += a.trackCount;
-    }
-    return { albums, tracks };
-  }, [artistList]);
+  // Summed over every artist by the server: the page holds only the pages read.
+  const totals = { albums: index?.sums?.albums ?? 0, tracks: index?.sums?.tracks ?? 0 };
 
   const openArtist = useCallback(
     (a: GroupedArtist) => {
@@ -298,14 +298,24 @@ export default function MusicPage() {
           columns={ARTIST_TABLE_COLUMNS}
           data={artistList}
           keyExtractor={artistKey}
-          defaultSortId="parentTitle"
+          defaultSortId={sortBy}
+          defaultSortOrder={sortOrder}
+          onSortChange={setSort}
           resizeStorageKey="dt-widths-music"
           onRowClick={openArtist}
           scrollToIndexRef={alphabet.tableScrollToIndexRef}
           renderHoverContent={artistTableHover}
+          onVisibleRange={requestRange}
         />
       ) : (
-        <VirtualCardGrid grid={grid} items={artistList} getKey={artistKey} renderItem={renderCard} />
+        <VirtualCardGrid
+          grid={grid}
+          items={artistList}
+          getKey={artistKey}
+          renderItem={renderCard}
+          placeholder={SQUARE_PLACEHOLDER}
+          onVisibleRange={requestRange}
+        />
       )}
 
       <AlphabetFilter activeLetter={alphabet.activeLetter} onLetterClick={alphabet.onLetterClick} availableLetters={alphabet.availableLetters} />

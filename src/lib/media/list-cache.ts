@@ -1,11 +1,9 @@
 /**
- * The library pages' last-loaded lists, kept for the rest of the tab's life so
- * coming back to a page — from an item's detail page, or another library page
- * — paints the list at once instead of re-downloading the whole library.
- *
- * Before it every visit fetched everything again (a 40k-track library, a
- * 28k-episode one) and scroll restoration waited for all of it to arrive, so
- * "back" from a detail page showed a skeleton for as long as a cold load.
+ * The library pages' last-read lists — each listing's index and every page
+ * read so far (`PagedListSnapshot`, `src/lib/media/paged-list.ts`) — kept for
+ * the rest of the tab's life so coming back to a page — from an item's detail
+ * page, or another library page — paints the list at once, at the row the user
+ * left, instead of reading it again page by page behind a skeleton.
  *
  * - An entry younger than `LIST_FRESH_MS` is shown and nothing is fetched —
  *   while pushes are arriving. With the event stream down (or held back by a
@@ -35,6 +33,8 @@ export interface CachedList<T> {
   value: T;
   /** Young enough to show without asking the server again. */
   fresh: boolean;
+  /** When what the entry holds was read — its age, which `set` keeps when passed back. */
+  storedAt: number;
 }
 
 export interface ListCache {
@@ -43,8 +43,13 @@ export interface ListCache {
    * Store `value` — unless the cache was cleared since `generation` was read.
    * A request started before a clear answers with the list as it was before
    * whatever the clear was for; stored, it would read as fresh.
+   *
+   * `storedAt` is when the value was read (default: now). A paged listing
+   * stores itself again as each page answers, with the time its index was
+   * read: stamped now, an old listing would read as fresh again and never
+   * reach `LIST_MAX_AGE_MS`.
    */
-  set(key: string, value: unknown, generation?: number): void;
+  set(key: string, value: unknown, generation?: number, storedAt?: number): void;
   clear(): void;
   /** Bumped by every `clear`; read it when a request starts and pass it to `set`. */
   generation(): number;
@@ -58,7 +63,8 @@ export function createListCache(
     // Whether the events that clear the cache are reaching this tab.
     cleared = () => true,
   }: { freshMs?: number; maxAgeMs?: number; maxEntries?: number; cleared?: () => boolean } = {},
-  now: () => number = Date.now,
+  // Read at each call, so it is the same clock the hook stamps listings with.
+  now: () => number = () => Date.now(),
 ): ListCache {
   const entries = new Map<string, Entry>();
   let currentGeneration = 0;
@@ -74,12 +80,12 @@ export function createListCache(
       // Most recently used moves to the end, so eviction takes the oldest use.
       entries.delete(key);
       entries.set(key, entry);
-      return { value: entry.value as T, fresh: age <= freshMs && cleared() };
+      return { value: entry.value as T, fresh: age <= freshMs && cleared(), storedAt: entry.storedAt };
     },
-    set(key, value, generation) {
+    set(key, value, generation, storedAt) {
       if (generation !== undefined && generation !== currentGeneration) return;
       entries.delete(key);
-      entries.set(key, { value, storedAt: now() });
+      entries.set(key, { value, storedAt: storedAt ?? now() });
       while (entries.size > maxEntries) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;
@@ -105,30 +111,6 @@ export function clearLibraryListCache(): void {
 /** `url?params` with the parameters sorted, so their order never splits an entry. */
 export function listCacheKeyFor(url: string, params: URLSearchParams): string {
   return `${url}?${sortedQueryString(params)}`;
-}
-
-/**
- * GET `url?params` as JSON through the cache: `onData` runs with the cached
- * answer when there is one, and again with the server's when the entry was
- * missing or past fresh. Rejects on a failed request (an error status
- * included), after any cached answer was already handed over.
- */
-export async function loadCachedList<T>(
-  url: string,
-  params: URLSearchParams,
-  onData: (data: T) => void,
-  cache: ListCache = libraryListCache,
-): Promise<void> {
-  const key = listCacheKeyFor(url, params);
-  const generation = cache.generation();
-  const cached = cache.get<T>(key);
-  if (cached) {
-    onData(cached.value);
-    if (cached.fresh) return;
-  }
-  const data = await fetchJson<T>(`${url}?${params}`);
-  cache.set(key, data, generation);
-  onData(data);
 }
 
 /** GET `href` as JSON; rejects on an error status. A `signal` aborts the request. */

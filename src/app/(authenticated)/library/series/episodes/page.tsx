@@ -6,7 +6,7 @@ import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard } from "@/components/media-card";
+import { MediaCard, MediaCardPlaceholder } from "@/components/media-card";
 import { Tv, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaListItem } from "@/lib/types";
@@ -28,6 +28,7 @@ import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/com
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { selectListItems } from "@/lib/media/paged-list";
 
 // Landscape card min widths (matches useCardSize internals)
 const LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 140, medium: 200, large: 260 };
@@ -36,6 +37,7 @@ const MOBILE_LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 110, medium
 const EPISODES_FROM = `?from=${encodeURIComponent("/library/series/episodes")}`;
 
 const episodeKey = (ep: MediaListItem) => ep.id;
+const WIDE_PLACEHOLDER = <MediaCardPlaceholder aspectRatio="landscape" />;
 
 // The table's popover carries the show's poster as its hero; the card's passes
 // the same fields (the card already shows the still).
@@ -64,10 +66,10 @@ export default function AllEpisodesPage() {
     sortOrder,
     ...filters,
   });
-  const { items, loading, loadingRest } = useLibraryList<MediaListItem>({
+  const { items, loading, requestRange } = useLibraryList({
     url: "/api/media/series",
     params: listParams,
-    mode: "progressive",
+    select: selectListItems<MediaListItem>,
     syncScope: { types: "SERIES" },
   });
 
@@ -90,7 +92,7 @@ export default function AllEpisodesPage() {
     layoutKey: `${viewMode}:${loading}`,
   });
 
-  const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loadingRest && items.length > 0, undefined, undefined, {
+  const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loading && items.length > 0, undefined, undefined, {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
@@ -174,9 +176,17 @@ export default function AllEpisodesPage() {
           onSort={toggleSort}
           mediaType="SERIES"
           renderHoverContent={episodeTableHover}
+          onVisibleRange={requestRange}
         />
       ) : (
-        <VirtualCardGrid grid={grid} items={items} getKey={episodeKey} renderItem={renderCard} />
+        <VirtualCardGrid
+          grid={grid}
+          items={items}
+          placeholder={WIDE_PLACEHOLDER}
+          onVisibleRange={requestRange}
+          getKey={episodeKey}
+          renderItem={renderCard}
+        />
       )}
     </div>
   );

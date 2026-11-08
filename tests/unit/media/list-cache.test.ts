@@ -6,8 +6,8 @@ import {
   clearLibraryListCache,
   createListCache,
   libraryListCache,
+  fetchJson,
   listCacheKeyFor,
-  loadCachedList,
   LIST_FRESH_MS,
   LIST_MAX_AGE_MS,
 } from "@/lib/media/list-cache";
@@ -34,9 +34,9 @@ describe("createListCache", () => {
     let now = 0;
     const cache = createListCache({}, () => now);
     cache.set("k", [1]);
-    expect(cache.get("k")).toEqual({ value: [1], fresh: true });
+    expect(cache.get("k")).toEqual({ value: [1], fresh: true, storedAt: 0 });
     now = LIST_FRESH_MS + 1;
-    expect(cache.get("k")).toEqual({ value: [1], fresh: false });
+    expect(cache.get("k")).toEqual({ value: [1], fresh: false, storedAt: 0 });
     now = LIST_MAX_AGE_MS + 1;
     expect(cache.get("k")).toBeUndefined();
   });
@@ -45,9 +45,22 @@ describe("createListCache", () => {
     let live = false;
     const cache = createListCache({ cleared: () => live });
     cache.set("k", [1]);
-    expect(cache.get("k")).toEqual({ value: [1], fresh: false });
+    expect(cache.get("k")).toMatchObject({ value: [1], fresh: false });
     live = true;
-    expect(cache.get("k")).toEqual({ value: [1], fresh: true });
+    expect(cache.get("k")).toMatchObject({ value: [1], fresh: true });
+  });
+
+  it("keeps the age it is given, so storing a listing again does not make it younger", () => {
+    let now = 0;
+    const cache = createListCache({}, () => now);
+    cache.set("k", "first page");
+    now = LIST_FRESH_MS + 10;
+    // A later page of the same listing, stored with the time its index was read.
+    cache.set("k", "two pages", undefined, 0);
+    expect(cache.get("k")).toEqual({ value: "two pages", fresh: false, storedAt: 0 });
+    now = LIST_MAX_AGE_MS + 1;
+    cache.set("k", "three pages", undefined, 0);
+    expect(cache.get("k")).toBeUndefined();
   });
 
   it("evicts the least recently used past its bound", () => {
@@ -91,58 +104,25 @@ describe("listCacheKeyFor", () => {
   });
 });
 
-describe("loadCachedList", () => {
-  it("fetches once, then answers from the cache while fresh", async () => {
-    fetchMock.mockResolvedValue(respond({ series: [1, 2] }));
-    const seen: unknown[] = [];
-    await loadCachedList("/api/media/series/grouped", new URLSearchParams("limit=0"), (d) => seen.push(d));
-    await loadCachedList("/api/media/series/grouped", new URLSearchParams("limit=0"), (d) => seen.push(d));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/media/series/grouped?limit=0");
-    expect(seen).toEqual([{ series: [1, 2] }, { series: [1, 2] }]);
+describe("fetchJson", () => {
+  it("answers the body, and rejects on an error status", async () => {
+    fetchMock.mockResolvedValueOnce(respond({ items: [1] }));
+    await expect(fetchJson("/api/media/movies?limit=100&offset=0")).resolves.toEqual({ items: [1] });
+    expect(fetchMock).toHaveBeenCalledWith("/api/media/movies?limit=100&offset=0");
 
-    // With pushes not arriving nothing would have cleared it: asked again.
-    realtime.live = false;
-    await loadCachedList("/api/media/series/grouped", new URLSearchParams("limit=0"), (d) => seen.push(d));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockResolvedValueOnce(respond({ error: "boom" }, 500));
+    await expect(fetchJson("/l")).rejects.toThrow("HTTP 500");
   });
 
-  it("shows a stale entry at once, then the server's answer", async () => {
-    let now = 0;
-    const cache = createListCache({}, () => now);
-    fetchMock.mockResolvedValueOnce(respond({ v: 1 }));
-    await loadCachedList("/l", new URLSearchParams(), () => {}, cache);
-    now = LIST_FRESH_MS + 1;
-    fetchMock.mockResolvedValueOnce(respond({ v: 2 }));
-    const seen: unknown[] = [];
-    await loadCachedList("/l", new URLSearchParams(), (d) => seen.push(d), cache);
-    expect(seen).toEqual([{ v: 1 }, { v: 2 }]);
-    expect(cache.get("/l?")?.value).toEqual({ v: 2 });
+  it("passes an abort signal through", async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce(respond({}));
+    await fetchJson("/l", controller.signal);
+    expect(fetchMock).toHaveBeenCalledWith("/l", { signal: controller.signal });
   });
 
-  it("rejects on an error status and keeps nothing", async () => {
-    fetchMock.mockResolvedValueOnce(respond({ error: "x" }, 500));
-    await expect(loadCachedList("/l", new URLSearchParams(), () => {})).rejects.toThrow("HTTP 500");
-    expect(libraryListCache.get("/l?")).toBeUndefined();
-  });
-
-  it("hands over but does not store an answer that crossed a clear", async () => {
-    let resolve!: (v: unknown) => void;
-    fetchMock.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
-    const seen: unknown[] = [];
-    const pending = loadCachedList("/l", new URLSearchParams(), (d) => seen.push(d));
-    clearLibraryListCache();
-    resolve(respond({ v: "pre-sync" }));
-    await pending;
-    expect(seen).toEqual([{ v: "pre-sync" }]);
-    expect(libraryListCache.get("/l?")).toBeUndefined();
-  });
-
-  it("asks again once the cache is cleared", async () => {
-    fetchMock.mockResolvedValue(respond({}));
-    await loadCachedList("/l", new URLSearchParams(), () => {});
-    clearLibraryListCache();
-    await loadCachedList("/l", new URLSearchParams(), () => {});
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+  it("is what the library list cache keys its pages' listings with", () => {
+    libraryListCache.set("k", 1);
+    expect(libraryListCache.get("k")?.value).toBe(1);
   });
 });

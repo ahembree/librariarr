@@ -14,6 +14,8 @@ import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 import type { ServerPresence } from "@/lib/dedup/deduplicate";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { letterOffsets, sumOf, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
+import { memoListRows } from "@/lib/api/list-rows-memo";
 import {
   ARTIST_KEY_SQL,
   albumTitleKeySql,
@@ -58,16 +60,83 @@ const listGet = withSession(async (session, request: NextRequest) => {
   // `isFullListingLimit` inside it, so the API-key guard's charge for a full
   // listing cannot drift from this route.
   const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
-  const search = searchParams.get("search");
-  const sortBy = searchParams.get("sortBy") || "parentTitle";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
   const serverId = searchParams.get("serverId");
-  const startsWith = searchParams.get("startsWith");
+  const withIndex = wantsListIndex(searchParams);
 
   const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
-    return NextResponse.json({ artists: [], pagination: { page, limit, hasMore: false } });
+    return NextResponse.json({
+      artists: [],
+      pagination: { page, limit, hasMore: false },
+      ...(withIndex && { index: artistIndex([]) }),
+    });
   }
+
+  // A page of a listing the Music page is scrolling through reads the sorted
+  // artists kept from its previous page (`memoListRows`); a `limit=0` read
+  // computes them for itself.
+  const paged = limit > 0;
+  const { rows, keys, presenceAfterPaging } = paged
+    ? await memoListRows("music-grouped", searchParams, () => loadSortedArtists(sf, searchParams, { paged }))
+    : await loadSortedArtists(sf, searchParams, { paged });
+  const index = withIndex ? artistIndex(rows) : undefined;
+
+  // The presence of just the artists being returned, on copies: the rows may
+  // be the shared ones above.
+  const withPresence = async (from: number, to?: number) => {
+    const pageRows = rows.slice(from, to);
+    if (!presenceAfterPaging) return pageRows;
+    const pageKeys = keys.slice(from, to);
+    const presence = await getServerPresenceByGroup(
+      "MUSIC",
+      sf.serverIds,
+      pageKeys.length <= PRESENCE_SCOPE_MAX_KEYS ? { groupKeys: pageKeys } : undefined,
+    );
+    return pageRows.map((row, i) => ({ ...row, servers: presence.get(pageKeys[i]) ?? [] }));
+  };
+
+  if (paged) {
+    const hasMore = rows.length > skip + limit;
+    return jsonResponse(request, {
+      artists: await withPresence(skip, skip + limit),
+      pagination: { page, limit, hasMore },
+      ...(index && { index }),
+    });
+  }
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, {
+    artists: await withPresence(skip),
+    pagination: { page, limit, hasMore: false },
+    ...(index && { index }),
+  });
+});
+
+type ServerFilter = NonNullable<Awaited<ReturnType<typeof resolveServerFilter>>>;
+
+/** The index the Music page reads: the artist count, the A–Z offsets, and the albums and tracks it heads the page with. */
+function artistIndex(rows: readonly { parentTitle: string; albumCount: number; trackCount: number }[]): ListIndex {
+  return {
+    total: rows.length,
+    letters: letterOffsets(rows.map((r) => r.parentTitle)),
+    sums: { albums: sumOf(rows, (r) => r.albumCount), tracks: sumOf(rows, (r) => r.trackCount) },
+  };
+}
+
+/**
+ * Every artist of the listing, sorted, with each row's group key at the same
+ * position in `keys` (the rows carry no key of their own, and an extra field
+ * would change the response). `presenceAfterPaging`: the rows carry no
+ * presence yet, and the page cut from them reads its own.
+ */
+async function loadSortedArtists(
+  sf: ServerFilter,
+  searchParams: URLSearchParams,
+  { paged }: { paged: boolean },
+) {
+  const search = searchParams.get("search");
+  const sortBy = searchParams.get("sortBy") || "parentTitle";
+  const sortOrder = searchParams.get("sortOrder") || "asc";
+  const startsWith = searchParams.get("startsWith");
 
   const whereClause: Prisma.MediaItemWhereInput = {
     type: "MUSIC" as const,
@@ -137,7 +206,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
   const trackOrder = `"albumTitle", "seasonNumber", "episodeNumber", id`;
   const first = (col: string) => firstNonNullSql(col, trackOrder);
 
-  const presenceAfterPaging = !sf.isSingleServer && (limit > 0 || filtered);
+  const presenceAfterPaging = !sf.isSingleServer && (paged || filtered);
 
   // `ORDER BY group_key`: the list is sorted below with a stable sort, so
   // this is the order of ties — artists with equal track counts — and a page
@@ -284,28 +353,8 @@ const listGet = withSession(async (session, request: NextRequest) => {
       }
     });
 
-  // The presence of just the artists being returned.
-  const withPresence = async <T extends { servers: ServerPresence[] }>(rows: T[]) => {
-    if (!presenceAfterPaging) return rows;
-    const keys = rows.map((row) => groupKeyOf.get(row)!);
-    const presence = await getServerPresenceByGroup(
-      "MUSIC",
-      sf.serverIds,
-      keys.length <= PRESENCE_SCOPE_MAX_KEYS ? { groupKeys: keys } : undefined,
-    );
-    rows.forEach((row, i) => (row.servers = presence.get(keys[i]) ?? []));
-    return rows;
-  };
-
-  if (limit > 0) {
-    const paged = artistList.slice(skip, skip + limit + 1);
-    const hasMore = paged.length > limit;
-    if (hasMore) paged.pop();
-    return jsonResponse(request, { artists: await withPresence(paged), pagination: { page, limit, hasMore } });
-  }
-  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { artists: await withPresence(artistList.slice(skip)), pagination: { page, limit, hasMore: false } });
-});
+  return { rows: artistList, keys: artistList.map((row) => groupKeyOf.get(row)!), presenceAfterPaging };
+}
 
 /**
  * Above this many artists, presence is read for the whole library instead:
