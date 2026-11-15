@@ -101,29 +101,33 @@ async function commitDetection(
  * item only for an unreleased COMPLETED/FAILED action with the same config —
  * `releasedAt`). A grouped match's dropped members release the actions that
  * acted on them too, since episode coverage reads every settled action of the
- * rule set, wherever it is stored. Written in the detection transaction.
+ * rule set, wherever it is stored.
+ *
+ * A dropped row is not always an item that stopped matching: a show's match
+ * moves to another representative episode when its own is excepted. So an
+ * action stays unreleased while its item or any member it acted on is still
+ * matched (`stillMatchedIds`: every current match, its members and its
+ * folded copies) — its
+ * coverage still holds. Written in the detection transaction, as one
+ * statement with each id list a single array parameter.
  */
 async function releaseSettledActions(
   tx: Prisma.TransactionClient,
   ruleSetId: string,
   droppedIds: string[],
   droppedMemberIds: string[],
+  stillMatchedIds: string[],
   now: Date,
 ): Promise<void> {
-  for (const ids of inChunks(droppedIds)) {
-    await tx.lifecycleAction.updateMany({
-      where: { ruleSetId, status: { in: ["COMPLETED", "FAILED"] }, releasedAt: null, mediaItemId: { in: ids } },
-      data: { releasedAt: now },
-    });
-  }
-  if (droppedMemberIds.length > 0) {
-    await tx.$executeRaw`
-      UPDATE "LifecycleAction" SET "releasedAt" = ${now}, "updatedAt" = ${now}
-       WHERE "ruleSetId" = ${ruleSetId}
-         AND status IN ('COMPLETED', 'FAILED')
-         AND "releasedAt" IS NULL
-         AND "matchedMediaItemIds" && ${droppedMemberIds}::text[]`;
-  }
+  if (droppedIds.length === 0 && droppedMemberIds.length === 0) return;
+  await tx.$executeRaw`
+    UPDATE "LifecycleAction" SET "releasedAt" = ${now}, "updatedAt" = ${now}
+     WHERE "ruleSetId" = ${ruleSetId}
+       AND status IN ('COMPLETED', 'FAILED')
+       AND "releasedAt" IS NULL
+       AND ("mediaItemId" = ANY(${droppedIds}::text[]) OR "matchedMediaItemIds" && ${droppedMemberIds}::text[])
+       AND ("mediaItemId" IS NULL OR NOT ("mediaItemId" = ANY(${stillMatchedIds}::text[])))
+       AND NOT ("matchedMediaItemIds" && ${stillMatchedIds}::text[])`;
 }
 
 /** The member ids a stored match lists. */
@@ -761,6 +765,10 @@ export async function detectAndSaveMatches(
   const droppedIds = [...heldIds].filter((id) => !currentIdSet.has(id) && !carried.has(id));
   const stillMatchedMembers = new Set(enrichedItems.flatMap((item) => storedMemberIdsOf(item)));
   const droppedIdSet = new Set(droppedIds);
+  // A copy folded into another server's match still matches, through it.
+  const stillMatchedIds = [
+    ...new Set([...currentIdSet, ...stillMatchedMembers, ...enrichedItems.flatMap((item) => copyIdsOf(item))]),
+  ];
   const droppedMemberIds = [
     ...new Set(
       heldMatches
@@ -789,7 +797,7 @@ export async function detectAndSaveMatches(
       for (const { id, data } of actionCarryOver) {
         await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
-      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, now);
+      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, stillMatchedIds, now);
     });
     if (!committed) return DISCARDED;
 
@@ -881,7 +889,7 @@ export async function detectAndSaveMatches(
         });
       }
       // A sticky match is kept, so its item never stopped matching here.
-      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, now);
+      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, stillMatchedIds, now);
     }
   } : null);
   if (!committed) return DISCARDED;

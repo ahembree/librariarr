@@ -132,4 +132,84 @@ describe("re-match after a completed non-destructive action", () => {
     expect(await pending()).toHaveLength(0);
     expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, releasedAt: { not: null } } })).toBe(0);
   });
+
+  it("keeps a show's episode coverage when its representative episode moves", async () => {
+    // A show's match is stored against its lowest-id episode. When that
+    // episode is excepted the match moves to the next one: the old row is
+    // dropped, but the show never stopped matching, so the action that
+    // covered its other episodes must keep suppressing them.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps = [];
+    for (const ep of [1, 2, 3]) {
+      eps.push(await createTestMediaItem(library.id, {
+        type: "SERIES", title: `E${ep}`, parentTitle: "Lost", seriesKey: "tvdb:1",
+        seasonNumber: 1, episodeNumber: ep, playCount: 0,
+      }));
+    }
+    const created = await createTestRuleSet(user.id, {
+      type: "SERIES", rules, serverIds: [server.id], seriesScope: false,
+      actionEnabled: true, actionType: "UNMONITOR_SONARR",
+    });
+    const cfg = { ...created, type: "SERIES", rules, serverIds: [server.id] } as never;
+    const run = async () => {
+      const result = await detectAndSaveMatches(cfg, [server.id]);
+      if ("discarded" in result) throw new Error("discarded");
+      await scheduleActionsForRuleSet(cfg, result.items, result.episodeIdMap);
+    };
+    await run();
+    await prisma.lifecycleAction.updateMany({
+      where: { ruleSetId: created.id, status: "PENDING" },
+      data: { status: "COMPLETED", executedAt: new Date() },
+    });
+    const representative = (await prisma.ruleMatch.findFirstOrThrow({ where: { ruleSetId: created.id } })).mediaItemId;
+
+    await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: representative } });
+    await run();
+
+    const moved = await prisma.ruleMatch.findFirstOrThrow({ where: { ruleSetId: created.id } });
+    expect(moved.mediaItemId).not.toBe(representative);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: created.id, status: "PENDING" } })).toBe(0);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: created.id, releasedAt: { not: null } } })).toBe(0);
+  });
+
+  it("schedules a show's action again once the whole show stopped matching and matches again", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    for (const ep of [1, 2]) {
+      await createTestMediaItem(library.id, {
+        type: "SERIES", title: `E${ep}`, parentTitle: "Lost", seriesKey: "tvdb:1",
+        seasonNumber: 1, episodeNumber: ep, playCount: 0,
+      });
+    }
+    const created = await createTestRuleSet(user.id, {
+      type: "SERIES", rules, serverIds: [server.id], seriesScope: false,
+      actionEnabled: true, actionType: "UNMONITOR_SONARR",
+    });
+    const cfg = { ...created, type: "SERIES", rules, serverIds: [server.id] } as never;
+    const run = async () => {
+      const result = await detectAndSaveMatches(cfg, [server.id]);
+      if ("discarded" in result) throw new Error("discarded");
+      await scheduleActionsForRuleSet(cfg, result.items, result.episodeIdMap);
+    };
+    const pending = () => prisma.lifecycleAction.findMany({ where: { ruleSetId: created.id, status: "PENDING" } });
+    await run();
+    await prisma.lifecycleAction.updateMany({
+      where: { ruleSetId: created.id, status: "PENDING" },
+      data: { status: "COMPLETED", executedAt: new Date() },
+    });
+
+    await prisma.mediaItem.updateMany({ where: { libraryId: library.id }, data: { playCount: 1 } });
+    await run();
+    expect(await pending()).toHaveLength(0);
+    await prisma.$executeRaw`UPDATE "MediaItem" SET "playCount" = 0 WHERE "libraryId" = ${library.id}`;
+    await run();
+    const again = await pending();
+    expect(again).toHaveLength(1);
+    expect(again[0].matchedMediaItemIds).toHaveLength(2);
+  });
 });
