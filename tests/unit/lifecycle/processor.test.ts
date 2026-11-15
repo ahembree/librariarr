@@ -550,7 +550,7 @@ describe("scheduleActionsForRuleSet", () => {
 
     expect(existingActionsWhere().OR).toEqual([
       { status: "PENDING" },
-      { status: { in: ["COMPLETED", "FAILED"] }, actionType: "UNMONITOR_RADARR" },
+      { status: { in: ["COMPLETED", "FAILED"] }, actionType: "UNMONITOR_RADARR", releasedAt: null },
     ]);
   });
 
