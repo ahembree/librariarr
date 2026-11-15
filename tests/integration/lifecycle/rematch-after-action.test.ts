@@ -212,4 +212,39 @@ describe("re-match after a completed non-destructive action", () => {
     expect(again).toHaveLength(1);
     expect(again[0].matchedMediaItemIds).toHaveLength(2);
   });
+
+  it("does not release an item whose server the run left out (disabled), so it does not re-fire on return", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id);
+    const s2 = await createTestServer(user.id);
+    const lib1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+    const lib2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+    await createTestMediaItem(lib1.id, { type: "MOVIE", title: "Heat", playCount: 0 });
+    const other = await createTestMediaItem(lib2.id, { type: "MOVIE", title: "Ronin", playCount: 0 });
+    const created = await createTestRuleSet(user.id, {
+      type: "MOVIE", rules, serverIds: [s1.id, s2.id],
+      actionEnabled: true, actionType: "SEARCH_RADARR",
+    });
+    const cfg = { ...created, type: "MOVIE", rules, serverIds: [s1.id, s2.id] } as never;
+    const run = async (serverIds: string[]) => {
+      const result = await detectAndSaveMatches(cfg, serverIds);
+      if ("discarded" in result) throw new Error("discarded");
+      await scheduleActionsForRuleSet(cfg, result.items, result.episodeIdMap);
+    };
+    await run([s1.id, s2.id]);
+    await prisma.lifecycleAction.updateMany({
+      where: { ruleSetId: created.id, status: "PENDING" },
+      data: { status: "COMPLETED", executedAt: new Date() },
+    });
+
+    // Server 2 disabled: the processor evaluates server 1 alone.
+    await run([s1.id]);
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: created.id, mediaItemId: other.id } })).toBe(0);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: created.id, releasedAt: { not: null } } })).toBe(0);
+
+    // Enabled again: matched again, but never stopped matching — no new search.
+    await run([s1.id, s2.id]);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: created.id, status: "PENDING" } })).toBe(0);
+  });
 });

@@ -764,7 +764,28 @@ export async function detectAndSaveMatches(
   const currentIdSet = new Set(enrichedItems.map((item) => item.id as string));
   const droppedIds = [...heldIds].filter((id) => !currentIdSet.has(id) && !carried.has(id));
   const stillMatchedMembers = new Set(enrichedItems.flatMap((item) => storedMemberIdsOf(item)));
-  const droppedIdSet = new Set(droppedIds);
+  // Only an item this run evaluated can have stopped matching: one on a server
+  // left out of the run (disabled, or removed from the rule set) was not
+  // judged, and releasing its actions would re-fire them all when it returns.
+  const droppedCandidates = [
+    ...new Set([
+      ...droppedIds,
+      ...heldMatches.filter((m) => !currentIdSet.has(m.mediaItemId)).flatMap((m) => storedMemberIdsOf(m.itemData)),
+    ]),
+  ];
+  const evaluatedIds = new Set(
+    droppedCandidates.length === 0
+      ? []
+      : (
+          await findInChunks(droppedCandidates, (ids) =>
+            prisma.mediaItem.findMany({
+              where: { id: { in: ids }, library: { mediaServerId: { in: serverIds } } },
+              select: { id: true },
+            }),
+          )
+        ).map((row) => row.id),
+  );
+  const droppedIdSet = new Set(droppedIds.filter((id) => evaluatedIds.has(id)));
   // A copy folded into another server's match still matches, through it.
   const stillMatchedIds = [
     ...new Set([...currentIdSet, ...stillMatchedMembers, ...enrichedItems.flatMap((item) => copyIdsOf(item))]),
@@ -774,9 +795,10 @@ export async function detectAndSaveMatches(
       heldMatches
         .filter((m) => droppedIdSet.has(m.mediaItemId))
         .flatMap((m) => storedMemberIdsOf(m.itemData))
-        .filter((id) => !stillMatchedMembers.has(id) && !currentIdSet.has(id)),
+        .filter((id) => evaluatedIds.has(id) && !stillMatchedMembers.has(id) && !currentIdSet.has(id)),
     ),
   ];
+  const releasedIds = [...droppedIdSet];
 
   if (fullReEval) {
     // Full re-evaluation: atomic delete + recreate (clears stale matches)
@@ -797,7 +819,7 @@ export async function detectAndSaveMatches(
       for (const { id, data } of actionCarryOver) {
         await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
-      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, stillMatchedIds, now);
+      await releaseSettledActions(tx, ruleSet.id, releasedIds, droppedMemberIds, stillMatchedIds, now);
     });
     if (!committed) return DISCARDED;
 
@@ -889,7 +911,7 @@ export async function detectAndSaveMatches(
         });
       }
       // A sticky match is kept, so its item never stopped matching here.
-      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, stillMatchedIds, now);
+      await releaseSettledActions(tx, ruleSet.id, releasedIds, droppedMemberIds, stillMatchedIds, now);
     }
   } : null);
   if (!committed) return DISCARDED;
