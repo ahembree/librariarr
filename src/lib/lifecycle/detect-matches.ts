@@ -95,6 +95,44 @@ async function commitDetection(
 }
 
 /**
+ * Release the settled actions of items whose match this run drops: they
+ * stopped matching, so when one matches again it is a new match, and the
+ * same non-destructive action is scheduled for it again (scheduling skips an
+ * item only for an unreleased COMPLETED/FAILED action with the same config —
+ * `releasedAt`). A grouped match's dropped members release the actions that
+ * acted on them too, since episode coverage reads every settled action of the
+ * rule set, wherever it is stored. Written in the detection transaction.
+ */
+async function releaseSettledActions(
+  tx: Prisma.TransactionClient,
+  ruleSetId: string,
+  droppedIds: string[],
+  droppedMemberIds: string[],
+  now: Date,
+): Promise<void> {
+  for (const ids of inChunks(droppedIds)) {
+    await tx.lifecycleAction.updateMany({
+      where: { ruleSetId, status: { in: ["COMPLETED", "FAILED"] }, releasedAt: null, mediaItemId: { in: ids } },
+      data: { releasedAt: now },
+    });
+  }
+  if (droppedMemberIds.length > 0) {
+    await tx.$executeRaw`
+      UPDATE "LifecycleAction" SET "releasedAt" = ${now}, "updatedAt" = ${now}
+       WHERE "ruleSetId" = ${ruleSetId}
+         AND status IN ('COMPLETED', 'FAILED')
+         AND "releasedAt" IS NULL
+         AND "matchedMediaItemIds" && ${droppedMemberIds}::text[]`;
+  }
+}
+
+/** The member ids a stored match lists. */
+function storedMemberIdsOf(itemData: unknown): string[] {
+  const members = (itemData as Record<string, unknown> | null)?.memberIds;
+  return Array.isArray(members) ? members.filter((x): x is string => typeof x === "string") : [];
+}
+
+/**
  * Release a rule set's actions held since a save changed what it matches
  * (`RuleSet.actionsHeldSince`): this run has just re-evaluated it under the
  * rules that save wrote, and its matches now say which items they still
@@ -716,6 +754,22 @@ export async function detectAndSaveMatches(
 
   const now = new Date();
 
+  // Matches this run drops: the item no longer matches (a carried match moved
+  // to its copy and is not dropped). Their members no longer matching either
+  // are dropped with them.
+  const currentIdSet = new Set(enrichedItems.map((item) => item.id as string));
+  const droppedIds = [...heldIds].filter((id) => !currentIdSet.has(id) && !carried.has(id));
+  const stillMatchedMembers = new Set(enrichedItems.flatMap((item) => storedMemberIdsOf(item)));
+  const droppedIdSet = new Set(droppedIds);
+  const droppedMemberIds = [
+    ...new Set(
+      heldMatches
+        .filter((m) => droppedIdSet.has(m.mediaItemId))
+        .flatMap((m) => storedMemberIdsOf(m.itemData))
+        .filter((id) => !stillMatchedMembers.has(id) && !currentIdSet.has(id)),
+    ),
+  ];
+
   if (fullReEval) {
     // Full re-evaluation: atomic delete + recreate (clears stale matches)
     const committed = await commitDetection(ruleSet, async (tx) => {
@@ -735,6 +789,7 @@ export async function detectAndSaveMatches(
       for (const { id, data } of actionCarryOver) {
         await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
+      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, now);
     });
     if (!committed) return DISCARDED;
 
@@ -825,6 +880,8 @@ export async function detectAndSaveMatches(
           where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
         });
       }
+      // A sticky match is kept, so its item never stopped matching here.
+      await releaseSettledActions(tx, ruleSet.id, droppedIds, droppedMemberIds, now);
     }
   } : null);
   if (!committed) return DISCARDED;
