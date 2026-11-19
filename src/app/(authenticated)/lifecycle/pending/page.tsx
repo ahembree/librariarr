@@ -786,15 +786,22 @@ export default function PendingActionsPage() {
   // Completed while it loaded let it land second and fill the Completed tab
   // with pending rows — without their Execute buttons, which follow the tab.
   const actionsReqToken = useRef(0);
+  // The status tab whose listing is on screen. Re-reading it (after an
+  // Execute, a removal, a realtime event) keeps the rows mounted while the
+  // request runs: the spinner unmounts the list, which drops the page's and
+  // each rule set's scroll position back to the top. Only the first load and
+  // a tab switch show it.
+  const shownStatusRef = useRef<string | null>(null);
   const fetchActions = useCallback(async () => {
     const token = ++actionsReqToken.current;
-    setLoading(true);
+    if (shownStatusRef.current !== statusFilter) setLoading(true);
     try {
       const params = new URLSearchParams({ status: statusFilter });
       const response = await fetch(`/api/lifecycle/actions?${params}`);
       const data = await response.json();
       if (token !== actionsReqToken.current) return;
       setGroups(data.groups || []);
+      shownStatusRef.current = statusFilter;
     } catch (error) {
       console.error("Failed to fetch actions:", error);
     } finally {

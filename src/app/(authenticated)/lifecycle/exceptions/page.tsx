@@ -554,15 +554,21 @@ export default function LifecycleExceptionsPage() {
   // list loaded let the older response land second, and the new tab grouped
   // the other type's exceptions under its own columns.
   const exceptionsReqToken = useRef(0);
+  // The tab whose listing is on screen. Re-reading it (after a removal, a
+  // realtime event) keeps the rows mounted while the request runs: the
+  // spinner unmounts the list and sends the scroll back to the top. Only the
+  // first load and a tab switch show it.
+  const shownTabRef = useRef<string | null>(null);
   const fetchExceptions = useCallback(async () => {
     const token = ++exceptionsReqToken.current;
-    setLoading(true);
+    if (shownTabRef.current !== activeTab) setLoading(true);
     try {
       const response = await fetch(`/api/lifecycle/exceptions?type=${activeTab}`);
       if (response.ok) {
         const data = await response.json();
         if (token !== exceptionsReqToken.current) return;
         setExceptions(data.exceptions);
+        shownTabRef.current = activeTab;
       }
     } catch (error) {
       console.error("Failed to fetch exceptions:", error);
