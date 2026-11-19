@@ -123,6 +123,13 @@ export function useVirtualPosterGrid({
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
+    // Off until the scroll element is known: the offset read before it was 0.
+    enabled: scrollElement !== null,
     estimateSize: rowHeight,
     overscan: overscan ?? deferredOverscan,
     scrollMargin: mode === "main" ? scrollMargin : 0,

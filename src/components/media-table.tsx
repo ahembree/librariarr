@@ -457,6 +457,12 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
+  // The virtualizer stays off until the scroll element is known. It reads its
+  // starting offset on its first enabled render and writes that offset to the
+  // element when it attaches; read before the element is found, it was 0, and
+  // a table mounting mid-page threw the page back to the top.
+  const [scrollReady, setScrollReady] = useState(false);
+
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor (overflow-y: auto/scroll)
     let el = tableContainerRef.current?.parentElement ?? null;
@@ -472,6 +478,9 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
+    // Turns the virtualizer on with the element found (see `scrollReady`).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScrollReady(true);
   }, []);
 
   const recalcScrollMargin = useCallback(() => {
@@ -503,6 +512,12 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
+    enabled: scrollReady,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
     scrollMargin,

@@ -253,6 +253,12 @@ export function DataTable<T>({
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
+  // The virtualizer stays off until the scroll element is known. It reads its
+  // starting offset on its first enabled render and writes that offset to the
+  // element when it attaches; read before the element is found, it was 0, and
+  // a table mounting mid-page threw the page back to the top.
+  const [scrollReady, setScrollReady] = useState(false);
+
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor
     let el = tableContainerRef.current?.parentElement ?? null;
@@ -267,6 +273,9 @@ export function DataTable<T>({
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
+    // Turns the virtualizer on with the element found (see `scrollReady`).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScrollReady(true);
   }, []);
 
   // Where the table starts in the scroll element's content. Re-measured
@@ -393,6 +402,12 @@ export function DataTable<T>({
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
+    enabled: scrollReady,
     estimateSize: () => ROW_HEIGHT,
     // Rows are measured: a cell stacking two lines (the Query title column's
     // title and episode line) makes a row taller than the estimate, and

@@ -229,6 +229,11 @@ function VirtualizedActionTable({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
     estimateSize: () => 52,
     overscan: 10,
     measureElement: (el) => el.getBoundingClientRect().height,
