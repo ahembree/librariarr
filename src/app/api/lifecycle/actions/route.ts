@@ -309,6 +309,8 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
         userId,
         status: { in: ["COMPLETED", "FAILED"] },
         actionType: { not: { contains: "DELETE" } },
+        // Released when the item stopped matching since: no longer suppresses.
+        releasedAt: null,
       },
       select: {
         ruleSetId: true,

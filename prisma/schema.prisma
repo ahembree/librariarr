@@ -682,6 +682,11 @@ model LifecycleAction {
   addArrTags             String[]              @default([])
   removeArrTags          String[]              @default([])
   deletedBytes           BigInt?
+  /// When the item stopped matching the rule set after this action settled
+  /// (detection dropped its match). A released COMPLETED/FAILED action no
+  /// longer suppresses scheduling the same action again: the item matching
+  /// once more is a new match, not the one this action already handled.
+  releasedAt             DateTime?
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 

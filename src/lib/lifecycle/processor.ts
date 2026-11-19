@@ -236,6 +236,9 @@ async function scheduleWithin(
     existingActionConditions.push({
       status: { in: ["COMPLETED", "FAILED"] },
       actionType: ruleSet.actionType!,
+      // An action whose item stopped matching since does not block: the item
+      // matching again is a new match (`releasedAt`, set by detection).
+      releasedAt: null,
     });
   }
   const existingActions = await findInChunks(matchedItemIds, (ids) =>
@@ -263,7 +266,7 @@ async function scheduleWithin(
   const remainingMembers = new Map<string, string[]>();
   if (perEpisodeCoverage) {
     const settled = await db.lifecycleAction.findMany({
-      where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType! },
+      where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType!, releasedAt: null },
       select: ACTION_SIGNATURE_SELECT,
     });
     const coverage = coverageOf(settled.filter((a) => actionConfigSignature(a) === currentSignature));

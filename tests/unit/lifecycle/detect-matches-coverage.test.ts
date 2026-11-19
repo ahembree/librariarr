@@ -31,6 +31,8 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // Settled actions of dropped matches are released in one tagged UPDATE.
+  $executeRaw: vi.fn().mockResolvedValue(0),
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)

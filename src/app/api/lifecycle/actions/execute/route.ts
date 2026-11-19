@@ -324,7 +324,7 @@ async function executeRuleSet(
       // representative moves, and what an action under the old one covered
       // still counts (`episode-coverage.ts`).
       prisma.lifecycleAction.findMany({
-        where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType },
+        where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType, releasedAt: null },
         select: ACTION_SIGNATURE_SELECT,
       }),
     ]);

@@ -38,6 +38,8 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // Settled actions of dropped matches are released in one tagged UPDATE.
+  $executeRaw: vi.fn().mockResolvedValue(0),
   // Refreshed match snapshots are written in one UPDATE … FROM per slice.
   $executeRawUnsafe: vi.fn().mockResolvedValue(0),
   // The exception guard reads the candidates' dedupKeys with one `= ANY($1)`
