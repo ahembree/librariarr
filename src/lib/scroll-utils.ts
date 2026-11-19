@@ -18,6 +18,8 @@ const EDGE_TOLERANCE = 2;
  * the editor), the one with the most to scroll is the page.
  */
 export function findScrollContainer(): HTMLElement | null {
+  // A server render has no page to scroll.
+  if (typeof document === "undefined") return null;
   const main = document.querySelector<HTMLElement>("main");
   if (!main) return null;
 

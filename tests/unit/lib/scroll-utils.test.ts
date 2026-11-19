@@ -77,6 +77,11 @@ describe("findScrollContainer", () => {
     vi.unstubAllGlobals();
   });
 
+  it("returns null on the server (no document)", () => {
+    vi.stubGlobal("document", undefined);
+    expect(findScrollContainer()).toBeNull();
+  });
+
   it("returns null when there is no <main> element", () => {
     makeDom(null);
     expect(findScrollContainer()).toBeNull();

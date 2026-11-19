@@ -291,10 +291,6 @@ function MatchItemsTableView({
     listId: ruleSet.id,
     getScrollElement: () => scrollContainerRef.current,
     indexAtOffset: (offset) => virtualizer.getVirtualItemForOffset(offset)?.index ?? -1,
-    boxOfIndex: (index) => {
-      const row = virtualizer.measurementsCache[index];
-      return row ? { top: row.start, height: row.size } : null;
-    },
     keyAt: (index) => items[index]?.id,
     indexOfKey: (key) => items.findIndex((item) => item.id === key),
     scrollBoxToIndex: (index) => virtualizer.scrollToIndex(index, { align: "center" }),
@@ -551,7 +547,6 @@ function MatchItemsCardView({
     getScrollElement: () => grid.scrollElement,
     ready: grid.scrollElement !== null,
     indexAtOffset: grid.indexAtOffset,
-    boxOfIndex: grid.boxOfIndex,
     keyAt: (index) => items[index]?.id,
     indexOfKey: (key) => items.findIndex((item) => item.id === key),
     scrollBoxToIndex: (index) => grid.scrollToIndex(index),

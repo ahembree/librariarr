@@ -25,12 +25,14 @@ import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  AlertTriangle,
   Check,
   Film,
   Loader2,
   Music,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   ShieldOff,
   Trash2,
@@ -559,19 +561,30 @@ export default function LifecycleExceptionsPage() {
   // spinner unmounts the list and sends the scroll back to the top. Only the
   // first load and a tab switch show it.
   const shownTabRef = useRef<string | null>(null);
+  // A tab whose listing could not be read: shown as that, not as an empty tab.
+  const [listError, setListError] = useState(false);
   const fetchExceptions = useCallback(async () => {
     const token = ++exceptionsReqToken.current;
-    if (shownTabRef.current !== activeTab) setLoading(true);
+    const quiet = shownTabRef.current === activeTab;
+    if (!quiet) setLoading(true);
     try {
       const response = await fetch(`/api/lifecycle/exceptions?type=${activeTab}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (token !== exceptionsReqToken.current) return;
-        setExceptions(data.exceptions);
-        shownTabRef.current = activeTab;
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (token !== exceptionsReqToken.current) return;
+      setExceptions(data.exceptions);
+      setListError(false);
+      shownTabRef.current = activeTab;
     } catch (error) {
       console.error("Failed to fetch exceptions:", error);
+      // A failed re-read leaves the rows on screen. A failed read of another
+      // tab must not leave the previous tab's rows under its name, nor claim
+      // the tab has no exceptions.
+      if (token === exceptionsReqToken.current && !quiet) {
+        setExceptions([]);
+        setListError(true);
+        shownTabRef.current = null;
+      }
     } finally {
       if (token === exceptionsReqToken.current) setLoading(false);
     }
@@ -886,6 +899,18 @@ export default function LifecycleExceptionsPage() {
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
+        ) : listError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn't load exceptions"
+            description="The list could not be read. Try again in a moment."
+            action={
+              <Button variant="outline" size="sm" onClick={() => void fetchExceptions()}>
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Retry
+              </Button>
+            }
+          />
         ) : groupedRows.length === 0 ? (
           <EmptyState
             icon={ShieldOff}

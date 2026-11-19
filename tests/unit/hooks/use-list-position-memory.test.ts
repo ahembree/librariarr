@@ -47,7 +47,6 @@ function options(memory: ListPositionMemory, overrides: Partial<ListPositionOpti
     listId: "PENDING:rs-1",
     getScrollElement: () => box,
     indexAtOffset: (offset) => Math.min(KEYS.length - 1, Math.floor(offset / ROW)),
-    boxOfIndex: (index) => ({ top: index * ROW, height: ROW }),
     keyAt: (index) => KEYS[index],
     indexOfKey: (key) => KEYS.indexOf(key),
     // The view's virtualizer, centring the item in the 100px box.
@@ -63,6 +62,8 @@ describe("useListPositionMemory — a list box that scrolls itself", () => {
   beforeEach(() => {
     layout(main, { top: 0, height: 600, scrollHeight: 600 });
     layout(box, { top: 100, height: 100, scrollHeight: KEYS.length * ROW });
+    // Capped: `md:max-h-[60dvh]` from a tablet up.
+    box.style.maxHeight = "100px";
   });
 
   const scrollBox = (top: number) => {
@@ -164,7 +165,6 @@ describe("useListPositionMemory — a list box that scrolls itself", () => {
       useListPositionMemory(
         options(memory, {
           indexAtOffset: (offset) => Math.floor(offset / 100) * 10,
-          boxOfIndex: (index) => ({ top: Math.floor(index / 10) * 100, height: 100 }),
           // Centres the item's row: row 4 (400–500) at the box's centre (50).
           scrollBoxToIndex: (index) => {
             box.scrollTop = Math.floor(index / 10) * 100 + 50 - 50;
@@ -185,48 +185,30 @@ describe("useListPositionMemory — a list box that scrolls itself", () => {
   });
 });
 
-describe("useListPositionMemory — a phone, where the page scrolls a list that grows with its items", () => {
-  // <main> is the page's scroller: 600px tall from y=0. The list box does not
-  // scroll (as tall as its items) and starts 200px into the page's content.
+describe("useListPositionMemory — a phone, where the box grows with its list and the page scrolls it", () => {
+  // No cap: the box is as tall as its items. The view toggle sits above the
+  // list, so reaching it brings the list's start back on screen; the page
+  // keeps its own offset and nothing inside the list is kept or restored.
   beforeEach(() => {
-    main.scrollTop = 0;
     layout(main, { top: 0, height: 600, scrollHeight: 2000 });
-    Object.defineProperty(box, "clientHeight", { configurable: true, get: () => KEYS.length * ROW });
-    Object.defineProperty(box, "scrollHeight", { configurable: true, get: () => KEYS.length * ROW });
-    box.getBoundingClientRect = () => {
-      const top = 200 - main.scrollTop;
-      return { top, bottom: top + KEYS.length * ROW, height: KEYS.length * ROW } as DOMRect;
-    };
+    layout(box, { top: 200, height: KEYS.length * ROW, scrollHeight: KEYS.length * ROW });
   });
 
-  const scrollPage = (top: number) => {
-    main.scrollTop = top;
-    main.dispatchEvent(new Event("scroll"));
-  };
-
-  it("records the item at the centre of what the page shows of the list", () => {
-    const memory: ListPositionMemory = new Map();
-    renderHook(() => useListPositionMemory(options(memory)));
-    // The page at 500: the page shows the list from its 300px to its 900px,
-    // centre 600 → item 60.
-    scrollPage(500);
-    expect(memory.get("PENDING:rs-1")).toBe("item-60");
-  });
-
-  it("forgets the list while its top is still on screen", () => {
+  it("restores nothing", () => {
     const memory: ListPositionMemory = new Map([["PENDING:rs-1", "item-60"]]);
-    renderHook(() => useListPositionMemory(options(memory)));
+    const scrollBoxToIndex = vi.fn();
+    renderHook(() => useListPositionMemory(options(memory, { scrollBoxToIndex })));
     runFrames();
-    scrollPage(100);
-    expect(memory.has("PENDING:rs-1")).toBe(false);
+    expect(scrollBoxToIndex).not.toHaveBeenCalled();
+    expect(main.scrollTop).toBe(0);
   });
 
-  it("a view mounting with a kept key scrolls the page to centre that item", () => {
-    const memory: ListPositionMemory = new Map([["PENDING:rs-1", "item-60"]]);
-    renderHook(() => useListPositionMemory(options(memory)));
+  it("a box that overhangs its flow height a little is still not a scroller of its own", () => {
+    // Matches' table on a phone: absolutely placed rows make it scroll ~200px.
+    layout(box, { top: 200, height: 8837, scrollHeight: 9036 });
+    const scrollBoxToIndex = vi.fn();
+    renderHook(() => useListPositionMemory(options(new Map([["PENDING:rs-1", "item-60"]]), { scrollBoxToIndex })));
     runFrames();
-    // Item 60's centre is 605px into the list, 805px into the page: at the
-    // page's centre (300) the page is scrolled to 505.
-    expect(main.scrollTop).toBe(505);
+    expect(scrollBoxToIndex).not.toHaveBeenCalled();
   });
 });

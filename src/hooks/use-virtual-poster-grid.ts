@@ -64,8 +64,6 @@ export interface VirtualPosterGrid {
   scrollToIndex: (index: number) => boolean;
   /** The first item of the row at `offset` px into the grid, or -1 (`useListPositionMemory`). */
   indexAtOffset: (offset: number) => number;
-  /** Where the row holding item `index` sits in the grid, or null (`useListPositionMemory`). */
-  boxOfIndex: (index: number) => { top: number; height: number } | null;
 }
 
 function findMain(): HTMLElement | null {
@@ -188,12 +186,6 @@ export function useVirtualPosterGrid({
     [rowBox, rowCount, cols],
   );
 
-  /** Where the row holding item `index` sits in the grid, or null for no such row. */
-  const boxOfIndex = useCallback(
-    (index: number) => (index >= 0 && index < count ? rowBox(Math.floor(index / cols)) : null),
-    [rowBox, count, cols],
-  );
-
   const getFirstVisibleIndex = useCallback(() => {
     const top = gridTop();
     const scroller = scrollRef.current;
@@ -237,6 +229,5 @@ export function useVirtualPosterGrid({
     getFirstVisibleIndex,
     scrollToIndex,
     indexAtOffset,
-    boxOfIndex,
   };
 }

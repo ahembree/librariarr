@@ -25,6 +25,8 @@ const isPath = (path: string) => (url: URL) => url.pathname === path;
 test.use({ viewport: { width: 1280, height: 500 } });
 
 const mainTop = (page: Page) => page.evaluate(() => document.querySelector("main")!.scrollTop);
+/** Where the page was, give or take the subpixel a browser rounds a scroll offset to. */
+const expectAt = async (page: Page, top: number) => expect(Math.abs((await mainTop(page)) - top)).toBeLessThanOrEqual(2);
 
 /** Hide what floats over the page (toasts) so clicks land on the page. */
 async function hideOverlays(page: Page) {
@@ -285,7 +287,7 @@ test.describe("scroll position", () => {
 
     await expect(page.getByText("Scroll Query Movie 001")).toBeAttached();
     await page.waitForTimeout(500);
-    expect(await mainTop(page)).toBe(before);
+    await expectAt(page, before);
   });
 
   test("History: a watch-history event's re-read keeps the rows and the scroll", async ({ page }) => {
@@ -305,10 +307,10 @@ test.describe("scroll position", () => {
     await expect.poll(reads).toBeGreaterThanOrEqual(2);
     // While the re-read runs: the rows stay and nothing moved.
     await expect(page.getByText("Scroll History Movie 020")).toBeAttached();
-    expect(await mainTop(page)).toBe(before);
+    await expectAt(page, before);
     // And once it has landed.
     await page.waitForTimeout(2000);
-    expect(await mainTop(page)).toBe(before);
+    await expectAt(page, before);
   });
 
   test("History: Back to top shows once scrolled and scrolls the page", async ({ page }) => {

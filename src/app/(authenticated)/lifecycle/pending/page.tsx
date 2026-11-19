@@ -251,10 +251,6 @@ function VirtualizedActionTable({
     listId,
     getScrollElement: () => scrollRef.current,
     indexAtOffset: (offset) => virtualizer.getVirtualItemForOffset(offset)?.index ?? -1,
-    boxOfIndex: (index) => {
-      const row = virtualizer.measurementsCache[index];
-      return row ? { top: row.start, height: row.size } : null;
-    },
     keyAt: (index) => items[index]?.id,
     indexOfKey: (key) => items.findIndex((a) => a.id === key),
     scrollBoxToIndex: (index) => virtualizer.scrollToIndex(index, { align: "center" }),
@@ -598,7 +594,6 @@ function PendingActionCardGrid({
     getScrollElement: () => grid.scrollElement,
     ready: grid.scrollElement !== null,
     indexAtOffset: grid.indexAtOffset,
-    boxOfIndex: grid.boxOfIndex,
     keyAt: (index) => filteredItems[index]?.id,
     indexOfKey: (key) => filteredItems.findIndex((a) => a.id === key),
     scrollBoxToIndex: (index) => grid.scrollToIndex(index),
@@ -842,18 +837,31 @@ export default function PendingActionsPage() {
   // each rule set's scroll position back to the top. Only the first load and
   // a tab switch show it.
   const shownStatusRef = useRef<string | null>(null);
+  // A tab whose listing could not be read: shown as that, not as an empty tab.
+  const [listError, setListError] = useState(false);
   const fetchActions = useCallback(async () => {
     const token = ++actionsReqToken.current;
-    if (shownStatusRef.current !== statusFilter) setLoading(true);
+    const quiet = shownStatusRef.current === statusFilter;
+    if (!quiet) setLoading(true);
     try {
       const params = new URLSearchParams({ status: statusFilter });
       const response = await fetch(`/api/lifecycle/actions?${params}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (token !== actionsReqToken.current) return;
       setGroups(data.groups || []);
+      setListError(false);
       shownStatusRef.current = statusFilter;
     } catch (error) {
       console.error("Failed to fetch actions:", error);
+      // A failed re-read leaves the rows on screen. A failed read of another
+      // tab must not leave the previous tab's rows under its name (Pending
+      // rows with no Execute on Completed), nor claim the tab is empty.
+      if (token === actionsReqToken.current && !quiet) {
+        setGroups([]);
+        setListError(true);
+        shownStatusRef.current = null;
+      }
     } finally {
       if (token === actionsReqToken.current) setLoading(false);
     }
@@ -1197,6 +1205,18 @@ export default function PendingActionsPage() {
           <div className="flex justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
+        ) : listError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn't load actions"
+            description="The list could not be read. Try again in a moment."
+            action={
+              <Button variant="outline" size="sm" onClick={() => void fetchActions()}>
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Retry
+              </Button>
+            }
+          />
         ) : filteredGroups.length === 0 ? (
           <EmptyState
             icon={statusFilter === "FAILED" ? CheckCircle2 : Inbox}
