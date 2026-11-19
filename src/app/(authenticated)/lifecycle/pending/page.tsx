@@ -59,6 +59,7 @@ import { consumeProgressStream } from "@/lib/progress/client";
 import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { useListPositionMemory, type ListPositionMemory } from "@/hooks/use-list-position-memory";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
@@ -206,6 +207,8 @@ function VirtualizedActionTable({
   onExclude,
   onItemClick,
   isDeletedRuleSet,
+  positionMemory,
+  listId,
 }: {
   items: ActionItem[];
   ruleSetId: string;
@@ -222,6 +225,9 @@ function VirtualizedActionTable({
   onExclude: (action: ActionItem) => void;
   onItemClick: (action: ActionItem) => void;
   isDeletedRuleSet?: boolean;
+  /** The page's list positions, shared with the card view (`useListPositionMemory`). */
+  positionMemory: ListPositionMemory;
+  listId: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedErrors, { toggle: toggleError }] = useSetState<string>();
@@ -239,12 +245,31 @@ function VirtualizedActionTable({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
+  // A switch to the card view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId,
+    getScrollElement: () => scrollRef.current,
+    indexAtOffset: (offset) => virtualizer.getVirtualItemForOffset(offset)?.index ?? -1,
+    boxOfIndex: (index) => {
+      const row = virtualizer.measurementsCache[index];
+      return row ? { top: row.start, height: row.size } : null;
+    },
+    keyAt: (index) => items[index]?.id,
+    indexOfKey: (key) => items.findIndex((a) => a.id === key),
+    scrollBoxToIndex: (index) => virtualizer.scrollToIndex(index, { align: "center" }),
+  });
+
   const virtualRows = virtualizer.getVirtualItems();
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  // Before the box is measured no row is in range: the spacer then stands for
+  // the whole list, so the table never draws 0px tall for a render (a phone,
+  // where the box grows with the list and the page scrolls, was clamped to
+  // its top when the table mounted).
   const paddingBottom =
     virtualRows.length > 0
       ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
-      : 0;
+      : virtualizer.getTotalSize();
 
   return (
     <div className="rounded-lg border">
@@ -533,6 +558,8 @@ function PendingActionCardGrid({
   hold,
   onItemClick,
   exceptedItemIds,
+  positionMemory,
+  listId,
 }: {
   items: ActionItem[];
   ruleSetType: string;
@@ -541,6 +568,9 @@ function PendingActionCardGrid({
   /** Stable: the cards are memoised on it. */
   onItemClick: (action: ActionItem) => void;
   exceptedItemIds: ReadonlySet<string>;
+  /** The page's list positions, shared with the table view (`useListPositionMemory`). */
+  positionMemory: ListPositionMemory;
+  listId: string;
 }) {
   const { columns } = useCardSize();
   const { getHex } = useChipColors();
@@ -559,6 +589,19 @@ function PendingActionCardGrid({
     contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
     scrollElement: "own",
     overscan: 5,
+  });
+
+  // A switch to the table view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId,
+    getScrollElement: () => grid.scrollElement,
+    ready: grid.scrollElement !== null,
+    indexAtOffset: grid.indexAtOffset,
+    boxOfIndex: grid.boxOfIndex,
+    keyAt: (index) => filteredItems[index]?.id,
+    indexOfKey: (key) => filteredItems.findIndex((a) => a.id === key),
+    scrollBoxToIndex: (index) => grid.scrollToIndex(index),
   });
 
   const heldReason = holdReasonOf(hold);
@@ -699,6 +742,8 @@ export default function PendingActionsPage() {
   );
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  // Each rule set's place in its list, carried across a table/cards switch.
+  const [listPositions] = useState<ListPositionMemory>(() => new Map());
   const { size: cardSize, setSize: setCardSize } = useCardSize();
   const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [executingRules, executingRuleActions] = useSetState<string>();
@@ -1264,6 +1309,8 @@ export default function PendingActionsPage() {
                         onExclude={excludeItem}
                         onItemClick={openDetailPanel}
                         isDeletedRuleSet={group.ruleSet.deleted}
+                        positionMemory={listPositions}
+                        listId={`${statusFilter}:${group.ruleSet.id}`}
                       />
                     ) : (
                       <PendingActionCardGrid
@@ -1272,6 +1319,8 @@ export default function PendingActionsPage() {
                         hold={group.ruleSet}
                         onItemClick={openDetailPanel}
                         exceptedItemIds={exceptedItemIds}
+                        positionMemory={listPositions}
+                        listId={`${statusFilter}:${group.ruleSet.id}`}
                       />
                     )
                   ) : (

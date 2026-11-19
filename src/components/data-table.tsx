@@ -9,6 +9,7 @@ import { arrangePinnedColumns, parseStoredPins, togglePinnedId } from "@/lib/tab
 import { rowSurfaceClass } from "@/lib/table-row-surface";
 import { horizontalThumb, scrollPerThumbPixel } from "@/lib/scroll-thumb";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
+import { findScrollContainer } from "@/lib/scroll-utils";
 
 export interface DataTableColumn<T> {
   id: string;
@@ -253,12 +254,6 @@ export function DataTable<T>({
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
-  // The virtualizer stays off until the scroll element is known. It reads its
-  // starting offset on its first enabled render and writes that offset to the
-  // element when it attaches; read before the element is found, it was 0, and
-  // a table mounting mid-page threw the page back to the top.
-  const [scrollReady, setScrollReady] = useState(false);
-
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor
     let el = tableContainerRef.current?.parentElement ?? null;
@@ -273,9 +268,6 @@ export function DataTable<T>({
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
-    // Turns the virtualizer on with the element found (see `scrollReady`).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setScrollReady(true);
   }, []);
 
   // Where the table starts in the scroll element's content. Re-measured
@@ -406,8 +398,12 @@ export function DataTable<T>({
     // (default 0). Starting from where the element already is keeps a list that
     // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
     // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
-    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
-    enabled: scrollReady,
+    // Read on the first render, before the layout effect above has found the
+    // element: until then, the page's scroll box, which is the nearest
+    // scrolling ancestor of every table the app draws. (Keeping the
+    // virtualizer off until the element was found instead drew the table 0px
+    // tall for a render, and the page above it was clamped to the top.)
+    initialOffset: () => (scrollElementRef.current ?? findScrollContainer())?.scrollTop ?? 0,
     estimateSize: () => ROW_HEIGHT,
     // Rows are measured: a cell stacking two lines (the Query title column's
     // title and episode line) makes a row taller than the estimate, and
@@ -436,9 +432,12 @@ export function DataTable<T>({
   }, [onVisibleRange, firstRendered, lastRendered]);
   const effectiveMargin = virtualizer.options.scrollMargin ?? 0;
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start - effectiveMargin : 0;
+  // Before the scroll box is measured no row is in range: the spacer then
+  // stands for the whole list, so the table never draws 0px tall for a render
+  // (the page around it was clamped to its top when it mounted).
   const paddingBottom = virtualRows.length > 0
     ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
-    : 0;
+    : virtualizer.getTotalSize();
 
   // Named in a visible note, not a tooltip: a touch screen cannot hover, and
   // paused pins happen mostly on phones.

@@ -49,9 +49,16 @@ describe("useVirtualizer calls", () => {
     expect(calls.length).toBeGreaterThanOrEqual(5);
   });
 
+  // And none is kept off (`enabled: false`) until its element is known: a
+  // disabled virtualizer measures nothing, so the list drew 0px tall for a
+  // render and the page above it was clamped to the top.
+  it("none is disabled while it looks for its scroll element", () => {
+    expect(calls.filter(({ options }) => /\benabled:/.test(options)).map(({ file }) => file)).toEqual([]);
+  });
+
   it("every one starts from its scroll element's current offset", () => {
     const offenders = calls
-      .filter(({ options }) => !/initialOffset:\s*\(\)\s*=>\s*\w+\.current\?\.scrollTop\s*\?\?\s*0/.test(options))
+      .filter(({ options }) => !/initialOffset:\s*\(\)\s*=>[^,]*\.scrollTop/.test(options))
       .map(({ file }) => file);
     expect(offenders).toEqual([]);
   });

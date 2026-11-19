@@ -42,6 +42,7 @@ import { intentHandlers } from "@/lib/intent-prefetch";
 import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 import { rowSurfaceClass, type RowTone } from "@/lib/table-row-surface";
 import { RowToneChip } from "@/components/row-tone-chip";
+import { findScrollContainer } from "@/lib/scroll-utils";
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -457,12 +458,6 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
-  // The virtualizer stays off until the scroll element is known. It reads its
-  // starting offset on its first enabled render and writes that offset to the
-  // element when it attaches; read before the element is found, it was 0, and
-  // a table mounting mid-page threw the page back to the top.
-  const [scrollReady, setScrollReady] = useState(false);
-
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor (overflow-y: auto/scroll)
     let el = tableContainerRef.current?.parentElement ?? null;
@@ -478,9 +473,6 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
-    // Turns the virtualizer on with the element found (see `scrollReady`).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setScrollReady(true);
   }, []);
 
   const recalcScrollMargin = useCallback(() => {
@@ -516,8 +508,12 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     // (default 0). Starting from where the element already is keeps a list that
     // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
     // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
-    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
-    enabled: scrollReady,
+    // Read on the first render, before the layout effect above has found the
+    // element: until then, the page's scroll box, which is the nearest
+    // scrolling ancestor of every table the app draws. (Keeping the
+    // virtualizer off until the element was found instead drew the table 0px
+    // tall for a render, and the page above it was clamped to the top.)
+    initialOffset: () => (scrollElementRef.current ?? findScrollContainer())?.scrollTop ?? 0,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
     scrollMargin,
@@ -762,7 +758,16 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
           <TableBody>
             {(() => {
               const virtualRows = virtualizer.getVirtualItems();
-              if (virtualRows.length === 0) return null;
+              // Before the scroll box is measured no row is in range: a spacer
+              // stands for the whole list, so the table never draws 0px tall
+              // for a render (the page around it was clamped to its top).
+              if (virtualRows.length === 0) {
+                return virtualizer.getTotalSize() > 0 ? (
+                  <tr aria-hidden="true">
+                    <td colSpan={totalColumnCount} style={{ height: virtualizer.getTotalSize(), padding: 0, border: "none" }} />
+                  </tr>
+                ) : null;
+              }
 
               const scrollMargin = virtualizer.options.scrollMargin ?? 0;
               const paddingTop = virtualRows[0].start - scrollMargin;

@@ -62,6 +62,10 @@ export interface VirtualPosterGrid {
   getFirstVisibleIndex: () => number;
   /** Centre `index` in the viewport, for `useScrollRestoration`; false before the grid is laid out. */
   scrollToIndex: (index: number) => boolean;
+  /** The first item of the row at `offset` px into the grid, or -1 (`useListPositionMemory`). */
+  indexAtOffset: (offset: number) => number;
+  /** Where the row holding item `index` sits in the grid, or null (`useListPositionMemory`). */
+  boxOfIndex: (index: number) => { top: number; height: number } | null;
 }
 
 function findMain(): HTMLElement | null {
@@ -127,9 +131,10 @@ export function useVirtualPosterGrid({
     // (default 0). Starting from where the element already is keeps a list that
     // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
     // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
-    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
-    // Off until the scroll element is known: the offset read before it was 0.
-    enabled: scrollElement !== null,
+    // Read on the first render, before the layout effect above has set
+    // `scrollRef`: a grid in `<main>` reads `<main>` itself, which is there
+    // already; a grid that is its own box starts at 0, as that box does.
+    initialOffset: () => (scrollRef.current ?? (mode === "main" ? findMain() : null))?.scrollTop ?? 0,
     estimateSize: rowHeight,
     overscan: overscan ?? deferredOverscan,
     scrollMargin: mode === "main" ? scrollMargin : 0,
@@ -150,29 +155,65 @@ export function useVirtualPosterGrid({
     return grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
   }, [mode]);
 
+  /**
+   * A row's top and height inside the grid: as the virtualizer measured it
+   * once it has, else the estimate. A card taller than the estimate (Pending's
+   * held and scheduled lines) makes every measured row taller, so the
+   * estimate alone sent a restore rows away from its item.
+   */
+  const rowBox = useCallback(
+    (row: number): { top: number; height: number } => {
+      const measured = virtualizer.measurementsCache[row];
+      if (measured) return { top: measured.start - virtualizer.options.scrollMargin, height: measured.size };
+      const height = rowHeight();
+      return { top: row * height, height };
+    },
+    [virtualizer, rowHeight],
+  );
+
+  /** The first item of the row at `offset` px into the grid, or -1. */
+  const indexAtOffset = useCallback(
+    (offset: number) => {
+      if (rowCount === 0) return -1;
+      // The last row starting at or above the offset.
+      let lo = 0;
+      let hi = rowCount - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (rowBox(mid).top <= offset) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo * cols;
+    },
+    [rowBox, rowCount, cols],
+  );
+
+  /** Where the row holding item `index` sits in the grid, or null for no such row. */
+  const boxOfIndex = useCallback(
+    (index: number) => (index >= 0 && index < count ? rowBox(Math.floor(index / cols)) : null),
+    [rowBox, count, cols],
+  );
+
   const getFirstVisibleIndex = useCallback(() => {
     const top = gridTop();
     const scroller = scrollRef.current;
-    const height = rowHeight();
-    if (top === null || !scroller || height <= 0) return -1;
-    const centreInGrid = scroller.scrollTop + scroller.clientHeight / 2 - top;
-    return Math.max(0, Math.floor(centreInGrid / height)) * cols;
-  }, [gridTop, rowHeight, cols]);
+    if (top === null || !scroller) return -1;
+    return indexAtOffset(scroller.scrollTop + scroller.clientHeight / 2 - top);
+  }, [gridTop, indexAtOffset]);
 
   const scrollToIndex = useCallback(
     (index: number) => {
       const top = gridTop();
       const scroller = scrollRef.current;
       if (top === null || !scroller) return false;
-      const height = rowHeight();
-      const row = Math.floor(index / cols);
+      const { top: rowTop, height } = rowBox(Math.floor(index / cols));
       scroller.scrollTo({
-        top: Math.max(0, top + row * height + height / 2 - scroller.clientHeight / 2),
+        top: Math.max(0, top + rowTop + height / 2 - scroller.clientHeight / 2),
         behavior: "instant",
       });
       return true;
     },
-    [gridTop, rowHeight, cols],
+    [gridTop, rowBox, cols],
   );
 
   const rowRange = useCallback(
@@ -195,5 +236,7 @@ export function useVirtualPosterGrid({
     scrollElement,
     getFirstVisibleIndex,
     scrollToIndex,
+    indexAtOffset,
+    boxOfIndex,
   };
 }
