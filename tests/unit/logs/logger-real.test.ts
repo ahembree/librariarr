@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 vi.mock("@/lib/db", () => ({ prisma: { logEntry: { create: createMock } } }));
 
-import { logger, apiLogger, dbLogger } from "@/lib/logger";
+import { logger, apiLogger, dbLogger, logLine, MAX_LOG_MESSAGE_LENGTH } from "@/lib/logger";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -65,6 +65,30 @@ describe("logger (real module)", () => {
     expect(createMock).toHaveBeenCalledWith({
       data: { level: "DEBUG", category: "API", source: "X", message: "shown", meta: undefined },
     });
+  });
+
+  // Messages carry text the app did not write (a media title, an identity
+  // provider's `error` parameter on an unauthenticated callback).
+  it("writes a message with line breaks as one line, on the console and in the row", async () => {
+    await apiLogger.warn("Auth", 'OIDC provider returned error: x\n[2026-01-01T00:00:00.000Z] [Auth] Local login: "admin"\r\n\u2028end');
+    const expected = 'OIDC provider returned error: x [2026-01-01T00:00:00.000Z] [Auth] Local login: "admin" end';
+    expect(warn).toHaveBeenCalledWith(expect.any(String), expected, "");
+    expect(createMock).toHaveBeenCalledWith({
+      data: { level: "WARN", category: "API", source: "Auth", message: expected, meta: undefined },
+    });
+  });
+
+  it("cuts an over-long message and leaves meta alone", async () => {
+    await logger.info("Sync", "x".repeat(MAX_LOG_MESSAGE_LENGTH + 500), { note: "line one\nline two" });
+    const message = createMock.mock.calls[0][0].data.message as string;
+    expect(message).toHaveLength(MAX_LOG_MESSAGE_LENGTH + 1);
+    expect(message.endsWith("…")).toBe(true);
+    expect(createMock.mock.calls[0][0].data.meta).toEqual({ note: "line one\nline two" });
+  });
+
+  it("logLine leaves an ordinary message untouched", () => {
+    expect(logLine('Local login: "admin" — ünïcödé ✓')).toBe('Local login: "admin" — ünïcödé ✓');
+    expect(logLine("tab\there\u0000nul\u009fc1")).toBe("tab here nul c1");
   });
 
   it("swallows a failed DB write", async () => {

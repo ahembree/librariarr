@@ -1,6 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { apiLogger } from "@/lib/logger";
+import { auditAddress } from "@/lib/rate-limit/client-ip";
 import {
   RateLimiter,
+  _resetLockoutLogForTesting,
   getClientIp,
   checkRateLimit,
   checkAuthRateLimit,
@@ -637,5 +647,63 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
     for (let i = 0; i < 10_050; i++) authRateLimiter.check(`flood:10.${i >> 16}.${(i >> 8) & 255}.${i & 255}`);
     const perIp = (authRateLimiter as unknown as { store: Map<string, unknown> }).store;
     expect(perIp.size).toBe(10_000);
+  });
+});
+
+// A lockout used to leave no trace: a password-guessing run against the one
+// admin account showed nowhere.
+describe("lockouts are logged, once per window", () => {
+  const request = (ip: string) =>
+    new Request("http://localhost/api/auth/local/login", { headers: { "x-forwarded-for": ip } });
+  const warnings = () => vi.mocked(apiLogger.warn).mock.calls.filter(([source]) => source === "RateLimit");
+
+  beforeEach(() => {
+    authRateLimiter.clear();
+    authGlobalRateLimiter.clear();
+    _resetKnownAddressesForTesting();
+    _resetLockoutLogForTesting();
+    vi.mocked(apiLogger.warn).mockClear();
+  });
+
+  it("logs the address whose budget ran out, and not again for the refusals that follow", () => {
+    for (let i = 0; i < 10; i++) reserveAuthAttempt(request("198.51.100.7"), "login");
+    expect(warnings()).toHaveLength(0);
+
+    for (let i = 0; i < 25; i++) expect(peekAuthRateLimit(request("198.51.100.7"), "login")?.status).toBe(429);
+    expect(reserveAuthAttempt(request("198.51.100.7"), "login").refused?.status).toBe(429);
+
+    expect(warnings()).toEqual([
+      [
+        "RateLimit",
+        'Too many attempts on "login" from 198.51.100.7 — refusing it until the window resets',
+        { bucket: "login", address: "198.51.100.7" },
+      ],
+    ]);
+  });
+
+  it("logs the floor once when rotating addresses exhaust it", () => {
+    for (let i = 0; i < 60; i++) reserveAuthAttempt(request(`203.0.113.${i}`), "login");
+    for (let i = 0; i < 10; i++) expect(peekAuthRateLimit(request(`192.0.2.${i}`), "login")?.status).toBe(429);
+
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0][1]).toContain('Too many failed attempts on "login" across addresses no sign-in has succeeded from');
+  });
+
+  it("logs each bucket and address separately", () => {
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.7"), "plex-init");
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.8"), "plex-init");
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.7"), "setup");
+    expect(warnings().map(([, , meta]) => meta)).toEqual([
+      { bucket: "plex-init", address: "198.51.100.7" },
+      { bucket: "plex-init", address: "198.51.100.8" },
+      { bucket: "setup", address: "198.51.100.7" },
+    ]);
+  });
+
+  it("repeats at most 64 characters of an address a client wrote", () => {
+    const long = "9".repeat(300);
+    expect(auditAddress(request(long))).toHaveLength(64);
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request(long), "login");
+    expect((warnings()[0][2] as { address: string }).address).toHaveLength(64);
   });
 });

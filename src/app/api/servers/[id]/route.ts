@@ -15,6 +15,7 @@ import {
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 export const PUT = withSession(async (
   session,
@@ -251,6 +252,16 @@ export const PUT = withSession(async (
   // certificate setting at the same URL is usually the fix for exactly those
   // failures, and kept they answered 502 for up to a minute after it.
   if (connectionChanged) invalidateImageFailures(server.url);
+
+  // Where the stored token is sent, the token itself and whether its
+  // certificate is checked: on record, never their values.
+  if (connectionChanged) {
+    logSecurityChange(request, `Media server "${updated.name}" connection changed`, {
+      urlChanged,
+      tokenChanged: accessToken !== undefined && accessToken !== "" && accessToken !== server.accessToken,
+      tlsSkipVerify: updated.tlsSkipVerify,
+    });
+  }
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS
   // change all affect whether/how we connect to this server.

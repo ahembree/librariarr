@@ -137,3 +137,35 @@ describe("the clients share one base-URL spelling", () => {
     await expect(jellyfin.getLibraries()).rejects.toMatchObject({ baseURL: url });
   });
 });
+
+// A route that lets a client's error escape has it printed by Next.js with
+// `console.error`; the request headers must not be part of that.
+describe("an error from a media-server client does not print its token", () => {
+  afterEach(async () => {
+    if (server) await new Promise((resolve) => server!.close(resolve));
+    server = null;
+    _resetForTesting();
+  });
+
+  it.each([
+    ["Plex", (url: string) => new PlexClient(url, "SECRET-TOKEN")],
+    ["Jellyfin", (url: string) => new JellyfinClient(url, "SECRET-TOKEN")],
+  ])("%s", async (_name, make) => {
+    const { inspect } = await import("node:util");
+    const url = await serve(401, { message: "Unauthorized" });
+
+    const error = await make(url)
+      .getLibraries()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(axios.isAxiosError(error)).toBe(true);
+    // The request did carry it.
+    expect(JSON.stringify(seen[0].headers)).toContain("SECRET-TOKEN");
+    expect(inspect(error, { depth: 8 })).not.toContain("SECRET-TOKEN");
+    if (!axios.isAxiosError(error)) throw new Error("unreachable");
+    expect(error.response?.status).toBe(401);
+  });
+});

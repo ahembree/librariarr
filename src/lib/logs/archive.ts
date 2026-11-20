@@ -141,6 +141,31 @@ export async function archiveLogs() {
 }
 
 /**
+ * Write every log row currently in the database to an archive file, without
+ * deleting any. Called before a restore, which truncates `LogEntry` along with
+ * everything else and refills it from the backup (a config-only backup holds
+ * no log rows at all): the record of what happened on this instance up to the
+ * restore — who signed in, what was changed — would otherwise be gone, the
+ * "Restoring from backup" line included.
+ *
+ * Named `logs-<date>-pre-restore-<epoch ms>.tar.gz`, so it sits beside the
+ * daily archives and is pruned with them. Returns the file name, or `null`
+ * when there was nothing to keep.
+ */
+export async function archiveLogsBeforeRestore(): Promise<string | null> {
+  const logs = await prisma.logEntry.findMany({ orderBy: { createdAt: "asc" } });
+  if (logs.length === 0) return null;
+
+  await fs.mkdir(LOG_ARCHIVE_DIR, { recursive: true });
+  const now = new Date();
+  const base = `logs-${formatDate(now)}-pre-restore-${now.getTime()}`;
+  const tarBuffer = buildTarBuffer(`${base}.json`, Buffer.from(JSON.stringify(logs, null, 2), "utf-8"));
+  // Log rows quote server names and addresses: owner-only, like a backup.
+  await fs.writeFile(path.join(LOG_ARCHIVE_DIR, `${base}.tar.gz`), gzipSync(tarBuffer), { mode: 0o600 });
+  return `${base}.tar.gz`;
+}
+
+/**
  * Delete archive tarballs older than the retention period.
  */
 async function pruneArchives(retentionDays: number) {
@@ -155,7 +180,8 @@ async function pruneArchives(retentionDays: number) {
     return;
   }
 
-  const archivePattern = /^logs-(\d{4}-\d{2}-\d{2})\.tar\.gz$/;
+  // The daily archives, and the ones a restore leaves (`archiveLogsBeforeRestore`).
+  const archivePattern = /^logs-(\d{4}-\d{2}-\d{2})(?:-pre-restore-\d+)?\.tar\.gz$/;
 
   for (const file of files) {
     const match = file.match(archivePattern);

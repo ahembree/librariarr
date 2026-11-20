@@ -1,3 +1,8 @@
+import { apiLogger } from "@/lib/logger";
+import { getClientIp, MAX_AUDIT_ADDRESS_LENGTH } from "./client-ip";
+
+export { getClientIp };
+
 interface RateLimitEntry {
   count: number;
   resetAt: number;
@@ -96,6 +101,11 @@ export class RateLimiter {
     for (const [key, entry] of this.store) {
       if (now >= entry.resetAt) this.store.delete(key);
     }
+  }
+
+  /** Forget every count. */
+  clear() {
+    this.store.clear();
   }
 }
 
@@ -240,6 +250,7 @@ setInterval(() => {
   apiKeyUnknownLookupFloor.cleanup();
   apiKeyVerificationFloor.cleanup();
   apiKeyRequestLimiter.cleanup();
+  lockoutLogLimiter.cleanup();
   cleanupKnownAddresses();
 }, 5 * 60 * 1000).unref();
 
@@ -260,15 +271,50 @@ export function checkRateLimit(
 ): Response | null {
   const ip = getClientIp(request);
   const perIp = limiter.check(`${bucket}:${ip}`);
-  if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs);
+  if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs, bucket, ip);
   if (globalLimiter && !isKnownAddress(ip)) {
     const global = globalLimiter.check(`${bucket}:*`);
-    if (global.limited) return tooManyAttempts(global.retryAfterMs);
+    if (global.limited) return tooManyAttempts(global.retryAfterMs, bucket, null);
   }
   return null;
 }
 
-function tooManyAttempts(retryAfterMs: number | undefined): Response {
+// Bounds only the LOGGING of refusals: one WARN per bucket and address (or per
+// bucket, for the floor) per quarter hour, however many requests are refused.
+// A lockout used to leave no trace at all — a password-guessing run against the
+// one admin account showed nowhere — but a line per refused request would let
+// the same run fill the log.
+const lockoutLogLimiter = new RateLimiter(1, 15 * 60 * 1000, 1_000);
+
+
+/**
+ * `address` is the client address whose own budget ran out, or `null` when it
+ * was the floor shared by every address no sign-in has succeeded from.
+ */
+function logLockout(bucket: string, address: string | null): void {
+  if (lockoutLogLimiter.check(`${bucket}:${address ?? "*"}`).limited) return;
+  if (address === null) {
+    apiLogger.warn(
+      "RateLimit",
+      `Too many failed attempts on "${bucket}" across addresses no sign-in has succeeded from — refusing those addresses until the window resets`,
+      { bucket },
+    );
+  } else {
+    const shown = address.slice(0, MAX_AUDIT_ADDRESS_LENGTH);
+    apiLogger.warn("RateLimit", `Too many attempts on "${bucket}" from ${shown} — refusing it until the window resets`, {
+      bucket,
+      address: shown,
+    });
+  }
+}
+
+/** Test-only: forget which lockouts have been logged. */
+export function _resetLockoutLogForTesting(): void {
+  lockoutLogLimiter.clear();
+}
+
+function tooManyAttempts(retryAfterMs: number | undefined, bucket: string, address: string | null): Response {
+  logLockout(bucket, address);
   return Response.json(
     { error: "Too many attempts. Try again later." },
     {
@@ -334,10 +380,10 @@ export const PASSWORD_CONFIRM_BUCKET = "password-confirm";
 export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
   const ip = getClientIp(request);
   const perIp = authRateLimiter.peek(`${bucket}:${ip}`);
-  if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs);
+  if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs, bucket, ip);
   if (!isKnownAddress(ip)) {
     const global = authGlobalRateLimiter.peek(`${bucket}:*`);
-    if (global.limited) return tooManyAttempts(global.retryAfterMs);
+    if (global.limited) return tooManyAttempts(global.retryAfterMs, bucket, null);
   }
   return null;
 }
@@ -356,7 +402,7 @@ export function reserveAuthAttempt(request: Request, bucket: string): AuthAttemp
   if (perIp.limited) {
     // Refused, so nothing was attempted: only failures count.
     authRateLimiter.refund(perIpKey, perIp.window);
-    return { refused: tooManyAttempts(perIp.retryAfterMs) };
+    return { refused: tooManyAttempts(perIp.retryAfterMs, bucket, ip) };
   }
   // The floor is for addresses no sign-in has succeeded from (see
   // `authGlobalRateLimiter`); a known address is bounded by its own budget.
@@ -364,7 +410,7 @@ export function reserveAuthAttempt(request: Request, bucket: string): AuthAttemp
   if (global?.limited) {
     authRateLimiter.refund(perIpKey, perIp.window);
     authGlobalRateLimiter.refund(globalKey, global.window);
-    return { refused: tooManyAttempts(global.retryAfterMs) };
+    return { refused: tooManyAttempts(global.retryAfterMs, bucket, null) };
   }
   // Refunded against the windows it was charged in, once: a window that has
   // since rolled over counts other attempts, not this one.
@@ -379,51 +425,4 @@ export function reserveAuthAttempt(request: Request, bucket: string): AuthAttemp
       rememberAuthenticatedAddress(request);
     },
   };
-}
-
-/**
- * Resolve the client IP for rate-limit bucketing.
- *
- * `x-forwarded-for` / `x-real-ip` are set by reverse proxies. We trust them
- * by default because most deployments sit behind a proxy that scrubs and
- * re-injects them — this is the documented topology in the install docs.
- *
- * `X-Forwarded-For` is read from the RIGHT: a proxy appends the address it
- * saw to whatever the client sent, so the last entry is the one hop the
- * client could not forge and the first entry is whatever the client typed.
- * Taking the first entry let a client behind a perfectly configured proxy
- * pick its own bucket on every request.
- *
- * For deployments exposed *directly* to the internet (no proxy between
- * Librariarr and the client), even the last entry is client-supplied. Set
- * `TRUST_PROXY_HEADERS=false` in that case to fall back to a single shared
- * bucket — and either way, `checkAuthRateLimit` also applies the global
- * `authGlobalRateLimiter` floor that no header can escape.
- *
- * Falsy values for `TRUST_PROXY_HEADERS`: `"false"`, `"0"`, `"no"`
- * (case-insensitive). Anything else (including unset) means trust.
- */
-export function getClientIp(request: Request): string {
-  if (proxyHeadersTrusted()) {
-    const forwarded = request.headers
-      .get("x-forwarded-for")
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .at(-1);
-    if (forwarded) return forwarded;
-    const realIp = request.headers.get("x-real-ip");
-    if (realIp) return realIp;
-  }
-  // Next.js Request API doesn't expose raw socket IP. When proxy headers are
-  // either absent or distrusted, fall back to a single shared bucket — slower
-  // legitimate users but no way to escape rate limits via header rotation.
-  return "unknown";
-}
-
-function proxyHeadersTrusted(): boolean {
-  const raw = process.env.TRUST_PROXY_HEADERS;
-  if (!raw) return true;
-  const normalized = raw.trim().toLowerCase();
-  return !(normalized === "false" || normalized === "0" || normalized === "no");
 }

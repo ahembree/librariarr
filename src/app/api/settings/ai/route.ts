@@ -5,6 +5,7 @@ import { validateRequest, aiSettingsUpdateSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { asProvider, getStoredAiSettings } from "@/lib/ai/config";
 import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 type StoredAi = Awaited<ReturnType<typeof getStoredAiSettings>>;
 
@@ -65,6 +66,14 @@ export const PUT = withSession(async (session, request: NextRequest) => {
     where: { userId: session.userId },
     update: fields,
     create: { userId: session.userId, ...fields },
+  });
+
+  // Never the key or the base URL's value — only that they moved.
+  logSecurityChange(request, "AI assistant settings changed", {
+    enabled: settings.aiEnabled,
+    provider: settings.aiProvider,
+    baseUrlChanged: data.baseUrl !== undefined && (data.baseUrl || null) !== (current?.aiBaseUrl ?? null),
+    keyChanged: "aiApiKey" in fields,
   });
 
   return NextResponse.json(shape(settings));

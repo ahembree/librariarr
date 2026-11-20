@@ -1800,7 +1800,8 @@ export default function SettingsPage() {
   const handleSaveBackupPassword = async (password: string | null) => {
     setSavingBackupPassword(true);
     try {
-      const res = await fetch("/api/settings/backup-encryption-password", {
+      // Needs a recent sign-in, like the backups it protects.
+      const res = await fetchWithReauth("/api/settings/backup-encryption-password", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backupEncryptionPassword: password }),

@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry } from "@/lib/http-retry";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { confineCredentials } from "@/lib/http-credentials";
 
 interface IntegrationHttpOptions {
   /** Per-request timeout in milliseconds. */
@@ -30,10 +31,14 @@ export function createIntegrationHttp(
   headers: Record<string, string>,
   opts: IntegrationHttpOptions,
 ): AxiosInstance {
+  const normalizedBase = stripTrailingSlashes(baseURL);
   const client = axios.create({
-    baseURL: stripTrailingSlashes(baseURL),
+    baseURL: normalizedBase,
     headers,
     timeout: opts.timeout,
+    // The API key stays on the configured host: no absolute request URL, and
+    // no key on a redirect that leaves it (`src/lib/http-credentials.ts`).
+    ...confineCredentials(normalizedBase),
   });
 
   client.interceptors.request.use((config) => {

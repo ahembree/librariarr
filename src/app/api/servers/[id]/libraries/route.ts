@@ -5,6 +5,23 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { validateRequest, serverLibraryUpdateSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { apiLogger } from "@/lib/logger";
+
+/**
+ * The answer when the media server cannot list its libraries (offline, a
+ * rejected token, a 5xx). The client throws the raw AxiosError; left to escape
+ * the handler it became a bare 500 and a dump of the request — headers and
+ * all — in the container log.
+ */
+function librariesUnavailable(serverName: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  apiLogger.warn("Servers", `Could not list libraries on "${serverName}"`, { error: message });
+  return NextResponse.json(
+    { error: "Could not load libraries from the media server", detail: sanitizeErrorDetail(message) },
+    { status: 502 },
+  );
+}
 
 export const GET = withSession(async (
   session,
@@ -26,7 +43,12 @@ export const GET = withSession(async (
     skipTlsVerify: server.tlsSkipVerify,
   });
 
-  const plexLibraries = await client.getLibraries();
+  let plexLibraries: Awaited<ReturnType<typeof client.getLibraries>>;
+  try {
+    plexLibraries = await client.getLibraries();
+  } catch (error) {
+    return librariesUnavailable(server.name, error);
+  }
   const existingByKey = new Map(
     server.libraries.map((lib) => [lib.key, lib])
   );
@@ -78,6 +100,16 @@ export const PUT = withSession(async (
     (serverLibraries ??= createMediaServerClient(server.type, server.url, server.accessToken, {
       skipTlsVerify: server.tlsSkipVerify,
     }).getLibraries());
+
+  // Asked for before any write, when it will be needed: a server that cannot
+  // answer then changes nothing, instead of failing halfway through the list.
+  if (libraries.some(({ key }) => !existingByKey.has(key))) {
+    try {
+      await loadServerLibraries();
+    } catch (error) {
+      return librariesUnavailable(server.name, error);
+    }
+  }
 
   for (const { key, enabled } of libraries) {
     const existing = existingByKey.get(key);

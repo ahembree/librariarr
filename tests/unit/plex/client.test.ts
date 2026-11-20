@@ -888,6 +888,63 @@ describe("PlexClient", () => {
       expect(mockAxiosInstance.get.mock.calls[1][0]).toBe("/library/metadata/123/thumb");
     });
 
+    // Cast photos are stored as absolute URLs on another host. The server's
+    // client carries X-Plex-Token on every request, so it must never be the
+    // one that fetches them.
+    describe("artwork on another host", () => {
+      const PEOPLE = "https://metadata-static.plex.tv/a/people/2b1c4f0e.jpg";
+
+      it("asks the transcoder first, with the URL as its parameter", async () => {
+        mockAxiosInstance.get.mockResolvedValueOnce(imageResponse());
+        await client.fetchImage(PEOPLE, { width: 400 });
+
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+        const url = mockAxiosInstance.get.mock.calls[0][0] as string;
+        expect(url.startsWith("/photo/:/transcode?")).toBe(true);
+        expect(new URLSearchParams(url.split("?")[1]).get("url")).toBe(PEOPLE);
+        expect(axios.get).not.toHaveBeenCalled();
+      });
+
+      it("falls back without the token when the transcoder fails", async () => {
+        mockAxiosInstance.get.mockRejectedValueOnce(new Error("500"));
+        vi.mocked(axios.get).mockResolvedValueOnce(imageResponse({ headers: { "content-type": "image/jpeg" } }));
+
+        const result = await client.fetchImage(PEOPLE, { width: 400 });
+
+        expect(result.contentType).toBe("image/jpeg");
+        // Only the transcoder request went through the token-bearing client.
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+        const [url, config] = vi.mocked(axios.get).mock.calls[0];
+        expect(url).toBe(PEOPLE);
+        expect(JSON.stringify(config)).not.toContain("test-token");
+        expect(config?.headers).toEqual({ Accept: "image/*" });
+      });
+
+      it("never hands a foreign URL to the token-bearing client, with no width either", async () => {
+        vi.mocked(axios.get).mockResolvedValueOnce(imageResponse());
+        await client.fetchImage(PEOPLE);
+        expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+        expect(vi.mocked(axios.get).mock.calls[0][0]).toBe(PEOPLE);
+      });
+
+      it("refuses a foreign URL that is not a public https address", async () => {
+        mockAxiosInstance.get.mockRejectedValueOnce(new Error("500"));
+        await expect(client.fetchImage("http://192.168.1.1/admin", { width: 400 })).rejects.toThrow(
+          "not a public https address",
+        );
+        expect(axios.get).not.toHaveBeenCalled();
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("confines the token to the server: no absolute request URLs, credentials dropped on a foreign redirect", () => {
+      const config = vi.mocked(axios.create).mock.calls.at(-1)![0]!;
+      expect(config.allowAbsoluteUrls).toBe(false);
+      const headers: Record<string, unknown> = { "X-Plex-Token": "test-token", Accept: "application/json" };
+      (config.beforeRedirect as (o: unknown) => void)({ href: "https://auth.example.com/login", headers });
+      expect(headers).toEqual({ Accept: "application/json" });
+    });
+
     it("falls back when the transcoder answers with a non-image body", async () => {
       // An HTML error page must not be cached as artwork.
       mockAxiosInstance.get

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
+import { apiLogger } from "@/lib/logger";
+import { auditMeta } from "@/lib/auth/audit";
 
 /**
  * Logging out has to REVOKE, not merely forget. The session is a stateless
@@ -34,6 +36,7 @@ export async function POST(request: NextRequest) {
   }
   const session = await getSession();
   await revokeAllSessions(session.userId);
+  if (session.userId) apiLogger.info("Auth", "Signed out — every session revoked", auditMeta(request));
   session.destroy();
   return NextResponse.json({ success: true });
 }

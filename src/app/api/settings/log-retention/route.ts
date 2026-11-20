@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, logRetentionSchema } from "@/lib/validation";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
@@ -28,6 +29,9 @@ export const PUT = withSession(async (session, request: NextRequest) => {
     },
     update: { logRetentionDays },
   });
+
+  // How long the record itself is kept.
+  logSecurityChange(request, `Log retention set to ${logRetentionDays} day(s)`);
 
   return NextResponse.json({ logRetentionDays });
 });

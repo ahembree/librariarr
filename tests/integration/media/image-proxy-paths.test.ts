@@ -172,4 +172,23 @@ describe("GET /api/media/[id]/image — roles, cache hits and failures", () => {
     expect(await second.json()).toEqual({ error: "Failed to fetch image" });
     expect(mockFetchImage).toHaveBeenCalledTimes(1);
   });
+
+  // A body sharp cannot decode is passed on as the media server sent it. Only
+  // a picture may be: an HTML or JSON answer relayed from the app's own origin
+  // is a page a hostile server wrote.
+  it("answers 502 instead of relaying an upstream body that is not an image", async () => {
+    mockFetchImage.mockResolvedValue({ data: Buffer.from("<html><script>1</script></html>"), contentType: "text/html" });
+    const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
+    const res = await callRouteWithParams(GET, { id: item.id });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "Failed to fetch image" });
+  });
+
+  it("still relays an undecodable body the server called an image", async () => {
+    mockFetchImage.mockResolvedValue({ data: Buffer.from("not really a png"), contentType: "image/png" });
+    const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
+    const res = await callRouteWithParams(GET, { id: item.id });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  });
 });

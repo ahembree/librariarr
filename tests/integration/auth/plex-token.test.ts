@@ -213,6 +213,14 @@ describe("POST /api/auth/plex/token", () => {
     expect(await getTestPrisma().user.count()).toBe(1);
     expect(getMockSession().isLoggedIn).toBe(false);
     expect(mockSucceeded).not.toHaveBeenCalled();
+    // The refusal is on record, with who tried and from where — never the token.
+    const { apiLogger } = await import("@/lib/logger");
+    expect(apiLogger.warn).toHaveBeenCalledWith(
+      "Auth",
+      'Failed sign-in (Plex): the Plex account "unknownuser" is not linked to the admin',
+      { address: "unknown" },
+    );
+    expect(JSON.stringify(vi.mocked(apiLogger.warn).mock.calls)).not.toContain("unknown-token");
   });
 
   it("should return 500 when getPlexUser throws", async () => {

@@ -11,6 +11,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
 import { compareSemver } from "@/lib/version/semver";
+import { archiveLogsBeforeRestore } from "@/lib/logs/archive";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -283,6 +284,22 @@ export async function restoreBackup(
 
   logger.info("Backup", `Restoring from backup: ${filename}`);
 
+  // The restore replaces the log table too. Keep what it holds now in the log
+  // archive first; a restore is a recovery tool, so failing to is logged and
+  // does not stop it.
+  // Reported in the "Restore completed" line: anything logged before the
+  // truncate below is itself replaced.
+  let archivedLogs: string | null = null;
+  let logArchiveError: string | null = null;
+  try {
+    archivedLogs = await archiveLogsBeforeRestore();
+  } catch (error) {
+    logArchiveError = String(error);
+    logger.error("Backup", "Could not archive the log entries before the restore — they will be replaced", {
+      error: logArchiveError,
+    });
+  }
+
   /** Tracearr-mapped servers whose archive walk the restore restarted. */
   let tracearrRestarted = 0;
 
@@ -432,7 +449,16 @@ export async function restoreBackup(
   }
 
   onProgress?.({ phase: "complete", message: "Restore completed" });
-  logger.info("Backup", `Restore completed from ${filename}`);
+  logger.info(
+    "Backup",
+    `Restore completed from ${filename}` +
+      (archivedLogs ? ` — the log entries from before it are in the log archive as ${archivedLogs}` : ""),
+  );
+  if (logArchiveError) {
+    logger.warn("Backup", "The log entries from before the restore could not be archived and were replaced", {
+      error: logArchiveError,
+    });
+  }
 }
 
 export async function listBackups(): Promise<BackupInfo[]> {

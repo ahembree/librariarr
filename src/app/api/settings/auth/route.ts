@@ -11,6 +11,7 @@ import {
 } from "@/lib/auth/password-sign-in";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 export const GET = withSession(async (session) => {
   const user = await prisma.user.findUnique({
@@ -164,6 +165,11 @@ export const PUT = withSession(async (session, request: NextRequest) => {
     return { refused: null, local, plex } as const;
   });
   if (outcome.refused) return reauthRequired(userId, outcome.refused);
+
+  logSecurityChange(request, "Sign-in methods changed", {
+    localAuthEnabled: outcome.local,
+    plexLoginEnabled: outcome.plex,
+  });
 
   return NextResponse.json({
     localAuthEnabled: outcome.local,

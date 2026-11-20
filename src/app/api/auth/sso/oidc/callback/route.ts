@@ -13,6 +13,7 @@ import {
 } from "@/lib/sso/oidc-client";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
+import { auditMeta } from "@/lib/auth/audit";
 import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
 import { reauthNonceFromState, ssoIdentityMatches } from "@/lib/auth/reauth";
@@ -124,7 +125,9 @@ export async function GET(request: NextRequest) {
   const providerError = url.searchParams.get("error");
 
   if (providerError) {
-    apiLogger.warn("Auth", `OIDC provider returned error: ${providerError}`);
+    // Anyone can call this URL with any `error`: the logger flattens it to one
+    // line, and only the length an OAuth error code could need is repeated.
+    apiLogger.warn("Auth", `OIDC provider returned error: ${providerError.slice(0, 200)}`, auditMeta(request));
     return fail(providerError);
   }
   if (!code || !state) {
@@ -144,7 +147,7 @@ export async function GET(request: NextRequest) {
   await session.save();
 
   if (!expectedState || !verifier || !statesEqual(state, expectedState)) {
-    apiLogger.warn("Auth", "OIDC state mismatch on callback");
+    apiLogger.warn("Auth", "OIDC state mismatch on callback", auditMeta(request));
     return fail("state_mismatch");
   }
 
@@ -293,7 +296,8 @@ export async function GET(request: NextRequest) {
   if (!user || !user.ssoEnabled) {
     apiLogger.warn(
       "Auth",
-      `OIDC login rejected: no linked account for sub=${subject}`
+      `OIDC login rejected: no linked account for sub=${subject}`,
+      auditMeta(request),
     );
     return redirectToLogin(request, "not_linked");
   }
@@ -330,7 +334,7 @@ export async function GET(request: NextRequest) {
   authenticated.sessionVersion = user.sessionVersion;
   await authenticated.save();
 
-  apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`);
+  apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`, auditMeta(request));
 
   return NextResponse.redirect(new URL("/", getExternalBaseUrl(request)));
 }
