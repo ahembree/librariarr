@@ -4,8 +4,13 @@ import type { Prisma } from "@/generated/prisma/client";
 type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 type LogCategory = "BACKEND" | "API" | "DB";
 
-/** Longest message a log line keeps; the rest is cut with an ellipsis. */
-export const MAX_LOG_MESSAGE_LENGTH = 2000;
+/**
+ * Longest message a log line keeps; the rest is cut with an ellipsis. Far above
+ * any line the app writes on purpose — a TRaSH sync names every custom format
+ * it applied, a refused execution every id — so only runaway text is cut; a
+ * caller quoting text from outside bounds that text itself.
+ */
+export const MAX_LOG_MESSAGE_LENGTH = 32_000;
 
 /**
  * A log message as one bounded line.
@@ -16,10 +21,15 @@ export const MAX_LOG_MESSAGE_LENGTH = 2000;
  * genuine entry on the console — `[2026-…] [Auth] Local login: "admin"` — and
  * an unbounded one fills the log. Control characters become a space; `meta`
  * is printed and stored as structured data and is not touched.
+ *
+ * Anything that is not a string is turned into one first: the console printed
+ * whatever it was handed, and a catch block logging the `message` of something
+ * that was not an Error must still log, not throw from inside the logger.
  */
-export function logLine(message: string): string {
+export function logLine(message: unknown): string {
+  const text = typeof message === "string" ? message : String(message ?? "");
   // C0 controls, DEL, C1 controls, and the Unicode line/paragraph separators.
-  const flat = message.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
   return flat.length > MAX_LOG_MESSAGE_LENGTH ? `${flat.slice(0, MAX_LOG_MESSAGE_LENGTH)}…` : flat;
 }
 

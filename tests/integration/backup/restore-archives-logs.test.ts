@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { gunzipSync } from "zlib";
+import { gunzipSync, gzipSync } from "zlib";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { createTestLogEntry } from "../../setup/test-helpers";
 
@@ -27,6 +27,18 @@ const mockLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.f
 vi.mock("@/lib/logger", () => ({ logger: mockLogger, apiLogger: mockLogger, dbLogger: mockLogger }));
 
 const { createBackup, restoreBackup } = await import("@/lib/backup/backup-service");
+const { PRE_RESTORE_PAGE_SIZE } = await import("@/lib/logs/archive");
+
+/** The rows inside a pre-restore archive: one tar entry holding a JSON array. */
+async function archivedRows(file: string): Promise<Array<{ message: string }>> {
+  const tar = gunzipSync(await fs.readFile(path.join(archiveDir, file)));
+  const name = tar.subarray(0, 100).toString("utf-8").replace(/\0+$/, "");
+  expect(name).toBe(file.replace(/\.tar\.gz$/, ".json"));
+  const size = parseInt(tar.subarray(124, 135).toString("utf-8"), 8);
+  // Header, the file padded to 512 bytes, then the two empty end blocks.
+  expect(tar.length).toBe(512 + Math.ceil(size / 512) * 512 + 1024);
+  return JSON.parse(tar.subarray(512, 512 + size).toString("utf-8"));
+}
 
 const prisma = getTestPrisma();
 
@@ -58,9 +70,10 @@ describe("restore keeps the log entries it replaces", () => {
     expect(files[0]).toMatch(/^logs-\d{4}-\d{2}-\d{2}-pre-restore-\d+\.tar\.gz$/);
     const stat = await fs.stat(path.join(archiveDir, files[0]));
     expect(stat.mode & 0o777).toBe(0o600);
-    const tar = gunzipSync(await fs.readFile(path.join(archiveDir, files[0]))).toString("utf-8");
-    expect(tar).toContain("Failed sign-in (password): wrong password");
-    expect(tar).toContain("Discord notification settings changed");
+    expect((await archivedRows(files[0])).map((row) => row.message)).toEqual([
+      "Failed sign-in (password): wrong password",
+      "Discord notification settings changed",
+    ]);
     expect(mockLogger.info).toHaveBeenCalledWith(
       "Backup",
       `Restore completed from ${filename} — the log entries from before it are in the log archive as ${files[0]}`,
@@ -75,5 +88,54 @@ describe("restore keeps the log entries it replaces", () => {
 
     expect(await fs.readdir(archiveDir)).toEqual([]);
     expect(mockLogger.info).toHaveBeenCalledWith("Backup", `Restore completed from ${filename}`);
+  });
+
+  // The table can hold a day of debug output: it is read a page at a time and
+  // streamed to disk, never held whole.
+  it("archives every row of a table larger than one page, in order", async () => {
+    await prisma.user.create({ data: { username: "admin" } });
+    const filename = await createBackup(undefined, true);
+    const total = PRE_RESTORE_PAGE_SIZE * 2 + 3;
+    const started = Date.now() - total;
+    await prisma.logEntry.createMany({
+      data: Array.from({ length: total }, (_, i) => ({
+        level: "INFO" as const,
+        category: "BACKEND" as const,
+        source: "test",
+        message: `row ${i}`,
+        createdAt: new Date(started + i),
+      })),
+    });
+
+    await restoreBackup(filename);
+
+    const [file] = await fs.readdir(archiveDir);
+    const rows = await archivedRows(file);
+    expect(rows).toHaveLength(total);
+    expect(rows[0].message).toBe("row 0");
+    expect(rows[PRE_RESTORE_PAGE_SIZE].message).toBe(`row ${PRE_RESTORE_PAGE_SIZE}`);
+    expect(rows.at(-1)!.message).toBe(`row ${total - 1}`);
+    // No temporary file is left beside it.
+    expect(await fs.readdir(archiveDir)).toEqual([file]);
+  });
+
+  // A failed restore rolls back: the rows are still in the table, so the copy
+  // is redundant, and each further attempt would leave another.
+  it("leaves no archive behind when the restore fails", async () => {
+    await prisma.user.create({ data: { username: "admin" } });
+    const original = await createBackup(undefined, true);
+    const backup = JSON.parse(gunzipSync(await fs.readFile(path.join(backupDir, original))).toString("utf-8"));
+    // A row the schema refuses: the insert fails and the transaction rolls back.
+    backup.data.user[0].createdAt = "not a date";
+    const broken = "librariarr-backup-broken.json.gz";
+    await fs.writeFile(path.join(backupDir, broken), gzipSync(JSON.stringify(backup)));
+    await createTestLogEntry({ source: "Audit", message: "kept in the table" });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(restoreBackup(broken)).rejects.toThrow();
+    }
+
+    expect(await fs.readdir(archiveDir)).toEqual([]);
+    expect(await prisma.logEntry.count()).toBe(1);
   });
 });

@@ -33,7 +33,7 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
 vi.mock("fs/promises", () => ({ default: mockFs, ...mockFs }));
 
-import { archiveLogs, archiveLogsBeforeRestore } from "@/lib/logs/archive";
+import { archiveLogs, discardPreRestoreArchive } from "@/lib/logs/archive";
 
 // fs is fully mocked, so no real path is touched.
 const ARCHIVE_DIR = "/config/logs";
@@ -187,8 +187,11 @@ describe("archiveLogs", () => {
   });
 });
 
-// A restore truncates LogEntry with everything else; what it held is kept here.
-describe("archiveLogsBeforeRestore", () => {
+// A restore archives the log rows it replaces (`archiveLogsBeforeRestore`,
+// exercised against real files in
+// tests/integration/backup/restore-archives-logs.test.ts); those archives are
+// pruned like the daily ones.
+describe("pre-restore archives", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -199,36 +202,7 @@ describe("archiveLogsBeforeRestore", () => {
     vi.useRealTimers();
   });
 
-  it("writes every row to an owner-only archive and deletes none", async () => {
-    const rows = [
-      { id: "1", level: "WARN", source: "Auth", message: "Failed sign-in (password): wrong password", createdAt: new Date("2026-06-13T08:00:00Z") },
-      { id: "2", level: "INFO", source: "Backup", message: "Restoring from backup: x", createdAt: new Date("2026-06-13T11:59:59Z") },
-    ];
-    mockPrisma.logEntry.findMany.mockResolvedValue(rows);
-
-    const name = await archiveLogsBeforeRestore();
-
-    const stamp = new Date("2026-06-13T12:00:00Z").getTime();
-    expect(name).toBe(`logs-2026-06-13-pre-restore-${stamp}.tar.gz`);
-    expect(mockPrisma.logEntry.findMany).toHaveBeenCalledWith({ orderBy: { createdAt: "asc" } });
-    expect(mockPrisma.logEntry.deleteMany).not.toHaveBeenCalled();
-    const [path, data, options] = mockFs.writeFile.mock.calls[0];
-    expect(path).toBe(`${ARCHIVE_DIR}/${name}`);
-    expect(options).toEqual({ mode: 0o600 });
-    const tar = gunzipSync(data as Buffer);
-    expect(tar.subarray(0, 100).toString("utf-8").replace(/\0+$/, "")).toBe(
-      `logs-2026-06-13-pre-restore-${stamp}.json`,
-    );
-    expect(tar.toString("utf-8")).toContain("Failed sign-in (password): wrong password");
-  });
-
-  it("writes nothing when the log table is empty", async () => {
-    mockPrisma.logEntry.findMany.mockResolvedValue([]);
-    expect(await archiveLogsBeforeRestore()).toBeNull();
-    expect(mockFs.writeFile).not.toHaveBeenCalled();
-  });
-
-  it("is pruned with the daily archives once past retention", async () => {
+  it("are pruned with the daily archives once past retention", async () => {
     mockPrisma.appSettings.findFirst.mockResolvedValue({ logRetentionDays: 7 });
     mockPrisma.logEntry.findFirst.mockResolvedValue(null);
     mockFs.readdir.mockResolvedValue([
@@ -241,5 +215,21 @@ describe("archiveLogsBeforeRestore", () => {
 
     expect(mockFs.unlink).toHaveBeenCalledTimes(1);
     expect(mockFs.unlink).toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2026-05-01-pre-restore-1777600000000.tar.gz`);
+  });
+
+  it("discards only an archive of its own shape", async () => {
+    await discardPreRestoreArchive("logs-2026-06-13-pre-restore-1781222400000.tar.gz");
+    expect(mockFs.unlink).toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2026-06-13-pre-restore-1781222400000.tar.gz`);
+
+    mockFs.unlink.mockClear();
+    for (const name of ["logs-2026-06-13.tar.gz", "../backups/x.json.gz", "logs-2026-06-13-pre-restore-1.tar.gz/../../x", ""]) {
+      await discardPreRestoreArchive(name);
+    }
+    expect(mockFs.unlink).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when the archive is already gone", async () => {
+    mockFs.unlink.mockRejectedValueOnce(new Error("ENOENT"));
+    await expect(discardPreRestoreArchive("logs-2026-06-13-pre-restore-1781222400000.tar.gz")).resolves.toBeUndefined();
   });
 });

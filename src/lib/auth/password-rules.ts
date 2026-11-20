@@ -60,6 +60,9 @@ const GUESSABLE_BASE_WORDS = new Set([
 /** The letters the usual substitutions stand for (`p@ssw0rd` → `password`). */
 const LEET: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", $: "s", "!": "i" };
 
+const NOT_LETTERS_AT_END = /[^\p{L}]+$/u;
+const NOT_LETTERS_AT_START = /^[^\p{L}]+/u;
+
 /** Every character one step up (or down) from the one before: `12345678`, `hgfedcba`. */
 function isStraightRun(value: string): boolean {
   if (value.length < 2) return false;
@@ -89,11 +92,13 @@ export function isGuessablePassword(password: string): boolean {
   if (isStraightRun(lower) || lower === "1234567890" || lower === "0123456789" || lower === "0987654321") {
     return true;
   }
-  // A common word with digits and punctuation around it.
-  const base = lower.replace(/[\d\W_]+$/, "").replace(/^[\d\W_]+/, "");
+  // A common word with digits and punctuation around it. "Not a letter" is
+  // Unicode's (`\p{L}`): `\W` counts every non-ASCII letter as punctuation,
+  // which stripped the whole of `adminпароль` down to `admin`.
+  const base = lower.replace(NOT_LETTERS_AT_END, "").replace(NOT_LETTERS_AT_START, "");
   if (base && GUESSABLE_BASE_WORDS.has(base)) return true;
   // The same word in the usual substitutions; `1` stands for `l` or for `i`.
-  const dressed = lower.replace(/[\d\W_]+$/, "");
+  const dressed = lower.replace(NOT_LETTERS_AT_END, "");
   const unleet = (one: string) => Array.from(dressed, (ch) => (ch === "1" ? one : (LEET[ch] ?? ch))).join("");
   return GUESSABLE_BASE_WORDS.has(unleet("l")) || GUESSABLE_BASE_WORDS.has(unleet("i"));
 }

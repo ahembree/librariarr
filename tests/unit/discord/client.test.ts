@@ -419,4 +419,33 @@ describe("notification embeds escape what they did not write", () => {
     expect(value.length).toBeLessThanOrEqual(1024);
     expect(value.endsWith("…")).toBe(true);
   });
+
+  // Title and reason used to be cut together at 200 characters, so a long
+  // title left none of the reason.
+  it("keeps the reason an action failed, however long its title", () => {
+    const title = "A Very Long Title ".repeat(20).trim();
+    const error = "HTTP 400 (DELETE /api/v3/movie/123): This movie cannot be deleted because it is in use. ".repeat(3).trim();
+    const value = buildFailureSummaryEmbed("Rule", "DELETE_RADARR", [{ title, error }]).fields!.at(-1)!.value;
+
+    expect(value).toContain("…: HTTP 400 ");
+    expect(value).toContain("it is in use. HTTP 400");
+    expect(value.length).toBeLessThanOrEqual(1024);
+  });
+
+  it("cuts on characters, never through an emoji", () => {
+    const title = "🎬".repeat(300);
+    const value = buildSuccessSummaryEmbed("Rule", "DELETE_RADARR", [title]).fields!.at(-1)!.value;
+    expect(value).toBe(`• ${"🎬".repeat(200)}…`);
+    expect(value.isWellFormed()).toBe(true);
+  });
+
+  it("keeps one item whose escaping doubles its length inside the field, without a dangling escape", () => {
+    const error = "*".repeat(600);
+    const value = buildFailureSummaryEmbed("Rule", "DELETE_RADARR", [{ title: "T", error }]).fields!.at(-1)!.value;
+    expect(value.length).toBeLessThanOrEqual(1024);
+    expect(value.endsWith("\\*…")).toBe(true);
+    // Every asterisk is still escaped: an odd backslash at the cut would have
+    // escaped the ellipsis instead.
+    expect(value.replace(/\\\*/g, "")).not.toContain("*");
+  });
 });

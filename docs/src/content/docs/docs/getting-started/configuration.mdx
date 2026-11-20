@@ -34,6 +34,12 @@ request arrived over HTTPS (directly, or through a proxy that sends
 `X-Forwarded-Proto: https`) and omitted on plain HTTP, so LAN installs keep
 working. Set `COOKIE_SECURE` explicitly to override in either direction.
 
+To have browsers refuse plain HTTP for the host altogether, set
+`HSTS_MAX_AGE` (seconds): Librariarr then sends `Strict-Transport-Security` on
+responses to HTTPS requests. It is off by default because the header covers
+every port of the host name, not just Librariarr's — see
+[Security hardening](/docs/advanced/security-hardening/).
+
 ### Initial setup
 
 The first user is created by whatever method you choose on the login screen:

@@ -11,7 +11,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
 import { compareSemver } from "@/lib/version/semver";
-import { archiveLogsBeforeRestore } from "@/lib/logs/archive";
+import { archiveLogsBeforeRestore, discardPreRestoreArchive } from "@/lib/logs/archive";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -415,7 +415,13 @@ export async function restoreBackup(
     // backfill slice that read it in between and stored a page would leave the
     // server holding rows, and so never restarted.
     tracearrRestarted = await restartTracearrBackfillWithoutPlays(tx);
-  }, { timeout: 300000 }); // 5 min timeout for large restores
+  }, { timeout: 300000 }) // 5 min timeout for large restores
+    .catch(async (error: unknown) => {
+      // Rolled back: the log rows are still in the table, so the copy made of
+      // them is redundant — and each further attempt would leave another.
+      if (archivedLogs) await discardPreRestoreArchive(archivedLogs);
+      throw error;
+    });
 
   if (tracearrRestarted > 0) {
     logger.info(

@@ -303,12 +303,12 @@ In a production build the job worker and the realtime manager (started from `ins
 
 - `src/lib/discord/client.ts` — Discord webhooks for lifecycle events (action success/failure, match count changes, held deletions), maintenance mode changes, and API keys created or deleted (`buildApiKeyEmbed`, gated by `discordNotifyApiKeys`). A 429 is retried once when Discord asks for ≤ 5 s; an undelivered notification is logged at WARN without the webhook URL.
 - Notification failures never block lifecycle processing (wrapped in try/catch).
-- Embed text is Markdown: anything the app did not write (item titles, Arr error text, rule set and key names, the maintenance message) goes through `escapeDiscordMarkdown`; `buildTruncatedList` escapes its items itself.
+- Embed text is Markdown: anything the app did not write (item titles, Arr error text, rule set and key names, the maintenance message) goes through `escapeDiscordMarkdown`; `buildTruncatedList` escapes its items itself and keeps a single item inside the field. A failed action's title and reason are cut separately, so the reason is never lost to a long title.
 
 ### Next.js Config
 
 - `output: "standalone"` (Docker). Path alias `@/*` → `./src/*`. `experimental.optimizePackageImports: ["radix-ui"]` (compare two builds before relying on it or removing it).
-- Security headers live in `next.config.ts` `headers()`; the page CSP (with a per-request nonce) is sent by `src/proxy.ts` (see the `auth-security` skill).
+- Security headers live in `next.config.ts` `headers()`; the page CSP (with a per-request nonce) is sent by `src/proxy.ts`, and so is `Strict-Transport-Security` when the operator sets `HSTS_MAX_AGE` — opt-in, https requests only (see the `auth-security` skill).
 - **Dependency floors**: `pnpm-workspace.yaml` `overrides` force `sharp` ≥ 0.35.4 and `js-yaml` ≥ 4.3.2. After changing overrides, delete `node_modules/.pnpm-workspace-state-v1.json` (pnpm caches workspace settings). The runtime image installs the Prisma CLI at the exact version the lockfile resolved (`/prisma-version` from the `deps` stage).
 
 ### Documentation Maintenance

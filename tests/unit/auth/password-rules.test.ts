@@ -113,6 +113,21 @@ describe("isGuessablePassword", () => {
     expect(newPasswordProblem(password)).toBeNull();
   });
 
+  // `\W` counts every non-ASCII letter as punctuation: the tail of such a
+  // password was stripped and only its first word judged.
+  it.each(["adminпароль", "plexфильмы", "media日本語2024", "testκωδικός99", "serverüberwachung", "passwordñandú"])(
+    "accepts %s, a common word followed by letters of another script",
+    (password) => {
+      expect(isGuessablePassword(password)).toBe(false);
+      expect(newPasswordProblem(password)).toBeNull();
+    },
+  );
+
+  it("still strips digits and punctuation of any script around a common word", () => {
+    expect(isGuessablePassword("welcome２０２４！")).toBe(true);
+    expect(isGuessablePassword("¡¡password!!")).toBe(true);
+  });
+
   it("is reported by the schemas that set a password, after the length rules", () => {
     const setup = authSetupSchema.safeParse({ username: "admin", password: "password123" });
     expect(setup.error?.issues.map((i) => [i.path.join("."), i.message])).toEqual([

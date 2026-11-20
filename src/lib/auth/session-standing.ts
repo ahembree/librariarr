@@ -10,6 +10,14 @@ import { prisma } from "@/lib/db";
  * kept delivering (playback sessions with usernames, player addresses and file
  * paths; every app event) until its lifetime ran out. A stream re-reads the
  * row on a timer and ends itself once the session it was opened with is gone.
+ *
+ * That includes the admin's OWN streams after they change the password or
+ * unlink SSO in the same browser: the route bumps the version and re-seals
+ * that browser's cookie with the new one, but a stream holds the version it
+ * was opened with — and so does a stream opened from a stolen copy of the old
+ * cookie, which is exactly what the change is meant to cut off. The two cannot
+ * be told apart here, so both end; the browser with the new cookie reconnects
+ * on its own (`EventSource`, and `useRealtime` refetches on a re-open).
  */
 export type SessionStanding = "current" | "revoked" | "unknown";
 

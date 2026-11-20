@@ -258,4 +258,25 @@ describe("redactNetworkAddresses", () => {
     const text = "Request failed with status code 401 — 12:30:45, 3 of 10 items, v1.2.3";
     expect(redactNetworkAddresses(text)).toBe(text);
   });
+
+  // What follows these codes is the TLS or socket detail, or ordinary words —
+  // replacing it garbled the message and hid nothing.
+  it("leaves the text after a code that names no address", () => {
+    for (const text of [
+      "write EPROTO 80DB1E:error:0A00010B:SSL routines:ssl3_get_record:wrong version number",
+      "read ECONNRESET at TLSWrap.onStreamRead",
+      "connect ETIMEDOUT while fetching the library list",
+      "request failed: ECONNREFUSED",
+    ]) {
+      expect(redactNetworkAddresses(text)).toBe(text);
+    }
+  });
+
+  it("still removes an address a connection error names, IPv6 included", () => {
+    expect(redactNetworkAddresses("connect ECONNREFUSED ::1:32400")).toBe("connect ECONNREFUSED [address]");
+    expect(redactNetworkAddresses("connect EHOSTUNREACH 2001:db8::7:8096 (retry 2)")).toBe(
+      "connect EHOSTUNREACH [address] (retry 2)",
+    );
+    expect(redactNetworkAddresses("getaddrinfo ENOTFOUND plex")).toBe("getaddrinfo ENOTFOUND [address]");
+  });
 });

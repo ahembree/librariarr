@@ -216,6 +216,33 @@ describe("security-relevant changes are logged", () => {
     expect(JSON.stringify(vi.mocked(apiLogger.info).mock.calls)).not.toContain("SECRET-TOKEN");
   });
 
+  // Adding a server whose machine id is already known replaces that server's
+  // address and token in place.
+  it("media servers: a re-add by machine id, and whether it moved the server", async () => {
+    await createTestServer(userId, { machineId: "same-machine", name: "Plex", url: "http://plex:32400" });
+
+    const moved = await callRoute(serversPost, {
+      method: "POST",
+      headers: FROM,
+      body: { name: "Plex", url: "http://moved:32400", accessToken: "PLEX-SECRET-TOKEN", machineId: "same-machine" },
+    });
+    expect(moved.status).toBe(200);
+    const sameAddress = await callRoute(serversPost, {
+      method: "POST",
+      headers: FROM,
+      body: { name: "Plex", url: "http://moved:32400/", accessToken: "OTHER-SECRET-TOKEN", machineId: "same-machine" },
+    });
+    expect(sameAddress.status).toBe(200);
+
+    expect(audit()).toEqual([
+      ['Media server "Plex" re-added — its address and token were replaced', { address: ADDRESS, urlChanged: true }],
+      ['Media server "Plex" re-added — its address and token were replaced', { address: ADDRESS, urlChanged: false }],
+    ]);
+    const everything = JSON.stringify(vi.mocked(apiLogger.info).mock.calls);
+    expect(everything).not.toContain("SECRET-TOKEN");
+    expect(everything).not.toContain("moved:32400");
+  });
+
   it("a media-server edit that leaves the connection alone is not an audit event", async () => {
     const server = await createTestServer(userId);
     await expectJson(

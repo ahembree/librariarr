@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import fs from "fs/promises";
+import { createReadStream, createWriteStream } from "fs";
 import path from "path";
-import { gzipSync } from "zlib";
+import { pipeline } from "stream/promises";
+import { createGzip, gzipSync } from "zlib";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -28,6 +30,20 @@ function startOfDay(date: Date): Date {
  * Tar format: 512-byte header + data padded to 512-byte boundary + 1024 zero bytes (end-of-archive).
  */
 function buildTarBuffer(filename: string, data: Buffer): Buffer {
+  const header = buildTarHeader(filename, data.length);
+
+  // Data padded to 512-byte boundary
+  const padding = (512 - (data.length % 512)) % 512;
+  const dataPadded = Buffer.concat([data, Buffer.alloc(padding, 0)]);
+
+  // End-of-archive marker (two 512-byte zero blocks)
+  const endMarker = Buffer.alloc(1024, 0);
+
+  return Buffer.concat([header, dataPadded, endMarker]);
+}
+
+/** The 512-byte ustar header of one regular file of `size` bytes. */
+function buildTarHeader(filename: string, size: number): Buffer {
   const header = Buffer.alloc(512, 0);
 
   // Name (0–99)
@@ -39,7 +55,7 @@ function buildTarBuffer(filename: string, data: Buffer): Buffer {
   // GID (116–123)
   header.write("0001000\0", 116, 8, "utf-8");
   // Size in octal (124–135)
-  header.write(data.length.toString(8).padStart(11, "0") + "\0", 124, 12, "utf-8");
+  header.write(size.toString(8).padStart(11, "0") + "\0", 124, 12, "utf-8");
   // Mtime in octal (136–147)
   const mtime = Math.floor(Date.now() / 1000);
   header.write(mtime.toString(8).padStart(11, "0") + "\0", 136, 12, "utf-8");
@@ -56,14 +72,7 @@ function buildTarBuffer(filename: string, data: Buffer): Buffer {
   for (let i = 0; i < 512; i++) checksum += header[i];
   header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, 8, "utf-8");
 
-  // Data padded to 512-byte boundary
-  const padding = (512 - (data.length % 512)) % 512;
-  const dataPadded = Buffer.concat([data, Buffer.alloc(padding, 0)]);
-
-  // End-of-archive marker (two 512-byte zero blocks)
-  const endMarker = Buffer.alloc(1024, 0);
-
-  return Buffer.concat([header, dataPadded, endMarker]);
+  return header;
 }
 
 /**
@@ -140,6 +149,11 @@ export async function archiveLogs() {
   await pruneArchives(retentionDays);
 }
 
+/** Rows read per query when the whole log table is archived. */
+export const PRE_RESTORE_PAGE_SIZE = 5000;
+
+const PRE_RESTORE_ARCHIVE_PATTERN = /^logs-\d{4}-\d{2}-\d{2}-pre-restore-\d+\.tar\.gz$/;
+
 /**
  * Write every log row currently in the database to an archive file, without
  * deleting any. Called before a restore, which truncates `LogEntry` along with
@@ -148,21 +162,77 @@ export async function archiveLogs() {
  * restore — who signed in, what was changed — would otherwise be gone, the
  * "Restoring from backup" line included.
  *
+ * The table can be large (a day of `LOG_DEBUG` output), so it is never held in
+ * memory: rows are read a page at a time and written to a temporary JSON file
+ * — one array, a row per line — which is then streamed into the tarball.
+ *
  * Named `logs-<date>-pre-restore-<epoch ms>.tar.gz`, so it sits beside the
  * daily archives and is pruned with them. Returns the file name, or `null`
- * when there was nothing to keep.
+ * when there was nothing to keep. A restore that then fails calls
+ * `discardPreRestoreArchive`: the rows it archived are still in the table.
  */
 export async function archiveLogsBeforeRestore(): Promise<string | null> {
-  const logs = await prisma.logEntry.findMany({ orderBy: { createdAt: "asc" } });
-  if (logs.length === 0) return null;
+  if ((await prisma.logEntry.count()) === 0) return null;
 
   await fs.mkdir(LOG_ARCHIVE_DIR, { recursive: true });
   const now = new Date();
   const base = `logs-${formatDate(now)}-pre-restore-${now.getTime()}`;
-  const tarBuffer = buildTarBuffer(`${base}.json`, Buffer.from(JSON.stringify(logs, null, 2), "utf-8"));
-  // Log rows quote server names and addresses: owner-only, like a backup.
-  await fs.writeFile(path.join(LOG_ARCHIVE_DIR, `${base}.tar.gz`), gzipSync(tarBuffer), { mode: 0o600 });
-  return `${base}.tar.gz`;
+  const jsonPath = path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, `${base}.json.tmp`);
+  const archivePath = path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, `${base}.tar.gz`);
+
+  try {
+    // Pass 1: the rows, a page at a time, as one JSON array.
+    let written = 0;
+    await pipeline(async function* rows() {
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await prisma.logEntry.findMany({
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: PRE_RESTORE_PAGE_SIZE,
+          ...(cursor !== undefined && { cursor: { id: cursor }, skip: 1 }),
+        });
+        if (page.length === 0) break;
+        for (const row of page) {
+          yield `${written === 0 ? "[\n" : ",\n"}${JSON.stringify(row)}`;
+          written++;
+        }
+        cursor = page[page.length - 1].id;
+        if (page.length < PRE_RESTORE_PAGE_SIZE) break;
+      }
+      yield written === 0 ? "[]\n" : "\n]\n";
+    }, createWriteStream(jsonPath, { mode: 0o600 }));
+    if (written === 0) return null;
+
+    // Pass 2: that file as the single entry of a gzipped tar. Log rows quote
+    // server names and addresses: owner-only, like a backup.
+    const { size } = await fs.stat(jsonPath);
+    await pipeline(
+      async function* tar() {
+        yield buildTarHeader(`${base}.json`, size);
+        yield* createReadStream(jsonPath);
+        yield Buffer.alloc((512 - (size % 512)) % 512 + 1024, 0);
+      },
+      createGzip(),
+      createWriteStream(archivePath, { mode: 0o600 }),
+    );
+    return `${base}.tar.gz`;
+  } catch (error) {
+    await fs.unlink(archivePath).catch(() => {});
+    throw error;
+  } finally {
+    await fs.unlink(jsonPath).catch(() => {});
+  }
+}
+
+/**
+ * Remove an archive `archiveLogsBeforeRestore` wrote, for a restore that
+ * failed: its transaction rolled back, the rows are still in the table, and
+ * each further attempt would otherwise leave another copy. Only a name of
+ * that function's own shape is ever removed.
+ */
+export async function discardPreRestoreArchive(name: string): Promise<void> {
+  if (!PRE_RESTORE_ARCHIVE_PATTERN.test(name)) return;
+  await fs.unlink(path.join(/* turbopackIgnore: true */ LOG_ARCHIVE_DIR, name)).catch(() => {});
 }
 
 /**

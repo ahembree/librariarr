@@ -100,6 +100,23 @@ describe("fetchTrashCatalog", () => {
     expect(mockGet.mock.calls.length).toBe(after);
   });
 
+  // The default media type sends the whole commit — every changed file with
+  // its patch — to learn forty characters.
+  it("asks GitHub for the commit id alone, and reads it as text or as an object", async () => {
+    const serve = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes("/commits/") ? Promise.resolve({ data: `${COMMIT}\n` }) : serve(url),
+    );
+
+    const cat = await fetchTrashCatalog("RADARR");
+
+    expect(cat.commit).toBe(COMMIT);
+    const [url, config] = mockGet.mock.calls[0];
+    expect(url).toBe(commitUrl());
+    expect(config).toEqual({ headers: { Accept: "application/vnd.github.sha" } });
+    expect(mockGet.mock.calls[1][0]).toBe(treeUrl(COMMIT));
+  });
+
   it("fails the build, uncached, when the branch cannot be resolved to a commit", async () => {
     const serve = mockGet.getMockImplementation()!;
     mockGet.mockImplementation((url: string) =>

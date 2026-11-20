@@ -107,8 +107,14 @@ async function resolveCommit(): Promise<string> {
   if (COMMIT_SHA_PATTERN.test(TRASH_REF)) return TRASH_REF;
   let sha: unknown;
   try {
-    const { data } = await http.get<{ sha?: unknown }>(commitUrl());
-    sha = data?.sha;
+    // The `sha` media type answers with the commit id alone. The default one
+    // sends the whole commit — every changed file with its patch — to learn
+    // forty characters. A mirror that ignores the media type still answers
+    // with the object, so both shapes are read.
+    const { data } = await http.get<string | { sha?: unknown }>(commitUrl(), {
+      headers: { Accept: "application/vnd.github.sha" },
+    });
+    sha = typeof data === "string" ? data.trim() : data?.sha;
   } catch (err) {
     const msg = (err as Error).message;
     logger.warn("TrashSync", `Failed to resolve guide revision ${TRASH_REF}: ${msg}`);

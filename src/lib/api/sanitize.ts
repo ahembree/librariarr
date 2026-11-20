@@ -72,9 +72,15 @@ export function sanitizeErrorDetail(
   return cleaned;
 }
 
-/** Node's network error codes that are followed by the address they failed on. */
-const NETWORK_ERROR_CODES =
-  "ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EHOSTDOWN|ENETUNREACH|ENOTFOUND|EAI_AGAIN|EADDRNOTAVAIL|EPROTO";
+/** Name-lookup error codes: what follows is always the host that was looked up. */
+const LOOKUP_ERROR_CODES = "ENOTFOUND|EAI_AGAIN";
+/**
+ * Connection error codes: followed by `address:port` when Node names one
+ * (`connect ECONNREFUSED 203.0.113.7:32400`) — and by ordinary words when it
+ * does not, which must be left alone. `EPROTO` and `ECONNRESET` are not here:
+ * what follows them is the TLS or socket detail, never an address.
+ */
+const CONNECT_ERROR_CODES = "ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|EHOSTDOWN|ENETUNREACH|EADDRNOTAVAIL";
 
 /**
  * Remove every network address from error text, public ones included.
@@ -93,9 +99,11 @@ export function redactNetworkAddresses(text: string): string {
     text
       // scheme://host[:port] — the path, if any, is kept (it is the API route).
       .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>()]+/gi, "[address]")
-      // The address a network error names: `connect ECONNREFUSED 203.0.113.7:32400`,
-      // `getaddrinfo ENOTFOUND plex.example.com`.
-      .replace(new RegExp(`\\b(${NETWORK_ERROR_CODES})\\s+[^\\s,;)]+`, "g"), "$1 [address]")
+      // The host a lookup failed on: `getaddrinfo ENOTFOUND plex.example.com`.
+      .replace(new RegExp(`\\b(${LOOKUP_ERROR_CODES})\\s+[^\\s,;)]+`, "g"), "$1 [address]")
+      // The address a connection failed to, when one is named — recognised by
+      // its port: `connect ECONNREFUSED 203.0.113.7:32400`, `… ::1:32400`.
+      .replace(new RegExp(`\\b(${CONNECT_ERROR_CODES})\\s+[^\\s,;)]*:\\d{1,5}(?![\\w:])`, "g"), "$1 [address]")
       // A certificate mismatch lists the host and every name on the certificate.
       .replace(/\b(Host|DNS|IP Address):\s*[^\s,;)]+/g, "$1: [address]")
       // Any IPv4 address left, with its port.

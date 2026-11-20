@@ -86,6 +86,26 @@ describe("logger (real module)", () => {
     expect(createMock.mock.calls[0][0].data.meta).toEqual({ note: "line one\nline two" });
   });
 
+  // The TRaSH sync names every custom format it applied; a refused execution
+  // every id. A cap low enough to cut those cut the record itself.
+  it("keeps a long line the app wrote on purpose whole", async () => {
+    const applied = Array.from({ length: 300 }, (_, i) => `Custom Format ${i}=updated`).join(", ");
+    expect(applied.length).toBeGreaterThan(6000);
+    await logger.info("TrashSync", `Applied sync to RADARR "Movies": ${applied}`);
+    expect(createMock.mock.calls[0][0].data.message).toBe(`Applied sync to RADARR "Movies": ${applied}`);
+    expect(MAX_LOG_MESSAGE_LENGTH).toBeGreaterThanOrEqual(32_000);
+  });
+
+  // A catch block logging the `message` of something that was not an Error.
+  it("logs a message that is not a string instead of throwing", async () => {
+    const notAString = undefined as unknown as string;
+    await expect(logger.warn("X", notAString)).resolves.toBeUndefined();
+    await logger.error("X", { toString: () => "an object" } as unknown as string);
+    await logger.info("X", 42 as unknown as string);
+    expect(createMock.mock.calls.map(([arg]) => arg.data.message)).toEqual(["", "an object", "42"]);
+    expect(logLine(null)).toBe("");
+  });
+
   it("logLine leaves an ordinary message untouched", () => {
     expect(logLine('Local login: "admin" — ünïcödé ✓')).toBe('Local login: "admin" — ünïcödé ✓');
     expect(logLine("tab\there\u0000nul\u009fc1")).toBe("tab here nul c1");
