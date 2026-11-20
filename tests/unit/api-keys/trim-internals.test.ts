@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
-import { jsonResponse, MIN_COMPRESS_BYTES } from "@/lib/api/json-response";
+import { jsonResponse } from "@/lib/api/json-response";
 import { trimServerInternals, withoutServerInternals } from "@/lib/api-keys/trim-internals";
 import { runAsApiKey } from "@/lib/api-keys/principal";
 
@@ -193,9 +192,7 @@ describe("withoutServerInternals", () => {
     expect(await res.json()).toEqual({ id: "abc" });
   });
 
-  // The handler would otherwise gzip a multi-MB body only for this wrapper to
-  // inflate it and compress it again.
-  it("calls the handler without Accept-Encoding, and gzips the trimmed body for a client that accepts it", async () => {
+  it("passes the request through as sent and answers plain JSON, even to a client that accepts gzip", async () => {
     const big = Array.from({ length: 200 }, (_, i) => ({
       id: `s${i}`,
       name: `Server ${i}`.padEnd(40, "."),
@@ -203,46 +200,23 @@ describe("withoutServerInternals", () => {
       url: `http://10.0.0.${i % 250}:32400`,
       machineId: `machine-${i}`,
     }));
-    expect(JSON.stringify({ servers: big }).length).toBeGreaterThan(MIN_COMPRESS_BYTES);
     const seen: Array<string | null> = [];
     const seenKeys: Array<string | null> = [];
-    const handlerEncodings: Array<string | null> = [];
     const wrapped = withoutServerInternals(async (req: NextRequest) => {
       seen.push(req.headers.get("accept-encoding"));
       seenKeys.push(req.headers.get("x-api-key"));
-      const inner = await jsonResponse(req, { servers: big });
-      handlerEncodings.push(inner.headers.get("content-encoding"));
-      return inner;
+      return jsonResponse(req, { servers: big });
     });
 
-    const gz = await wrapped(request({ "accept-encoding": "gzip", "x-api-key": "kept" }));
-    expect(seen).toEqual([null]);
-    // Every other header reaches the handler as sent.
+    const res = await wrapped(request({ "accept-encoding": "gzip", "x-api-key": "kept" }));
+    expect(seen).toEqual(["gzip"]);
     expect(seenKeys).toEqual(["kept"]);
-    expect(handlerEncodings).toEqual([null]);
-    expect(gz.headers.get("content-encoding")).toBe("gzip");
-    const body = JSON.parse(gunzipSync(new Uint8Array(await gz.arrayBuffer())).toString("utf8")) as { servers: Record<string, unknown>[] };
+    // Next.js compresses on the way out; a route never sets Content-Encoding.
+    expect(res.headers.get("content-encoding")).toBeNull();
+    const body = (await res.json()) as { servers: Record<string, unknown>[] };
     expect(body.servers).toHaveLength(200);
     expect(body.servers[0]).toEqual({ id: "s0", name: big[0].name, type: "PLEX" });
     expect(JSON.stringify(body)).not.toContain("machineId");
-  });
-
-  // A POST is passed through with its body, so its Accept-Encoding stays and
-  // a handler answering through jsonResponse gzips a large body.
-  it("inflates a gzipped answer before trimming, on a method whose request is passed through", async () => {
-    const rows = Array.from({ length: 300 }, (_, i) => ({ id: `e${i}`, userId: "owner", reason: "keep".padEnd(30, ".") }));
-    const wrapped = withoutServerInternals(async (req: NextRequest) => jsonResponse(req, { exceptions: rows }));
-    const post = new NextRequest("http://localhost/api/v1/lifecycle/exceptions", {
-      method: "POST",
-      headers: { "accept-encoding": "gzip", "content-type": "application/json" },
-      body: "{}",
-    });
-    const principal = { keyId: "k1", userId: "owner", name: "ci", prefix: "lbr_abcdef", scopes: [] as const };
-    const res = await runAsApiKey(principal, () => wrapped(post));
-    expect(res.headers.get("content-encoding")).toBe("gzip");
-    const body = JSON.parse(gunzipSync(new Uint8Array(await res.arrayBuffer())).toString("utf8")) as { exceptions: Record<string, unknown>[] };
-    expect(body.exceptions).toHaveLength(300);
-    expect(body.exceptions[0]).toEqual({ id: "e0", reason: rows[0].reason });
   });
 
   it("returns a non-JSON response untouched", async () => {
