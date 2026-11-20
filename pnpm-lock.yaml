@@ -198,8 +198,8 @@ importers:
         specifier: ^3.14.26
         version: 3.14.26(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       axios:
-        specifier: ^1.21.0
-        version: 1.21.0(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
+        specifier: ^1.21.1
+        version: 1.21.1(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -213,8 +213,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       cron-parser:
-        specifier: ^5.10.4
-        version: 5.10.4
+        specifier: ^5.10.6
+        version: 5.10.6
       embla-carousel-react:
         specifier: ^8.6.0
         version: 8.6.0(react@19.3.1)
@@ -261,8 +261,8 @@ importers:
         specifier: ^3.7.0
         version: 3.7.0
       ws:
-        specifier: ^8.22.1
-        version: 8.22.1
+        specifier: ^8.23.0
+        version: 8.23.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -2731,8 +2731,8 @@ packages:
     resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
     engines: {node: '>=4'}
 
-  axios@1.21.0:
-    resolution: {integrity: sha512-YCzXMB53Q9PZBsh7yN7wtapit4WepwcHS2fP8QhGsBxSz5YtgYobV7GGlWlAJi+RxfU77GQTQi2DSLUma42EYA==}
+  axios@1.21.1:
+    resolution: {integrity: sha512-6eI5Q/Y4u/Um9dDlsRoq5pY2rxnUTv+L4PpLitnbk/i4jb3MxLZ5CsN5Ih3IysbeRYK4pR+P7qfMsOQl9fwwFQ==}
 
   axobject-query@4.1.0:
     resolution: {integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==}
@@ -2940,8 +2940,8 @@ packages:
       typescript:
         optional: true
 
-  cron-parser@5.10.4:
-    resolution: {integrity: sha512-TagNqYzoV/C7Ty7VAQjrQg+57WsEOuQEUh0tWT5Dc+l/GOuoAdWVIzFU0CqYdQswqdjUalrdmOvaMtQhErYZTA==}
+  cron-parser@5.10.6:
+    resolution: {integrity: sha512-kpoxgQyveO1l29nw+FWdvmotyV7eOSzGHQpxiXOEZIDOjqO1iR6kfgJ0PVHTuV26uBemKq3ppzma7dHFAG7viw==}
     engines: {node: '>=18'}
 
   cross-spawn@7.0.6:
@@ -5269,8 +5269,8 @@ packages:
     resolution: {integrity: sha512-42AtmgqjV+X1VpdOfyTGOYRi0/zsoLqtXQckTmqTeybT+BDIbM/Guxo7x3pE2vtpr1ok6xRqM9OpBe+Jyoqyww==}
     engines: {node: '>=18'}
 
-  ws@8.22.1:
-    resolution: {integrity: sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==}
+  ws@8.23.0:
+    resolution: {integrity: sha512-wCkmX8QMOrKjgO8HW2WyDbTSGeqkocxgDzS9iR79rEAexty6/2qzilx3Ag8Tqf9ykop3irLKle0MtVn5qjVnoQ==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -7729,7 +7729,7 @@ snapshots:
 
   axe-core@4.14.0: {}
 
-  axios@1.21.0(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0):
+  axios@1.21.1(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0):
     dependencies:
       follow-redirects: 1.16.2(debug@4.4.3(supports-color@7.2.0))
       form-data: 4.0.6
@@ -7951,7 +7951,7 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.3
 
-  cron-parser@5.10.4:
+  cron-parser@5.10.6:
     dependencies:
       luxon: 3.7.2
 
@@ -8835,7 +8835,7 @@ snapshots:
       buffer-image-size: 0.6.4
       entities: 7.0.1
       whatwg-mimetype: 3.0.0
-      ws: 8.22.1
+      ws: 8.23.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -10513,7 +10513,7 @@ snapshots:
       string-width: 7.2.0
       strip-ansi: 7.2.0
 
-  ws@8.22.1: {}
+  ws@8.23.0: {}
 
   wsl-utils@1.0.1:
     dependencies:

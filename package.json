@@ -69,12 +69,12 @@
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@tanstack/react-virtual": "^3.14.26",
-    "axios": "^1.21.0",
+    "axios": "^1.21.1",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "cron-parser": "^5.10.4",
+    "cron-parser": "^5.10.6",
     "embla-carousel-react": "^8.6.0",
     "graphile-worker": "^0.18.0",
     "iron-session": "^9.0.1",
@@ -90,7 +90,7 @@
     "sonner": "^2.0.8",
     "swagger-ui-dist": "^5.34.1",
     "tailwind-merge": "^3.7.0",
-    "ws": "^8.22.1",
+    "ws": "^8.23.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
