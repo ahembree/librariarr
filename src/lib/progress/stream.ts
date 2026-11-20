@@ -1,5 +1,4 @@
-import { constants as zlibConstants, createGzip, type Gzip } from "node:zlib";
-import { acceptsGzip, writeJsonYielding } from "@/lib/api/json-response";
+import { writeJsonYielding } from "@/lib/api/json-response";
 import type { ProgressEmit } from "./types";
 
 // Hard cap so a single progress stream can never pin a connection / keep doing
@@ -11,9 +10,6 @@ const DEFAULT_MAX_LIFETIME_MS = 10 * 60 * 1000; // 10 minutes
 // 60–100 s), so a `{ type: "heartbeat" }` line is written whenever nothing else
 // has been for this long. Readers ignore event types they don't know.
 export const HEARTBEAT_INTERVAL_MS = 15_000;
-
-/** zlib level, as `jsonResponse` compresses lists (see json-response.ts). */
-const GZIP_LEVEL = 3;
 
 /**
  * Run a multi-phase task and stream its progress to the client as NDJSON.
@@ -32,15 +28,14 @@ const GZIP_LEVEL = 3;
  * completion and pinning resources.
  *
  * `request` (optional): the request being answered. Its signal aborts the run
- * like `signal`, and when it accepts gzip the stream is gzipped. The result
- * line is the large part — a query's or a rule preview's whole match list,
- * which compresses as the JSON lists do (7–9×) — and Next.js leaves Route
- * Handler responses uncompressed. Every line is written with a zlib SYNC
- * flush, so each progress event leaves as soon as it is emitted, as a
- * complete, decodable block: a browser's `fetch` reader gets it at once, and a
- * proxy has nothing held back to wait on. The result line is serialised and
- * written a slice at a time (`writeJsonYielding`), so a long one never holds
- * the event loop for the whole list, nor exists as one string.
+ * like `signal`. The stream is sent uncompressed: since 16.4.5 Next.js drops a
+ * Route Handler's own `Content-Encoding` (GHSA-pc58-hwjq-p385), so a gzipped
+ * body would reach the reader as raw deflate bytes, and Next.js does not
+ * compress `application/x-ndjson` itself — which also keeps every line on the
+ * wire the moment it is written, with nothing held back in a compressor. The
+ * result line is serialised and written a slice at a time
+ * (`writeJsonYielding`), so a long one never holds the event loop for the
+ * whole list, nor exists as one string.
  */
 export function progressStreamResponse<T>(
   run: (emit: ProgressEmit, signal: AbortSignal) => Promise<T>,
@@ -65,9 +60,6 @@ export function progressStreamResponse<T>(
     else external.addEventListener("abort", readerLeft, { once: true });
   }
 
-  const gzipped = !!options?.request && acceptsGzip(options.request.headers.get("accept-encoding"));
-  let gzip: Gzip | null = null;
-
   return new Response(
     new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -75,31 +67,8 @@ export function progressStreamResponse<T>(
         const maxLifetime = options?.maxLifetimeMs ?? DEFAULT_MAX_LIFETIME_MS;
         const lifetimeTimer = setTimeout(() => abort.abort(), maxLifetime);
 
-        if (gzipped) {
-          // Every finished line is followed by a sync flush, so it is on the
-          // wire (and decodable) before the next event exists. The pieces of
-          // a result line are not: a flush per piece would cost a block
-          // boundary per "," and key the serializer writes.
-          gzip = createGzip({ level: GZIP_LEVEL });
-          gzip.on("data", (chunk: Buffer) => {
-            if (closed) return;
-            try {
-              controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
-            } catch {
-              // Stream may already be closed (client navigated away).
-            }
-          });
-          // Nothing to recover: the stream ends with what was written.
-          gzip.on("error", () => {});
-        }
-
-        const write = (chunk: string, endsLine = true) => {
+        const write = (chunk: string) => {
           if (closed) return;
-          if (gzip) {
-            gzip.write(chunk);
-            if (endsLine) gzip.flush(zlibConstants.Z_SYNC_FLUSH);
-            return;
-          }
           try {
             controller.enqueue(encoder.encode(chunk));
           } catch {
@@ -126,7 +95,7 @@ export function progressStreamResponse<T>(
           const result = await run((update) => send(update), abort.signal);
           stopHeartbeat();
           resultLineOpen = true;
-          await writeJsonYielding({ type: "result", result }, (piece) => write(piece, false));
+          await writeJsonYielding({ type: "result", result }, (piece) => write(piece));
           resultLineOpen = false;
           write("\n");
         } catch (err) {
@@ -137,7 +106,7 @@ export function progressStreamResponse<T>(
           if (!readerGone) {
             // End the broken result line, so the error event is a line of its
             // own the reader can still parse.
-            if (resultLineOpen) write("\n", false);
+            if (resultLineOpen) write("\n");
             send({
               type: "error",
               message: err instanceof Error ? err.message : "Request failed",
@@ -146,16 +115,6 @@ export function progressStreamResponse<T>(
         } finally {
           stopHeartbeat();
           clearTimeout(lifetimeTimer);
-          // The gzip trailer, after every block written above has been read
-          // out of zlib.
-          const finishing = gzip;
-          if (finishing && !finishing.destroyed) {
-            await new Promise<void>((resolve) => {
-              finishing.once("end", resolve);
-              finishing.once("close", resolve);
-              finishing.end();
-            });
-          }
           closed = true;
           try {
             controller.close();
@@ -168,7 +127,6 @@ export function progressStreamResponse<T>(
         // Client disconnected — abort so the underlying work stops instead of
         // running to completion.
         readerLeft();
-        gzip?.destroy();
       },
     }),
     {
@@ -176,8 +134,6 @@ export function progressStreamResponse<T>(
         "Content-Type": "application/x-ndjson",
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
-        ...(options?.request ? { Vary: "Accept-Encoding" } : {}),
-        ...(gzipped ? { "Content-Encoding": "gzip" } : {}),
       },
     },
   );

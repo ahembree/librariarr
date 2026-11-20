@@ -17,7 +17,6 @@
  *    `{ success: true, counts }`, with -1 for a server whose sync threw.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -190,7 +189,7 @@ describe("POST /api/media/history/sync", () => {
     });
   });
 
-  it("gzips the stream for a client that accepts it", async () => {
+  it("streams plain NDJSON even to a client that accepts gzip", async () => {
     const server = await createTestServer(userId, { name: "Plex Main" });
     mockSyncWatchHistory.mockResolvedValue({ count: 7 });
 
@@ -199,9 +198,8 @@ describe("POST /api/media/history/sync", () => {
       body: { serverId: server.id },
       headers: { "Accept-Encoding": "gzip" },
     });
-    expect(response.headers.get("Content-Encoding")).toBe("gzip");
-    const lines = gunzipSync(Buffer.from(await response.arrayBuffer()))
-      .toString()
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    const lines = (await response.text())
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as { type: string; result?: SyncResult });
