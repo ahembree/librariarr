@@ -95,6 +95,48 @@ async function commitDetection(
 }
 
 /**
+ * Release the settled actions of items whose match this run drops: they
+ * stopped matching, so when one matches again it is a new match, and the
+ * same non-destructive action is scheduled for it again (scheduling skips an
+ * item only for an unreleased COMPLETED/FAILED action with the same config —
+ * `releasedAt`). A grouped match's dropped members release the actions that
+ * acted on them too, since episode coverage reads every settled action of the
+ * rule set, wherever it is stored.
+ *
+ * A dropped row is not always an item that stopped matching: a show's match
+ * moves to another representative episode when its own is excepted. So an
+ * action stays unreleased while its item or any member it acted on is still
+ * matched (`stillMatchedIds`: every current match, its members and its
+ * folded copies) — its
+ * coverage still holds. Written in the detection transaction, as one
+ * statement with each id list a single array parameter.
+ */
+async function releaseSettledActions(
+  tx: Prisma.TransactionClient,
+  ruleSetId: string,
+  droppedIds: string[],
+  droppedMemberIds: string[],
+  stillMatchedIds: string[],
+  now: Date,
+): Promise<void> {
+  if (droppedIds.length === 0 && droppedMemberIds.length === 0) return;
+  await tx.$executeRaw`
+    UPDATE "LifecycleAction" SET "releasedAt" = ${now}, "updatedAt" = ${now}
+     WHERE "ruleSetId" = ${ruleSetId}
+       AND status IN ('COMPLETED', 'FAILED')
+       AND "releasedAt" IS NULL
+       AND ("mediaItemId" = ANY(${droppedIds}::text[]) OR "matchedMediaItemIds" && ${droppedMemberIds}::text[])
+       AND ("mediaItemId" IS NULL OR NOT ("mediaItemId" = ANY(${stillMatchedIds}::text[])))
+       AND NOT ("matchedMediaItemIds" && ${stillMatchedIds}::text[])`;
+}
+
+/** The member ids a stored match lists. */
+function storedMemberIdsOf(itemData: unknown): string[] {
+  const members = (itemData as Record<string, unknown> | null)?.memberIds;
+  return Array.isArray(members) ? members.filter((x): x is string => typeof x === "string") : [];
+}
+
+/**
  * Release a rule set's actions held since a save changed what it matches
  * (`RuleSet.actionsHeldSince`): this run has just re-evaluated it under the
  * rules that save wrote, and its matches now say which items they still
@@ -716,6 +758,48 @@ export async function detectAndSaveMatches(
 
   const now = new Date();
 
+  // Matches this run drops: the item no longer matches (a carried match moved
+  // to its copy and is not dropped). Their members no longer matching either
+  // are dropped with them.
+  const currentIdSet = new Set(enrichedItems.map((item) => item.id as string));
+  const droppedIds = [...heldIds].filter((id) => !currentIdSet.has(id) && !carried.has(id));
+  const stillMatchedMembers = new Set(enrichedItems.flatMap((item) => storedMemberIdsOf(item)));
+  // Only an item this run evaluated can have stopped matching: one on a server
+  // left out of the run (disabled, or removed from the rule set) was not
+  // judged, and releasing its actions would re-fire them all when it returns.
+  const droppedCandidates = [
+    ...new Set([
+      ...droppedIds,
+      ...heldMatches.filter((m) => !currentIdSet.has(m.mediaItemId)).flatMap((m) => storedMemberIdsOf(m.itemData)),
+    ]),
+  ];
+  const evaluatedIds = new Set(
+    droppedCandidates.length === 0
+      ? []
+      : (
+          await findInChunks(droppedCandidates, (ids) =>
+            prisma.mediaItem.findMany({
+              where: { id: { in: ids }, library: { mediaServerId: { in: serverIds } } },
+              select: { id: true },
+            }),
+          )
+        ).map((row) => row.id),
+  );
+  const droppedIdSet = new Set(droppedIds.filter((id) => evaluatedIds.has(id)));
+  // A copy folded into another server's match still matches, through it.
+  const stillMatchedIds = [
+    ...new Set([...currentIdSet, ...stillMatchedMembers, ...enrichedItems.flatMap((item) => copyIdsOf(item))]),
+  ];
+  const droppedMemberIds = [
+    ...new Set(
+      heldMatches
+        .filter((m) => droppedIdSet.has(m.mediaItemId))
+        .flatMap((m) => storedMemberIdsOf(m.itemData))
+        .filter((id) => evaluatedIds.has(id) && !stillMatchedMembers.has(id) && !currentIdSet.has(id)),
+    ),
+  ];
+  const releasedIds = [...droppedIdSet];
+
   if (fullReEval) {
     // Full re-evaluation: atomic delete + recreate (clears stale matches)
     const committed = await commitDetection(ruleSet, async (tx) => {
@@ -735,6 +819,7 @@ export async function detectAndSaveMatches(
       for (const { id, data } of actionCarryOver) {
         await tx.lifecycleAction.updateMany({ where: { id, status: "PENDING" }, data });
       }
+      await releaseSettledActions(tx, ruleSet.id, releasedIds, droppedMemberIds, stillMatchedIds, now);
     });
     if (!committed) return DISCARDED;
 
@@ -825,6 +910,8 @@ export async function detectAndSaveMatches(
           where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
         });
       }
+      // A sticky match is kept, so its item never stopped matching here.
+      await releaseSettledActions(tx, ruleSet.id, releasedIds, droppedMemberIds, stillMatchedIds, now);
     }
   } : null);
   if (!committed) return DISCARDED;
