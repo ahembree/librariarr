@@ -20,8 +20,12 @@ import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
 import { appCache } from "@/lib/cache/memory-cache";
 import type { TrashCatalog } from "@/lib/trash/types";
 
+/** The commit the guides branch names; every request of a build goes to it. */
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
 function serve(tree: unknown, files: Record<string, unknown>) {
   mockGet.mockImplementation((url: string) => {
+    if (url.includes("/commits/")) return Promise.resolve({ data: { sha: COMMIT } });
     if (url.includes("git/trees")) return Promise.resolve({ data: tree });
     const key = Object.keys(files).find((k) => url.endsWith(k));
     if (key) return Promise.resolve({ data: files[key] });
@@ -47,8 +51,8 @@ describe("fetchTrashCatalog edge cases", () => {
     expect(cat.qualityProfiles).toEqual([]);
     expect(cat.qualitySize).toBeNull();
     expect(cat.naming).toBeNull();
-    // Only the tree was requested.
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    // Only the commit the branch names, and its tree, were requested.
+    expect(mockGet).toHaveBeenCalledTimes(2);
     expect(mockLogger.info).toHaveBeenCalledWith(
       "TrashSync",
       expect.stringContaining("0 quality-size, 0 naming"),

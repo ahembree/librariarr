@@ -6,6 +6,17 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// The stored known addresses: nothing stored, nothing written.
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    knownSignInAddress: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+  },
+}));
+
 type Module = typeof import("@/lib/rate-limit/rate-limiter");
 
 const FIVE_MIN = 5 * 60 * 1000;

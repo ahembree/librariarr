@@ -7,14 +7,22 @@ import type { ServiceType } from "./types";
 const TRASH_REPO = process.env.TRASH_GUIDES_REPO || "TRaSH-Guides/Guides";
 export const TRASH_REF = process.env.TRASH_GUIDES_REF || "master";
 
-/** GitHub tree API — one request lists every file in the repo. */
-export function treeUrl(): string {
-  return `https://api.github.com/repos/${TRASH_REPO}/git/trees/${TRASH_REF}?recursive=1`;
+/** A full commit id: what a catalog build pins every request to. */
+export const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** GitHub commits API — resolves `TRASH_REF` (a branch, by default) to the commit it names now. */
+export function commitUrl(): string {
+  return `https://api.github.com/repos/${TRASH_REPO}/commits/${encodeURIComponent(TRASH_REF)}`;
 }
 
-/** raw.githubusercontent CDN — used for individual file contents. */
-export function rawUrl(path: string): string {
-  return `https://raw.githubusercontent.com/${TRASH_REPO}/${TRASH_REF}/${path}`;
+/** GitHub tree API — one request lists every file in the repo at `ref`. */
+export function treeUrl(ref: string = TRASH_REF): string {
+  return `https://api.github.com/repos/${TRASH_REPO}/git/trees/${ref}?recursive=1`;
+}
+
+/** raw.githubusercontent CDN — used for individual file contents at `ref`. */
+export function rawUrl(path: string, ref: string = TRASH_REF): string {
+  return `https://raw.githubusercontent.com/${TRASH_REPO}/${ref}/${path}`;
 }
 
 /** Directory prefixes under docs/json/<service> for each resource kind. */

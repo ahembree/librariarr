@@ -10,8 +10,10 @@ import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
 import {
   MAX_PASSWORD_BYTES,
   MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_GUESSABLE_MESSAGE,
   PASSWORD_TOO_LONG_MESSAGE,
   PASSWORD_TOO_SHORT_MESSAGE,
+  isGuessablePassword,
   passwordByteLength,
 } from "@/lib/auth/password-rules";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
@@ -113,12 +115,15 @@ export const arrInstanceUpdateSchema = arrInstanceCreateSchema.partial().extend(
   enabled: z.boolean().optional(),
 });
 
-// A new login password: at least 8 characters, and at most the 72 bytes bcrypt
-// actually reads (see `src/lib/auth/password-rules.ts`).
+// A new login password: at least 8 characters, at most the 72 bytes bcrypt
+// actually reads, and not one a guessing run tries first (see
+// `src/lib/auth/password-rules.ts`).
 const newPasswordSchema = z
   .string()
   .min(MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT_MESSAGE)
-  .refine((value) => passwordByteLength(value) <= MAX_PASSWORD_BYTES, PASSWORD_TOO_LONG_MESSAGE);
+  .refine((value) => passwordByteLength(value) <= MAX_PASSWORD_BYTES, PASSWORD_TOO_LONG_MESSAGE)
+  // Checked for a password long enough to be one: a short one already has its message.
+  .refine((value) => value.length < MIN_PASSWORD_LENGTH || !isGuessablePassword(value), PASSWORD_TOO_GUESSABLE_MESSAGE);
 
 export const authSetupSchema = z.object({
   username: z.string().min(3, "Username must be at least 3 characters"),

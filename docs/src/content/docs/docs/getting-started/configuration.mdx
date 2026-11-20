@@ -22,7 +22,8 @@ hidden until you do.
 | Single Sign-On (SSO) | OIDC / forward-auth configured, an identity is linked, and the *Enable SSO Login* toggle is on |
 
 Sessions are encrypted via [iron-session](https://github.com/vvo/iron-session)
-and expire after 30 days. Every request — pages and API calls alike — checks
+and expire 30 days after you last signed in or confirmed it was you. Every
+request — pages and API calls alike — checks
 the session against the admin record, so a cookie stops working the moment
 you change credentials, link/unlink SSO, **log out** (which revokes every
 session on every device, not just the one you pressed the button in), or
@@ -82,7 +83,10 @@ Username/password authentication. Configured in **Settings → Authentication
 - **Username**: minimum 3 characters
 - **Password**: 8 characters to 72 bytes (bcrypt reads only the first 72
   bytes, so a longer password is refused rather than silently shortened;
-  accented letters and emoji count as more than one byte)
+  accented letters and emoji count as more than one byte). A password that is
+  easy to guess is refused: a common password, a simple sequence such as
+  `12345678`, fewer than four different characters, or a common word followed
+  by numbers and punctuation (`Welcome2024!`)
 - Stored as a bcrypt-cost-12 hash
 - Toggling **Enable Local Login** on without an existing password opens
   a credential prompt to create one

@@ -19,15 +19,43 @@ interface DiscordWebhookPayload {
   embeds?: DiscordEmbed[];
 }
 
+/** Longest single item a notification list shows; the rest is cut with an ellipsis. */
+const MAX_LIST_ITEM_LENGTH = 200;
+
+/**
+ * Text this app did not write, as Discord shows it literally.
+ *
+ * Embed text is Markdown, and what goes into it — a media title, an Arr
+ * instance's error message — comes from the media server, a metadata agent or
+ * another application. An item titled `[Librariarr: sign in again](https://…)`
+ * arrived in the admin's channel as a link reading "Librariarr: sign in
+ * again". Every character Markdown gives a meaning is escaped, a bare URL is
+ * broken so it is not turned into a link, and line breaks are flattened so one
+ * item cannot pose as several lines.
+ */
+export function escapeDiscordMarkdown(text: string): string {
+  return text
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
+    .replace(/[\\*_~`|>\[\]()#<@]/g, "\\$&")
+    // A zero-width space after the scheme: looks the same, is not a link.
+    .replace(/:\/\//g, ":\u200b//");
+}
+
+/** One escaped list item, bounded so a single over-long title cannot overflow the field. */
+function listItem(text: string): string {
+  return escapeDiscordMarkdown(text.length > MAX_LIST_ITEM_LENGTH ? `${text.slice(0, MAX_LIST_ITEM_LENGTH)}…` : text);
+}
+
 // Discord embed field values are capped at 1024 characters.
 // Build a bulleted list that fits within this limit, appending a "…and N more" suffix if truncated.
+// Items are escaped here (`escapeDiscordMarkdown`): pass them as plain text.
 function buildTruncatedList(titles: string[], limit = 1024): string {
   const suffix = (remaining: number) => `\n*…and ${remaining} more*`;
   let value = "";
   let count = 0;
 
   for (const title of titles) {
-    const line = `• ${title}\n`;
+    const line = `• ${listItem(title)}\n`;
     // Reserve space for the potential suffix
     const remaining = titles.length - count - 1;
     const wouldNeedSuffix = remaining > 0;
@@ -133,7 +161,7 @@ export function buildSuccessSummaryEmbed(
   titles: string[],
 ): DiscordEmbed {
   const fields: DiscordEmbed["fields"] = [
-    { name: "Rule", value: ruleSetName, inline: true },
+    { name: "Rule", value: escapeDiscordMarkdown(ruleSetName), inline: true },
     { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Completed", value: String(titles.length), inline: true },
   ];
@@ -158,7 +186,7 @@ export function buildFailureSummaryEmbed(
   failures: { title: string; error: string }[],
 ): DiscordEmbed {
   const fields: DiscordEmbed["fields"] = [
-    { name: "Rule", value: ruleSetName, inline: true },
+    { name: "Rule", value: escapeDiscordMarkdown(ruleSetName), inline: true },
     { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Failed", value: String(failures.length), inline: true },
   ];
@@ -203,7 +231,7 @@ export function buildMatchChangeEmbed(
   }
 
   return {
-    title: `Rule Match Update: ${ruleSetName}`,
+    title: `Rule Match Update: ${escapeDiscordMarkdown(ruleSetName)}`,
     description: addedCount > 0 && removedCount > 0
       ? `${addedCount} new match${addedCount !== 1 ? "es" : ""} found, ${removedCount} match${removedCount !== 1 ? "es" : ""} removed.`
       : addedCount > 0
@@ -239,7 +267,7 @@ export function buildApiKeyEmbed(event: "created" | "deleted", key: ApiKeyEmbedK
       : "An API key was deleted. Anything that was using it has lost access.",
     color: created ? 0x3b82f6 : 0x6b7280,
     fields: [
-      { name: "Name", value: key.name, inline: true },
+      { name: "Name", value: escapeDiscordMarkdown(key.name), inline: true },
       { name: "Key", value: `${key.prefix}…`, inline: true },
       ...(created
         ? [
@@ -265,7 +293,7 @@ export function buildMaintenanceEmbed(
   return {
     title: enabled ? "Maintenance Mode Enabled" : "Maintenance Mode Disabled",
     description: enabled
-      ? `Server maintenance mode has been activated.${message ? `\n\nMessage: ${message}` : ""}`
+      ? `Server maintenance mode has been activated.${message ? `\n\nMessage: ${escapeDiscordMarkdown(message)}` : ""}`
       : "Server maintenance mode has been deactivated. Streams are no longer being terminated.",
     color: enabled ? 0xf59e0b : 0x22c55e,
     footer: { text: "Librariarr Maintenance" },

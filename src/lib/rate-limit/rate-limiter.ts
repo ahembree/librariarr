@@ -1,5 +1,6 @@
 import { apiLogger } from "@/lib/logger";
 import { getClientIp, MAX_AUDIT_ADDRESS_LENGTH } from "./client-ip";
+import { KNOWN_ADDRESS_TTL_MS, MAX_KNOWN_ADDRESSES, loadKnownAddresses, saveKnownAddress } from "./known-addresses";
 
 export { getClientIp };
 
@@ -140,22 +141,72 @@ export const authGlobalRateLimiter = new RateLimiter(60, 15 * 60 * 1000);
 // Remembered by `AuthAttempt.succeeded()` and by `rememberAuthenticatedAddress`
 // for `KNOWN_ADDRESS_TTL_MS` (sliding), bounded so a run of successful
 // sign-ins through a proxy that reports a fresh address each time cannot grow
-// it without end. In memory only, like every limiter here: after a restart the
-// first sign-in from an address is subject to the floor again, exactly like a
-// first sign-in from anywhere. Where no proxy header names the client —
+// it without end. Unlike the limiters' counts, these survive a restart: they
+// are stored (`known-addresses.ts`, the `KnownSignInAddress` table) and read
+// back once per process. Kept in memory only, a restart forgot every address,
+// and whoever was sending four wrong passwords a minute then held the floor
+// against the admin as well, by every sign-in method, for as long as they
+// cared to keep going. Where no proxy header names the client —
 // `TRUST_PROXY_HEADERS=false`, or a direct install with no proxy at all —
 // every client is the one address "unknown", whose per-address budget of ten
 // is already shared by everyone: the floor adds nothing there, and "unknown"
 // is remembered like any other address so the admin is not refused by a floor
 // their own address could never be told apart from.
-const KNOWN_ADDRESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_KNOWN_ADDRESSES = 10_000;
 const knownAddresses = new Map<string, number>();
+
+/**
+ * The stored addresses, read once per process the first time the limiter is
+ * asked about one. Not awaited by the (synchronous) limiter: the read is one
+ * small query, and a request that races it is judged as it was before there
+ * was anything to read. A failed read is retried on a later request.
+ */
+let knownAddressesLoad: Promise<void> | null = null;
+
+function loadStoredKnownAddresses(): Promise<void> {
+  knownAddressesLoad ??= (async () => {
+    try {
+      // Oldest first, so the map's insertion order stays last-sign-in order.
+      for (const { address, until } of (await loadKnownAddresses()).reverse()) {
+        // A sign-in since the process started is the fresher fact.
+        if (!knownAddresses.has(address)) knownAddresses.set(address, until);
+      }
+    } catch {
+      knownAddressesLoad = null;
+    }
+  })();
+  return knownAddressesLoad;
+}
+
+/** Resolves once the stored addresses have been read (or the read has failed). */
+export function knownAddressesLoaded(): Promise<void> {
+  return loadStoredKnownAddresses();
+}
+
+/** How stale a stored address may get before a sign-in from it is written again. */
+const KNOWN_ADDRESS_WRITE_INTERVAL_MS = 60 * 60 * 1000;
+const knownAddressWrittenAt = new Map<string, number>();
+
+/** Store the address, at most hourly per address; never fails or delays the sign-in. */
+function persistKnownAddress(address: string, now: number): void {
+  const written = knownAddressWrittenAt.get(address);
+  if (written !== undefined && now - written < KNOWN_ADDRESS_WRITE_INTERVAL_MS) return;
+  if (knownAddressWrittenAt.size >= MAX_KNOWN_ADDRESSES) knownAddressWrittenAt.clear();
+  knownAddressWrittenAt.set(address, now);
+  void (async () => {
+    try {
+      await saveKnownAddress(address, now);
+    } catch {
+      // Not stored: the next sign-in from it tries again.
+      knownAddressWrittenAt.delete(address);
+    }
+  })();
+}
 
 /** Remember the request's address as one a sign-in has succeeded from. */
 export function rememberAuthenticatedAddress(request: Request): void {
   const ip = getClientIp(request);
   const now = Date.now();
+  persistKnownAddress(ip, now);
   if (!knownAddresses.has(ip) && knownAddresses.size >= MAX_KNOWN_ADDRESSES) {
     for (const [key, until] of knownAddresses) if (until <= now) knownAddresses.delete(key);
     if (knownAddresses.size >= MAX_KNOWN_ADDRESSES) {
@@ -170,6 +221,7 @@ export function rememberAuthenticatedAddress(request: Request): void {
 
 /** Whether a sign-in has succeeded from this address in the last 30 days. */
 export function isKnownAddress(ip: string): boolean {
+  void loadStoredKnownAddresses();
   const until = knownAddresses.get(ip);
   if (until === undefined) return false;
   if (until <= Date.now()) {
@@ -184,9 +236,14 @@ function cleanupKnownAddresses(): void {
   for (const [key, until] of knownAddresses) if (until <= now) knownAddresses.delete(key);
 }
 
-/** Test-only: forget every address a sign-in has succeeded from. */
+/**
+ * Test-only: forget every address a sign-in has succeeded from, as a restart
+ * does — the stored ones are read again on the next question.
+ */
 export function _resetKnownAddressesForTesting(): void {
   knownAddresses.clear();
+  knownAddressWrittenAt.clear();
+  knownAddressesLoad = null;
 }
 
 // AI chat (`/api/ai/chat`) is interactive — a user asks many questions in a

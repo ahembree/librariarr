@@ -264,7 +264,7 @@ describe("/api/v1 endpoints", () => {
       expect(row.name).toBe("Home");
       expect(row.libraries).toHaveLength(1);
       for (const k of ["url", "externalUrl", "machineId", "userId", "accessToken"]) expect(row).not.toHaveProperty(k);
-      expect(row.syncJobs[0].error).toBe("HTTP 500 (GET https://[internal]:32400/library/sections): boom");
+      expect(row.syncJobs[0].error).toBe("HTTP 500 (GET [address]/library/sections): boom");
       expect(JSON.stringify(viaApi)).not.toContain("plex.direct");
 
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -328,7 +328,7 @@ describe("/api/v1 endpoints", () => {
         200,
       );
       expect(viaApi.jobs).toHaveLength(1);
-      expect(viaApi.jobs[0].error).toBe("connect ECONNREFUSED [internal]:32400");
+      expect(viaApi.jobs[0].error).toBe("connect ECONNREFUSED [address]");
       expect(viaApi.jobs[0].mediaServer).toEqual({ name: server.name, type: "PLEX" });
 
       setMockSession({ isLoggedIn: true, userId: user.id });

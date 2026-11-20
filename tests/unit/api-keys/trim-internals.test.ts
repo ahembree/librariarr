@@ -131,7 +131,7 @@ describe("trimServerInternals", () => {
     };
     expect(trimServerInternals(body)).toEqual({
       jobs: [
-        { id: "j1", error: "HTTP 500 (GET http://[internal]:32400/library/sections): boom" },
+        { id: "j1", error: "HTTP 500 (GET [address]/library/sections): boom" },
         { id: "j2", error: null },
         { id: "j3", error: { code: 1 } },
       ],
@@ -146,6 +146,24 @@ describe("trimServerInternals", () => {
     expect(trimServerInternals(null)).toBeNull();
     expect(trimServerInternals("text")).toBe("text");
     expect(trimServerInternals(3)).toBe(3);
+  });
+});
+
+// The writers keep a public address in the stored text on purpose: the admin
+// needs to know which host did not answer. A key holder does not, and the
+// server rows beside it have had the same address removed.
+describe("trimServerInternals — error text names no host at all", () => {
+  it.each([
+    ["connect ECONNREFUSED 203.0.113.7:32400", "connect ECONNREFUSED [address]"],
+    ["getaddrinfo ENOTFOUND plex.example.com", "getaddrinfo ENOTFOUND [address]"],
+    [
+      "Server https://plex.example.com:32400 is unreachable (last error: connect ETIMEDOUT 203.0.113.7:32400)",
+      "Server [address] is unreachable (last error: connect ETIMEDOUT [address])",
+    ],
+    ["HTTP 502 (GET https://media.example.org/Items?limit=1): Bad Gateway", "HTTP 502 (GET [address]/Items?limit=1): Bad Gateway"],
+    ["connect ECONNREFUSED 192.168.1.20:8096", "connect ECONNREFUSED [address]"],
+  ])("%s", (stored, shown) => {
+    expect(trimServerInternals({ jobs: [{ id: "j", error: stored }] })).toEqual({ jobs: [{ id: "j", error: shown }] });
   });
 });
 

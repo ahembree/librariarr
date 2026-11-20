@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { redactNetworkAddresses, sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 describe("sanitize", () => {
   it("returns null unchanged", () => {
@@ -215,5 +215,47 @@ describe("sanitizeErrorDetail", () => {
     expect(sanitizeErrorDetail("value fc00 only")).toBe("value fc00 only");
     // A clock-like token isn't an internal IPv6 address.
     expect(sanitizeErrorDetail("at 12:34:56")).toBe("at 12:34:56");
+  });
+});
+
+describe("redactNetworkAddresses", () => {
+  it("removes public addresses, names and ports that sanitizeErrorDetail keeps", () => {
+    expect(redactNetworkAddresses("connect ECONNREFUSED 203.0.113.7:32400")).toBe("connect ECONNREFUSED [address]");
+    expect(redactNetworkAddresses("getaddrinfo ENOTFOUND plex.example.com")).toBe("getaddrinfo ENOTFOUND [address]");
+    expect(redactNetworkAddresses("getaddrinfo EAI_AGAIN media.example.org")).toBe("getaddrinfo EAI_AGAIN [address]");
+  });
+
+  it("removes the host of a URL and keeps its path", () => {
+    expect(redactNetworkAddresses("HTTP 500 (GET https://plex.example.com:32400/library/sections): boom")).toBe(
+      "HTTP 500 (GET [address]/library/sections): boom",
+    );
+    expect(redactNetworkAddresses("ws://host.example:8096/socket failed")).toBe("[address]/socket failed");
+  });
+
+  it("removes addresses with no error code beside them", () => {
+    expect(redactNetworkAddresses("upstream 198.51.100.4 said no, as did [2001:db8::1]:8096")).toBe(
+      "upstream [address] said no, as did [address]",
+    );
+  });
+
+  it("removes the names a certificate mismatch lists", () => {
+    expect(
+      redactNetworkAddresses(
+        "Hostname/IP does not match certificate's altnames: Host: plex.example.com. is not in the cert's altnames: DNS:other.example.net, DNS:*.example.net",
+      ),
+    ).toBe(
+      "Hostname/IP does not match certificate's altnames: Host: [address] is not in the cert's altnames: DNS: [address], DNS: [address]",
+    );
+  });
+
+  it("composes with sanitizeErrorDetail's own markers", () => {
+    const stored = sanitizeErrorDetail("connect ECONNREFUSED 192.168.1.5:32400")!;
+    expect(stored).toBe("connect ECONNREFUSED [internal]:32400");
+    expect(redactNetworkAddresses(stored)).toBe("connect ECONNREFUSED [address]");
+  });
+
+  it("leaves text without an address alone", () => {
+    const text = "Request failed with status code 401 — 12:30:45, 3 of 10 items, v1.2.3";
+    expect(redactNetworkAddresses(text)).toBe(text);
   });
 });

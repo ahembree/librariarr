@@ -1,7 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/api/json-response";
-import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { redactNetworkAddresses, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { getApiKeyPrincipal } from "./principal";
 
 /**
@@ -41,9 +41,12 @@ import { getApiKeyPrincipal } from "./principal";
  *   also has a `userId` — the media server's id for the VIEWER, which is what
  *   a stream listing is for. The owner is read from the request's API-key
  *   principal (`withoutServerInternals`), or passed in by the caller.
- * - a string `error` is passed through `sanitizeErrorDetail`. The writers
- *   sanitize before persisting, but a `SyncJob`/`LifecycleAction` row stored
- *   before they did still holds the raw text.
+ * - a string `error` is passed through `sanitizeErrorDetail` and then
+ *   `redactNetworkAddresses`. The writers sanitize before persisting, but a
+ *   `SyncJob`/`LifecycleAction` row stored before they did still holds the raw
+ *   text — and what they keep on purpose for the admin, a public address or
+ *   DNS name (`connect ECONNREFUSED 203.0.113.7:32400`), is the very thing
+ *   this wrapper removes from the server rows.
  *
  * A non-JSON response (an image, a stream, a body with no JSON content type)
  * is returned untouched. The internal handler is called with the client's
@@ -92,7 +95,7 @@ function trim(value: unknown, underServerKey: boolean, ownerId: string | undefin
     if (isServer && SERVER_INTERNAL_KEYS.has(key)) continue;
     if (key === OWNER_KEY && ownerId !== undefined && child === ownerId) continue;
     if (key === "error" && typeof child === "string") {
-      result[key] = sanitizeErrorDetail(child) ?? child;
+      result[key] = redactNetworkAddresses(sanitizeErrorDetail(child) ?? child);
       continue;
     }
     result[key] = trim(child, SERVER_CONTAINER_KEYS.has(key), ownerId);

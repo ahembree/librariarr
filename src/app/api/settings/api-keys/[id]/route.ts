@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
+import { invalidateKnownApiKeyPrefixes } from "@/lib/api-keys/known-prefixes";
 
 /**
  * Delete (revoke) an API key. The `/api/v1` guard looks keys up on every
@@ -33,6 +34,7 @@ export const DELETE = withSession(async (
     return NextResponse.json({ error: "API key not found" }, { status: 404 });
   }
 
+  invalidateKnownApiKeyPrefixes();
   logger.info("Auth", `API key "${apiKey.name}" (${apiKey.prefix}…) deleted — access revoked`);
   void notifyApiKeyChange(session.userId, "deleted", apiKey);
 

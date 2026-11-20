@@ -71,3 +71,36 @@ export function sanitizeErrorDetail(
   cleaned = cleaned.replace(/\b(?:[\w-]+\.)+plex\.direct\b/gi, "[internal]");
   return cleaned;
 }
+
+/** Node's network error codes that are followed by the address they failed on. */
+const NETWORK_ERROR_CODES =
+  "ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EHOSTDOWN|ENETUNREACH|ENOTFOUND|EAI_AGAIN|EADDRNOTAVAIL|EPROTO";
+
+/**
+ * Remove every network address from error text, public ones included.
+ *
+ * `sanitizeErrorDetail` hides private addresses and keeps the rest, because
+ * the admin reading the message needs to know WHICH host did not answer
+ * (`getaddrinfo ENOTFOUND plex.example.com`). A third-party integration
+ * reading the same row through the public API does not: the public API strips
+ * a media server's `url` and `machineId` from every response
+ * (`src/lib/api-keys/trim-internals.ts`), and a failed sync's error text
+ * handed the same address back — the server's public IP, DNS name and port.
+ * Applied on top of `sanitizeErrorDetail`, for the public API only.
+ */
+export function redactNetworkAddresses(text: string): string {
+  return (
+    text
+      // scheme://host[:port] — the path, if any, is kept (it is the API route).
+      .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>()]+/gi, "[address]")
+      // The address a network error names: `connect ECONNREFUSED 203.0.113.7:32400`,
+      // `getaddrinfo ENOTFOUND plex.example.com`.
+      .replace(new RegExp(`\\b(${NETWORK_ERROR_CODES})\\s+[^\\s,;)]+`, "g"), "$1 [address]")
+      // A certificate mismatch lists the host and every name on the certificate.
+      .replace(/\b(Host|DNS|IP Address):\s*[^\s,;)]+/g, "$1: [address]")
+      // Any IPv4 address left, with its port.
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g, "[address]")
+      // A bracketed IPv6 literal, with its port.
+      .replace(/\[[0-9a-f:.%]*:[0-9a-f:.%]*\](?::\d{1,5})?/gi, "[address]")
+  );
+}

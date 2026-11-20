@@ -44,6 +44,15 @@ Filter logs by:
 - **Source** — filter by specific component
 - **Search** — case-insensitive text search across log messages
 
+### Sign-ins and security changes
+
+Two sources are worth knowing when you want to see who did what:
+
+- **Auth** — every sign-in, with the client address, and every sign-in that **failed** (wrong password, unknown username, a Plex or SSO account that is not linked). The attempted username and password are never recorded. **RateLimit** records when an address, or the flood of addresses nobody has signed in from, is locked out.
+- **Audit** — changes to sign-in methods and SSO, the Discord webhook, the AI provider, backups (downloaded, deleted, encryption password changed), integrations, media-server connections and log retention, each with the client address. Secrets, and URLs that are secrets, are never written.
+
+The client address is the one your reverse proxy reports (see `TRUST_PROXY_HEADERS` in [Installation](/docs/getting-started/installation/)); without a proxy it reads `unknown`.
+
 ### Auto-refresh
 
 Turn on **Auto-refresh** to re-read the current page every 5 seconds. The entry count and page total are updated every 30 seconds rather than on every refresh, since counting a large log table is the slow part; a newer page that appears in between still becomes reachable straight away.
@@ -59,6 +68,8 @@ Configure log retention in **Settings → General → Data Retention → Keep lo
 ### Archives
 
 Archived logs are stored in `/config/logs` (configurable via the `LOG_ARCHIVE_DIR` environment variable). Each archive (`logs-YYYY-MM-DD.tar.gz`) contains a single day's logs as one JSON file.
+
+A [restore](/docs/features/backup-restore/) replaces the log table, so it first archives everything in it as `logs-YYYY-MM-DD-pre-restore-<time>.tar.gz`, kept and pruned like the daily archives.
 
 The System Logs page shows only the logs still in the database. To read an archive, open it from that directory on the host (it is under the `/config` volume by default).
 

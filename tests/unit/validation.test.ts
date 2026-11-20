@@ -211,7 +211,7 @@ describe("authSetupSchema", () => {
   it("accepts username with exactly 3 characters", () => {
     const result = authSetupSchema.safeParse({
       username: "abc",
-      password: "12345678",
+      password: "vr7-Kp2q",
     });
     expect(result.success).toBe(true);
   });
@@ -219,7 +219,7 @@ describe("authSetupSchema", () => {
   it("accepts password with exactly 8 characters", () => {
     const result = authSetupSchema.safeParse({
       username: "admin",
-      password: "12345678",
+      password: "vr7-Kp2q",
     });
     expect(result.success).toBe(true);
   });

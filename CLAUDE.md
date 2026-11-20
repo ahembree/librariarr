@@ -107,7 +107,7 @@ Subsystem detail lives in project skills under `.claude/skills/`. **Load the mat
 - `src/lib/integrations/http.ts` — `createIntegrationHttp` (see "Integrations" below).
 - `src/lib/url-normalize.ts` — `stripTrailingSlashes(url)`, the one trailing-slash rule.
 - `src/lib/concurrency.ts` — `mapWithConcurrency` (pool, fails fast), `settleWithConcurrency` (never stops).
-- `src/lib/logger.ts` — `logger` (backend), `apiLogger` (API), `dbLogger` (database); console + `LogEntry` table; debug needs `LOG_DEBUG=true`. `GET /api/system/logs?count=false` skips the total (the page's 5 s refresh counts every 6th tick, `COUNT_EVERY_TICKS`); `/api/system/logs/sources` uses a recursive-CTE loose index scan.
+- `src/lib/logger.ts` — `logger` (backend), `apiLogger` (API), `dbLogger` (database); console + `LogEntry` table; debug needs `LOG_DEBUG=true`. A message is written as one bounded line (`logLine`) — it may quote text the app did not write. Sign-in failures and security-relevant changes are logged through `src/lib/auth/audit.ts` (`logSignInFailure`, `logSecurityChange`; `auth-security` skill). `GET /api/system/logs?count=false` skips the total (the page's 5 s refresh counts every 6th tick, `COUNT_EVERY_TICKS`); `/api/system/logs/sources` uses a recursive-CTE loose index scan.
 - `src/lib/theme/accent-colors.ts` — accent presets (OKLCH).
 - `src/lib/format.ts`, `src/lib/media/display-title.ts`, `src/lib/media/quality-chips.ts`, `src/lib/media/hover-data.ts`, `src/lib/media/stream-decision.ts` — the one place for dates, titles, quality chips, hover data and transcode decisions (see the `frontend` skill).
 
@@ -174,7 +174,7 @@ if (error) return error;
 - The session cookie carries identity only, never a credential; the Plex token is read from the `User` row via `getStoredPlexToken`. `getSession()` enforces revocation (`sessionVersion`).
 - **Every login path establishes its session through `rotateSession()`**, never `getSession()`.
 - Under an API key the cookie is never read; `getSession()` returns the key owner's frozen session.
-- **Actions that add a lasting way in, or expose a credential, need a recent sign-in** (`hasRecentLogin`, refused via `reauthRequired`): API key creation, a first password, Plex/SSO linking, backup create/download/restore, adding a Plex server by machine id (the token is looked up server-side), a server URL change or turning `tlsSkipVerify` on while its token stays, sending a stored key to a new URL (`refuseStoredKeyToNewUrl`), changing SSO's identity source (turning SSO on, `ssoMode`, `forwardAuthUserHeader`, the issuer while OIDC SSO is on), changing the forward-auth email or name header (copied into the account, which a session reads back; no forward-auth header may name a credential header), and turning password or Plex sign-in back on. The full list is in the `auth-security` skill. **Keep this list closed**: a new route that adds a sign-in method or long-lived credential, or returns or forwards a stored Plex token, must call it, and a route relaying a media server's responses must restrict what it asks for.
+- **Actions that add a lasting way in, or expose a credential, need a recent sign-in** (`hasRecentLogin`, refused via `reauthRequired`): API key creation, a first password, Plex/SSO linking, backup create/download/restore and changing the backup encryption password, adding a Plex server by machine id (the token is looked up server-side), a server URL change or turning `tlsSkipVerify` on while its token stays, sending a stored key to a new URL (`refuseStoredKeyToNewUrl`), changing SSO's identity source (turning SSO on, `ssoMode`, `forwardAuthUserHeader`, the issuer while OIDC SSO is on), changing the forward-auth email or name header (copied into the account, which a session reads back; no forward-auth header may name a credential header), and turning password or Plex sign-in back on. The full list is in the `auth-security` skill. **Keep this list closed**: a new route that adds a sign-in method or long-lived credential, or returns or forwards a stored Plex token, must call it, and a route relaying a media server's responses must restrict what it asks for.
 - **Every client call to a recent-login-guarded route goes through `fetchWithReauth`** (`src/lib/auth/reauth-client.ts`); `tests/unit/auth/reauth-callers.test.ts` enforces it.
 - Credential-verifying routes are rate-limited and charged only on failure (`peekAuthRateLimit` + `reserveAuthAttempt`); `src/proxy.ts` applies the CSRF origin check to every non-GET/HEAD/OPTIONS `/api/*` request.
 
@@ -230,7 +230,7 @@ An episode row's `title` is the episode's name; the show is `parentTitle`. Name 
 
 ### Integrations (detail in `arr-api`, `seerr-api`, `watch-history`, `media-server-api`)
 
-- **Every integration client gets its axios instance from `createIntegrationHttp`** (`src/lib/integrations/http.ts`), which registers `configureRetry` before the `IntegrationError` converter (axios runs interceptors in order). Writes are retried only when the failure provably preceded sending. `NO_RETRY` for interactive tests and probes. Media-server clients use `instrumentMediaServerClient`.
+- **Every integration client gets its axios instance from `createIntegrationHttp`** (`src/lib/integrations/http.ts`), which registers `configureRetry` before the `IntegrationError` converter (axios runs interceptors in order). **Every axios instance that carries a stored credential is created with `confineCredentials(baseURL)`** (`src/lib/http-credentials.ts`: no absolute request URLs, no credential on a redirect that leaves the configured origin) — the Arr/Seerr/Tracearr clients, both media-server clients and the AI provider. Writes are retried only when the failure provably preceded sending. `NO_RETRY` for interactive tests and probes. Media-server clients use `instrumentMediaServerClient`.
 - Integration routes are one-line builders over `src/lib/integrations/instance-routes.ts`. Stored keys never go to the browser — edit flows test through `[id]/test-connection`.
 - Bound every call to a possibly-dead instance (`withTimeout`, `UnreachableInstances`); a write's timeout is never a host-level failure.
 
@@ -296,12 +296,14 @@ In a production build the job worker and the realtime manager (started from `ins
 - External IDs (TMDB, TVDB, IMDB, MUSICBRAINZ, MBID) live in `MediaItemExternalId` — Arr correlation: movies via TMDB → Radarr, series via TVDB → Sonarr, music via the artist's MusicBrainz id → Lidarr.
 - `WatchHistory` rows are play events — see the `watch-history` skill.
 - Dynamic range normalizes to "Dolby Vision", "HDR10+", "HDR10", "HLG" or "SDR"; audio profile to "Dolby Atmos", "Dolby TrueHD", "DTS-HD MA", "DTS:X", etc.
+- The wildcard operators match through `wildcardToRegex` (`src/lib/conditions/wildcard.ts`), a bounded glob matcher — never compile a rule value, or any user- or model-supplied text, into a `RegExp`.
 - Calendar-day fields (`originallyAvailableAt`, `arrReleaseDate`, `arrInCinemasDate`, `arrFirstAired`, `lastEpisodeAiredAt`) are stored as UTC midnight, carry `dateOnly: true` (`DATE_ONLY_FIELDS` in `fields.ts`) and are displayed with `formatDateOnly`; instants use `formatDate`. A new calendar-day field must set the flag.
 
 ### Notifications
 
 - `src/lib/discord/client.ts` — Discord webhooks for lifecycle events (action success/failure, match count changes, held deletions), maintenance mode changes, and API keys created or deleted (`buildApiKeyEmbed`, gated by `discordNotifyApiKeys`). A 429 is retried once when Discord asks for ≤ 5 s; an undelivered notification is logged at WARN without the webhook URL.
 - Notification failures never block lifecycle processing (wrapped in try/catch).
+- Embed text is Markdown: anything the app did not write (item titles, Arr error text, rule set and key names, the maintenance message) goes through `escapeDiscordMarkdown`; `buildTruncatedList` escapes its items itself.
 
 ### Next.js Config
 
@@ -322,6 +324,7 @@ When adding features or changing behaviour, **update the documentation in `docs/
 - `.github/workflows/e2e.yml` — Playwright compose stack on PRs.
 - `.github/workflows/docs-deploy.yml` — docs site: the **Build Docs** check on every PR (build only), the deploy on a push to main. **Whenever a change touches `docs/` (or a source the docs build reads), run `pnpm docs:build` and see it pass before committing**; the project hook `.claude/hooks/docs-build-before-commit.sh` (`.claude/settings.json`, PreToolUse on Bash) runs it on every `git commit` whose changes touch those files and blocks the commit when it fails. MDX reads a bare `<word>` as a JSX tag (see the `doc-feature` skill).
 - `.github/workflows/pr-title-lint.yml` — validates every PR **title** against Conventional Commits (see below).
+- **Every action is pinned to a full commit SHA** with its version in a trailing comment (`uses: actions/checkout@<sha> # v7.0.1`); `tests/unit/setup/ci-actions-pinned.test.ts` refuses a tag or branch. Dependabot's `github-actions` updates move the pins.
 
 ### Git Conventions
 

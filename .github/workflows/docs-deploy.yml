@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Starlight's `lastUpdated` reads each page's date from git; on
           # the default shallow clone every page gets the one fetched
@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Build docs with Astro
-        uses: withastro/action@v6
+        uses: withastro/action@a8b97df764791eb61fbf3338ef713b0e61ae05c5 # v6.1.4
         with:
           path: ./docs
 
@@ -65,4 +65,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

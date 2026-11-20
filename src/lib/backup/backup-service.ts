@@ -144,8 +144,14 @@ export const BACKUP_TABLE_ORDER = [
  * restoring the set the backup captured — which would bring back any key
  * deleted since, silently undoing a revocation. Third-party apps need new keys
  * after a restore; a backup file never carries key material, not even hashes.
+ *
+ * `knownSignInAddress`: the addresses a sign-in has succeeded from, which the
+ * login rate limiter exempts from its shared floor. It describes this
+ * deployment's network rather than the account, references no other table (so
+ * the restore's `TRUNCATE "User" CASCADE` leaves it alone), and is rebuilt by
+ * the next sign-in.
  */
-export const BACKUP_EXCLUDED_TABLES = ["apiKey"] as const;
+export const BACKUP_EXCLUDED_TABLES = ["apiKey", "knownSignInAddress"] as const;
 
 const TABLE_ORDER = BACKUP_TABLE_ORDER;
 

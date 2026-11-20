@@ -17,6 +17,7 @@ import {
   peekAuthRateLimit,
   reserveAuthAttempt,
 } from "@/lib/rate-limit/rate-limiter";
+import { invalidateKnownApiKeyPrefixes } from "@/lib/api-keys/known-prefixes";
 
 /**
  * API key management for the settings page — cookie session only. These routes
@@ -138,6 +139,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
       { status: 400 },
     );
   }
+
+  // So the guard's cached prefixes include it at once (known-prefixes.ts).
+  invalidateKnownApiKeyPrefixes();
 
   logger.info(
     "Auth",
