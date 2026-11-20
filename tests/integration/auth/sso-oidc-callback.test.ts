@@ -18,7 +18,9 @@ const {
   mockResolveRedirectUri: vi.fn().mockReturnValue("http://localhost:3000/api/auth/sso/oidc/callback"),
 }));
 
-vi.mock("@/lib/sso/oidc-client", () => ({
+vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
+  // Pure: reads the claims out of the token the mocked exchange returns.
+  readIdTokenClaims: (await importOriginal<typeof import("@/lib/sso/oidc-client")>()).readIdTokenClaims,
   discoverOidc: mockDiscover,
   exchangeCodeForToken: mockExchange,
   fetchUserInfo: mockFetchUserInfo,
@@ -79,6 +81,12 @@ async function seedOidcSettings(userId: string, overrides: Partial<{
   });
 }
 
+/** An ID token as the token endpoint returns it (the signature is never read). */
+function idToken(claims: Record<string, unknown>): string {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${part({ alg: "RS256" })}.${part(claims)}.signature`;
+}
+
 function setupSuccessfulExchange(info: Partial<{
   sub: string;
   email: string;
@@ -92,7 +100,12 @@ function setupSuccessfulExchange(info: Partial<{
     userinfo_endpoint: `${ISSUER}/userinfo`,
     jwks_uri: `${ISSUER}/jwks`,
   });
-  mockExchange.mockResolvedValue({ access_token: "at", token_type: "Bearer" });
+  // The provider signed the user in just now, as `prompt=login` asks.
+  mockExchange.mockResolvedValue({
+    access_token: "at",
+    token_type: "Bearer",
+    id_token: idToken({ sub: info.sub ?? "user-sub-1", auth_time: Math.floor(Date.now() / 1000) }),
+  });
   mockFetchUserInfo.mockResolvedValue({ sub: info.sub ?? "user-sub-1", ...info });
 }
 
@@ -111,7 +124,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
   it("returns the limiter's 429 before reading any setting or calling the IdP", async () => {
     const user = await createTestUser();
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     mockReserve.mockReturnValue({
       refused: Response.json({ error: "Too many attempts. Try again later." }, { status: 429 }),
     });
@@ -192,7 +205,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
-      oidcState: "expected-state",
+      oidcStartedAt: Date.now(), oidcState: "expected-state",
       oidcVerifier: "verifier",
     });
     setupSuccessfulExchange({ sub: "sub-123" });
@@ -218,7 +231,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
-      oidcState: "expected-state",
+      oidcStartedAt: Date.now(), oidcState: "expected-state",
       oidcVerifier: "verifier",
     });
     mockDiscover.mockRejectedValue(new Error("idp unreachable"));
@@ -240,7 +253,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
     });
     mockDiscover.mockResolvedValue({
@@ -278,7 +291,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
     });
     setupSuccessfulExchange({ sub: "sub-123" });
@@ -319,7 +332,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
   it("rejects login with not_linked when no user matches the subject", async () => {
     const user = await createTestUser();
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "unknown-sub" });
 
     const res = await callRoute(GET, {
@@ -339,7 +352,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "sub-x", ssoIssuer: ISSUER, ssoEnabled: false },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "sub-x" });
 
     const res = await callRoute(GET, {
@@ -363,7 +376,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "same-sub" });
 
     const res = await callRoute(GET, {
@@ -385,7 +398,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "legacy-sub", ssoIssuer: null, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "legacy-sub" });
 
     const res = await callRoute(GET, {
@@ -406,7 +419,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({
       sub: "s1",
       preferred_username: "newname",
@@ -430,7 +443,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({
       sub: "s1",
       preferred_username: "   ",
@@ -454,7 +467,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id, { oidcUsernameClaim: "name" });
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "s1", name: "Display Name", preferred_username: "not-this-one" });
 
     await callRoute(GET, {
@@ -476,7 +489,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -506,7 +519,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       isLoggedIn: true,
       userId: user.id,
       sessionVersion: user.sessionVersion,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -529,7 +542,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setMockSession({
       isLoggedIn: true,
       userId: me.id,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -563,7 +576,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setMockSession({
       isLoggedIn: true,
       userId: "deleted-cuid-not-in-db",
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -591,7 +604,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({
       sub: "s1",
       preferred_username: "alice\nINJECTED",
@@ -618,7 +631,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({
       sub: "s1",
       preferred_username: "x".repeat(10_000),
@@ -642,7 +655,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       data: { ssoSubject: "s1", ssoIssuer: ISSUER, ssoEnabled: true },
     });
     await seedOidcSettings(user.id);
-    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "s1", email: "not-an-email" });
 
     await callRoute(GET, {
@@ -660,7 +673,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      oidcState: "expected",
+      oidcStartedAt: Date.now(), oidcState: "expected",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -686,7 +699,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
-      oidcState: "s",
+      oidcStartedAt: Date.now(), oidcState: "s",
       oidcVerifier: "v",
       oidcFlow: "link",
     });
@@ -703,6 +716,84 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(unchanged.sessionVersion).toBe(user.sessionVersion);
   });
+  // ── A handshake is good for ten minutes ────────────────────────────────
+  //
+  // Linking needs a recent sign-in to START. Without an age, an abandoned
+  // start stayed in the 30-day cookie and could be FINISHED weeks later by
+  // whoever held a copy of it — their account at the IdP became the admin's.
+  describe("an old handshake", () => {
+    const ELEVEN_MINUTES = 11 * 60 * 1000;
+
+    it("does not complete a link, and links nothing", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id, { ssoEnabled: false });
+      setMockSession({
+        isLoggedIn: true,
+        userId: user.id,
+        oidcStartedAt: Date.now() - ELEVEN_MINUTES,
+        oidcState: "s",
+        oidcVerifier: "v",
+        oidcFlow: "link",
+      });
+      setupSuccessfulExchange({ sub: "attacker-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+
+      expect(loc.pathname).toBe("/settings");
+      expect(loc.searchParams.get("ssoLinkError")).toBe("state_mismatch");
+      expect(mockExchange).not.toHaveBeenCalled();
+      const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      expect(row.ssoSubject).toBeNull();
+      expect(row.sessionVersion).toBe(user.sessionVersion);
+      // Single use either way.
+      expect(getMockSession().oidcState).toBeUndefined();
+      expect(getMockSession().oidcStartedAt).toBeUndefined();
+    });
+
+    it("does not complete a link whose start carries no time at all", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id, { ssoEnabled: false });
+      // As a cookie sealed before handshakes were timed would hold it.
+      setMockSession({ isLoggedIn: true, userId: user.id, oidcFlow: "link", oidcVerifier: "v", oidcState: "s" });
+      setupSuccessfulExchange({ sub: "attacker-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+
+      expect(new URL(res.headers.get("location")!).searchParams.get("ssoLinkError")).toBe("state_mismatch");
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).ssoSubject).toBeNull();
+    });
+
+    it("does not sign in", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "user-sub-1", ssoIssuer: ISSUER },
+      });
+      setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now() - ELEVEN_MINUTES, oidcState: "s", oidcVerifier: "v" });
+      setupSuccessfulExchange({ sub: "user-sub-1" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+
+      expect(loc.pathname).toBe("/login");
+      expect(loc.searchParams.get("sso_error")).toBe("state_mismatch");
+      expect(getMockSession().isLoggedIn).toBe(false);
+      expect(mockSucceeded).not.toHaveBeenCalled();
+    });
+
+    it("is not one that claims to start in the future", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now() + 60 * 60 * 1000, oidcState: "s", oidcVerifier: "v" });
+      setupSuccessfulExchange({ sub: "user-sub-1" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      expect(new URL(res.headers.get("location")!).searchParams.get("sso_error")).toBe("state_mismatch");
+    });
+  });
+
   // ── Re-authentication flow (signed-in admin confirming identity) ──────
 
   describe("reauth flow", () => {
@@ -717,7 +808,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
         isLoggedIn: true,
         userId: user.id,
         authenticatedAt: 1,
-        oidcState: "s",
+        oidcStartedAt: Date.now(), oidcState: "s",
         oidcVerifier: "v",
         oidcFlow: "reauth",
       });
@@ -750,7 +841,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     it("hands the attempt nonce from the state to the popup page", async () => {
       const NONCE = "attempt-nonce-0123456789";
       await seedLinked();
-      setMockSession({ ...getMockSession(), oidcState: `abc.${NONCE}` });
+      setMockSession({ ...getMockSession(), oidcStartedAt: Date.now(), oidcState: `abc.${NONCE}` });
       setupSuccessfulExchange({ sub: "linked-sub" });
 
       const ok = new URL(
@@ -760,12 +851,103 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       expect(ok.searchParams.get("nonce")).toBe(NONCE);
 
       // A stale popup's state names ITS attempt, even though the check fails.
-      setMockSession({ ...getMockSession(), oidcState: `new.${NONCE}`, oidcVerifier: "v", oidcFlow: "reauth" });
+      setMockSession({ ...getMockSession(), oidcStartedAt: Date.now(), oidcState: `new.${NONCE}`, oidcVerifier: "v", oidcFlow: "reauth" });
       const stale = new URL(
         (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "old.other-attempt-nonce-99" } })).headers.get("location")!,
       );
       expect(stale.searchParams.get("error")).toBe("state_mismatch");
       expect(stale.searchParams.get("nonce")).toBe("other-attempt-nonce-99");
+    });
+
+    // `prompt=login` travels through the browser and can be dropped from the
+    // URL; a provider with a live session then answers at once. Only the ID
+    // token's `auth_time`, which comes straight from the token endpoint, says
+    // whether anyone signed in.
+    describe("the provider must have signed the user in for this confirmation", () => {
+      const withIdToken = (claims: Record<string, unknown> | null) =>
+        mockExchange.mockResolvedValue({
+          access_token: "at",
+          token_type: "Bearer",
+          ...(claims && { id_token: idToken(claims) }),
+        });
+      const attempt = async () =>
+        new URL(
+          (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } })).headers.get("location")!,
+        );
+      const now = () => Math.floor(Date.now() / 1000);
+
+      it("refuses an answer from a session that began before the confirmation did", async () => {
+        await seedLinked();
+        setupSuccessfulExchange({ sub: "linked-sub" });
+        withIdToken({ sub: "linked-sub", auth_time: now() - 3600 });
+
+        const loc = await attempt();
+
+        expect(loc.pathname).toBe("/login/reauth");
+        expect(loc.searchParams.get("error")).toBe("not_fresh");
+        expect(getMockSession().authenticatedAt).toBe(1);
+        expect(mockSucceeded).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["no ID token at all", null],
+        ["an ID token without auth_time", { sub: "linked-sub" }],
+        ["an auth_time that is not a number", { sub: "linked-sub", auth_time: "now" }],
+      ])("refuses %s", async (_label, claims) => {
+        await seedLinked();
+        setupSuccessfulExchange({ sub: "linked-sub" });
+        withIdToken(claims);
+
+        const loc = await attempt();
+
+        expect(loc.searchParams.get("error")).toBe("not_fresh");
+        expect(getMockSession().authenticatedAt).toBe(1);
+        expect(mockSucceeded).not.toHaveBeenCalled();
+      });
+
+      it("accepts a provider that cannot report auth_time only when the operator opted out", async () => {
+        vi.stubEnv("OIDC_REAUTH_ALLOW_UNVERIFIED", "true");
+        try {
+          await seedLinked();
+          setupSuccessfulExchange({ sub: "linked-sub" });
+          withIdToken(null);
+          expect((await attempt()).searchParams.get("status")).toBe("ok");
+
+          // The opt-out covers a missing answer, never a stale one.
+          await seedLinked2();
+          withIdToken({ sub: "linked-sub", auth_time: now() - 3600 });
+          expect((await attempt()).searchParams.get("error")).toBe("not_fresh");
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
+
+      it("allows for a provider clock a few minutes behind", async () => {
+        await seedLinked();
+        setupSuccessfulExchange({ sub: "linked-sub" });
+        withIdToken({ sub: "linked-sub", auth_time: now() - 120 });
+        expect((await attempt()).searchParams.get("status")).toBe("ok");
+      });
+
+      it("refuses an ID token issued for someone other than the userinfo subject", async () => {
+        await seedLinked();
+        setupSuccessfulExchange({ sub: "linked-sub" });
+        withIdToken({ sub: "another-sub", auth_time: now() });
+        expect((await attempt()).searchParams.get("error")).toBe("not_fresh");
+        expect(getMockSession().authenticatedAt).toBe(1);
+      });
+
+      /** Re-arm the handshake for a second attempt in one test. */
+      async function seedLinked2() {
+        setMockSession({
+          ...getMockSession(),
+          authenticatedAt: 1,
+          oidcStartedAt: Date.now(),
+          oidcState: "s",
+          oidcVerifier: "v",
+          oidcFlow: "reauth",
+        });
+      }
     });
 
     it("refuses a different subject and leaves the sign-in time alone", async () => {
@@ -786,7 +968,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       setMockSession({
         isLoggedIn: true,
         userId: "no-such-user",
-        oidcState: "s",
+        oidcStartedAt: Date.now(), oidcState: "s",
         oidcVerifier: "v",
         oidcFlow: "reauth",
       });
@@ -804,7 +986,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     // waiting on the popup never heard back.
     it("reports a confirmation whose session was revoked meanwhile, and never signs in", async () => {
       await seedLinked();
-      setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v", oidcFlow: "reauth" });
+      setMockSession({ isLoggedIn: false, oidcStartedAt: Date.now(), oidcState: "s", oidcVerifier: "v", oidcFlow: "reauth" });
       setupSuccessfulExchange({ sub: "linked-sub" });
 
       const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
@@ -859,7 +1041,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
         isLoggedIn: true,
         userId: user.id,
         authenticatedAt: 1,
-        oidcState: "link-state",
+        oidcStartedAt: Date.now(), oidcState: "link-state",
         oidcVerifier: "link-verifier",
         oidcFlow: "link",
       });

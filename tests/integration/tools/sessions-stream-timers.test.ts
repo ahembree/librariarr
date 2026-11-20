@@ -4,13 +4,15 @@ import { callRoute } from "../../setup/test-helpers";
 
 // The stream's timers (poll, heartbeat, realtime throttle, lifetime cap) are
 // driven with fake timers, so the DB is a stub here rather than the test DB.
-const { findMany, getSessions } = vi.hoisted(() => ({
+const { findMany, getSessions, findUser } = vi.hoisted(() => ({
   findMany: vi.fn(),
   getSessions: vi.fn(),
+  findUser: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
-  prisma: { mediaServer: { findMany } },
+  // `user` is the row the stream re-reads to learn its session was revoked.
+  prisma: { mediaServer: { findMany }, user: { findUnique: findUser } },
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -92,7 +94,8 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     clearMockSession();
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 0 });
+    findUser.mockReset().mockResolvedValue({ sessionVersion: 0 });
     findMany.mockReset().mockResolvedValue([SERVER]);
     getSessions.mockReset().mockResolvedValue([playing("s-1")]);
     // First-seen stamps are process-wide; start each stream from a clean map.
@@ -193,6 +196,27 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
     sessionEvent();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(getSessions).toHaveBeenCalledTimes(calls);
+  });
+
+  // The stream carries who is watching what, from which address and which
+  // file. A sign-out or password change must end it, not its one-hour cap.
+  it("closes the stream within 31 seconds of its session being revoked, and stops polling", async () => {
+    const { drain } = await open();
+    await drain();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await drain()).not.toContain("<done>");
+
+    findUser.mockResolvedValue({ sessionVersion: 1 });
+    // The re-check at 60s flags it; the 1s teardown tick closes it.
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await drain()).toContain("<done>");
+
+    const polls = getSessions.mock.calls.length;
+    const asked = findUser.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getSessions).toHaveBeenCalledTimes(polls);
+    expect(findUser).toHaveBeenCalledTimes(asked);
   });
 
   it("closes the stream after its one-hour lifetime cap", async () => {

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getExternalBaseUrl, isTrustedMutationOrigin } from "@/lib/url";
+import { getExternalBaseUrl, isTrustedMutationOrigin, isHttpsRequest } from "@/lib/url";
 import { buildCsp, generateNonce } from "@/lib/security/csp";
+import { hstsHeaderValue } from "@/lib/security/hsts";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -26,7 +27,7 @@ export function proxy(request: NextRequest) {
         { status: 403 }
       );
     }
-    return NextResponse.next();
+    return withHsts(request, NextResponse.next());
   }
 
   // If no session cookie and not on auth page, redirect to login
@@ -49,6 +50,17 @@ function withPageCsp(request: NextRequest): NextResponse {
   requestHeaders.set("Content-Security-Policy", csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("Content-Security-Policy", csp);
+  return withHsts(request, response);
+}
+
+/**
+ * Adds `Strict-Transport-Security` when the operator set `HSTS_MAX_AGE` and
+ * the request arrived over https. See `src/lib/security/hsts.ts` for why it
+ * is opt-in.
+ */
+function withHsts(request: NextRequest, response: NextResponse): NextResponse {
+  const value = hstsHeaderValue();
+  if (value && isHttpsRequest(request)) response.headers.set("Strict-Transport-Security", value);
   return response;
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 
@@ -159,3 +159,50 @@ describe("proxy — page Content-Security-Policy", () => {
   });
 });
 
+// Opt-in (HSTS_MAX_AGE): the header binds every port of the host name, so only
+// the operator can know it is safe. See src/lib/security/hsts.ts.
+describe("proxy — Strict-Transport-Security", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+  const HTTPS = { "x-forwarded-proto": "https", "x-forwarded-host": "app.example.com" };
+
+  it("is not sent unless HSTS_MAX_AGE is set", () => {
+    vi.stubEnv("HSTS_MAX_AGE", "");
+    const page = proxy(req("http://127.0.0.1:3000/login", { headers: HTTPS }));
+    const api = proxy(req("http://127.0.0.1:3000/api/health", { headers: HTTPS }));
+    expect(page.headers.get("strict-transport-security")).toBeNull();
+    expect(api.headers.get("strict-transport-security")).toBeNull();
+  });
+
+  it("is sent on pages and API responses that arrived over https", () => {
+    vi.stubEnv("HSTS_MAX_AGE", "31536000");
+    const page = proxy(req("http://127.0.0.1:3000/login", { headers: HTTPS }));
+    const api = proxy(req("http://127.0.0.1:3000/api/health", { headers: HTTPS }));
+    expect(page.headers.get("strict-transport-security")).toBe("max-age=31536000");
+    expect(api.headers.get("strict-transport-security")).toBe("max-age=31536000");
+  });
+
+  it("is never sent over plain http", () => {
+    vi.stubEnv("HSTS_MAX_AGE", "31536000");
+    const res = proxy(req("http://192.168.1.5:3000/login", { headers: { host: "192.168.1.5:3000" } }));
+    expect(res.headers.get("strict-transport-security")).toBeNull();
+  });
+});
+
+describe("proxy — an http origin against an app served over https", () => {
+  it("is refused as cross-site", () => {
+    const res = proxy(
+      req("http://127.0.0.1:3000/api/servers/abc", {
+        method: "DELETE",
+        cookie: true,
+        headers: {
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "app.example.com",
+          origin: "http://app.example.com",
+        },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+});

@@ -150,6 +150,7 @@ describe("GET /api/auth/sso/oidc/login", () => {
 
     expect((await callRoute(GET, { method: "GET" })).status).toBe(307);
     expect(getMockSession().oidcFlow).toBeUndefined();
+    expect(Date.now() - getMockSession().oidcStartedAt!).toBeLessThan(5000);
   });
 
   it("returns 500 when discovery fails", async () => {

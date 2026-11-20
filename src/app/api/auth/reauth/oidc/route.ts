@@ -11,6 +11,7 @@ import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { loadReauthContext, REAUTH_STATE_SEPARATOR } from "@/lib/auth/reauth";
 import { validateRequest, reauthOidcStartSchema } from "@/lib/validation";
+import { beginOidcHandshake } from "@/lib/sso/handshake";
 
 /**
  * Starts an OIDC round-trip that confirms the signed-in admin's identity
@@ -47,9 +48,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // back), so the callback can address its report to this attempt alone.
     const state = `${generateState()}${REAUTH_STATE_SEPARATOR}${data.nonce}`;
 
-    session.oidcState = state;
-    session.oidcVerifier = verifier;
-    session.oidcFlow = "reauth";
+    beginOidcHandshake(session, { state, verifier, flow: "reauth" });
     await session.save();
 
     const url = buildAuthorizationUrl({
@@ -60,6 +59,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
       state,
       codeChallenge: challenge,
       prompt: "login",
+      // Obliges the provider to put `auth_time` in the ID token, which is how
+      // the callback knows the prompt was honoured (`reauthFreshness`).
+      maxAge: 0,
     });
 
     return NextResponse.json({ authorizationUrl: url });

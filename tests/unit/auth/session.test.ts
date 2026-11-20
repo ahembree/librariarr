@@ -311,14 +311,14 @@ describe("isSessionValid", () => {
   });
 
   it("returns true when the user exists and the session version matches", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 3 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 3 });
     mockUserFindUnique.mockResolvedValue({ id: "u1", sessionVersion: 3 });
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(true);
   });
 
   it("returns false when the session carries no version (unrevocable cookies are not honoured)", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1" });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1" });
     mockUserFindUnique.mockResolvedValue({ id: "u1", sessionVersion: 7 });
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(false);
@@ -326,21 +326,21 @@ describe("isSessionValid", () => {
   });
 
   it("returns false when the session version is stale", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 1 });
     mockUserFindUnique.mockResolvedValue({ id: "u1", sessionVersion: 2 });
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(false);
   });
 
   it("returns false when the user no longer exists", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "ghost", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "ghost", sessionVersion: 1 });
     mockUserFindUnique.mockResolvedValue(null);
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(false);
   });
 
   it("returns false when the database lookup throws", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 1 });
     mockUserFindUnique.mockRejectedValue(new Error("db down"));
     const { isSessionValid } = await load();
     expect(await isSessionValid()).toBe(false);
@@ -355,7 +355,7 @@ describe("isSessionValid", () => {
  */
 describe("getSession — enforces revocation against the User row", () => {
   it("passes a current session through untouched", async () => {
-    const raw = { isLoggedIn: true, userId: "u1", sessionVersion: 3 };
+    const raw = { isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 3 };
     mockGetIronSession.mockResolvedValue(raw);
     mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
     const { getSession } = await load();
@@ -372,6 +372,7 @@ describe("getSession — enforces revocation against the User row", () => {
     const save = vi.fn();
     mockGetIronSession.mockResolvedValue({
       isLoggedIn: true,
+      authenticatedAt: Date.now(),
       userId: "u1",
       sessionVersion: 1,
       save,
@@ -386,7 +387,7 @@ describe("getSession — enforces revocation against the User row", () => {
   });
 
   it("downgrades a session whose user no longer exists", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "ghost", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "ghost", sessionVersion: 1 });
     mockUserFindUnique.mockResolvedValue(null);
     const { getSession } = await load();
     const session = await getSession();
@@ -401,6 +402,7 @@ describe("getSession — enforces revocation against the User row", () => {
     const save = vi.fn();
     mockGetIronSession.mockResolvedValue({
       isLoggedIn: true,
+      authenticatedAt: Date.now(),
       userId: "u1",
       sessionVersion: 3,
       plexToken: "tok",
@@ -424,7 +426,7 @@ describe("getSession — enforces revocation against the User row", () => {
   });
 
   it("fails closed when the database lookup throws", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 1 });
     mockUserFindUnique.mockRejectedValue(new Error("db down"));
     const { getSession } = await load();
     const session = await getSession();
@@ -441,11 +443,63 @@ describe("getSession — enforces revocation against the User row", () => {
   });
 
   it("getRawSession skips the check (login flows only)", async () => {
-    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: true, authenticatedAt: Date.now(), userId: "u1", sessionVersion: 1 });
     mockUserFindUnique.mockResolvedValue({ sessionVersion: 99 });
     const { getRawSession } = await load();
     const session = await getRawSession();
     expect(session.isLoggedIn).toBe(true);
     expect(mockUserFindUnique).not.toHaveBeenCalled();
+  });
+
+  // The seal's 30 days count from the last save(), and several routes save a
+  // signed-in session without any credential (starting an OIDC handshake
+  // writes into whatever session the visitor carries) — so a copied cookie
+  // could be kept alive by one request a month. The login's own age cannot.
+  describe("a login older than the session lifetime", () => {
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+
+    it("is not honoured, whatever the seal says, and the row is not even read", async () => {
+      mockGetIronSession.mockResolvedValue({
+        isLoggedIn: true,
+        authenticatedAt: Date.now() - THIRTY_DAYS - 1000,
+        userId: "u1",
+        sessionVersion: 3,
+      });
+      mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
+      const { getSession } = await load();
+      const session = await getSession();
+      expect(session.isLoggedIn).toBe(false);
+      expect(session.userId).toBeUndefined();
+      expect(mockUserFindUnique).not.toHaveBeenCalled();
+    });
+
+    it("is honoured up to the limit", async () => {
+      mockGetIronSession.mockResolvedValue({
+        isLoggedIn: true,
+        authenticatedAt: Date.now() - THIRTY_DAYS + 60_000,
+        userId: "u1",
+        sessionVersion: 3,
+      });
+      mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
+      const { getSession } = await load();
+      expect((await getSession()).isLoggedIn).toBe(true);
+    });
+
+    it("includes a session that cannot show when it signed in", async () => {
+      mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 3 });
+      mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
+      const { getSession } = await load();
+      expect((await getSession()).isLoggedIn).toBe(false);
+    });
+
+    it("isPastSessionLifetime", async () => {
+      const { isPastSessionLifetime, SESSION_LIFETIME_SECONDS } = await load();
+      const now = 1_800_000_000_000;
+      expect(SESSION_LIFETIME_SECONDS * 1000).toBe(THIRTY_DAYS);
+      expect(isPastSessionLifetime(now, now)).toBe(false);
+      expect(isPastSessionLifetime(now - THIRTY_DAYS, now)).toBe(false);
+      expect(isPastSessionLifetime(now - THIRTY_DAYS - 1, now)).toBe(true);
+      expect(isPastSessionLifetime(undefined, now)).toBe(true);
+    });
   });
 });

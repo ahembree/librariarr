@@ -45,6 +45,12 @@ export interface SessionData {
    * (`/api/auth/reauth/oidc`) and stamps `authenticatedAt`.
    */
   oidcFlow?: "link" | "reauth";
+  /**
+   * When the handshake above began (epoch ms). The callback refuses one older
+   * than `OIDC_HANDSHAKE_TTL_MS` (`src/lib/sso/handshake.ts`), so an abandoned
+   * handshake cannot be completed later from a copy of the cookie.
+   */
+  oidcStartedAt?: number;
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";
@@ -259,13 +265,33 @@ async function readValidatedSession(): Promise<IronSession<SessionData>> {
   const carriedPlexToken = LEGACY_PLEX_TOKEN_FIELD in session;
   if (carriedPlexToken) delete (session as Record<string, unknown>)[LEGACY_PLEX_TOKEN_FIELD];
   if (!session.isLoggedIn) return session;
-  const valid = !carriedPlexToken && (await isUserSessionCurrent(session.userId, session.sessionVersion));
+  const valid =
+    !carriedPlexToken &&
+    !isPastSessionLifetime(session.authenticatedAt) &&
+    (await isUserSessionCurrent(session.userId, session.sessionVersion));
   if (!valid) {
     session.isLoggedIn = false;
     session.userId = undefined;
     session.sessionVersion = undefined;
   }
   return session;
+}
+
+/**
+ * Whether a login is older than a session may be: 30 days from the last time
+ * a credential was presented (`authenticatedAt`, stamped by every login and
+ * by every "Confirm it's you").
+ *
+ * The seal's own 30 days are counted from the last `save()`, and several
+ * routes save a signed-in session without any credential — starting an OIDC
+ * handshake writes its `state` into whatever session the visitor carries — so
+ * a copied cookie could be kept alive indefinitely by one request a month.
+ * The age of the login cannot be renewed that way. A session with no
+ * `authenticatedAt` (sealed before the stamp existed) cannot show its age and
+ * is treated as past it: the admin signs in once.
+ */
+export function isPastSessionLifetime(authenticatedAt: number | undefined, now = Date.now()): boolean {
+  return typeof authenticatedAt !== "number" || now - authenticatedAt > SESSION_LIFETIME_SECONDS * 1000;
 }
 
 async function isUserSessionCurrent(

@@ -8,6 +8,7 @@ import {
   generatePkce,
   generateState,
   invalidateOidcDiscoveryCache,
+  readIdTokenClaims,
   resolveRedirectUri,
   InsecureIssuerError,
   type OidcDiscovery,
@@ -103,6 +104,21 @@ describe("buildAuthorizationUrl", () => {
       prompt: "login",
     });
     expect(new URL(url).searchParams.get("prompt")).toBe("login");
+  });
+
+  // `max_age=0` obliges the IdP to return `auth_time`, which is how the
+  // callback knows the prompt was honoured.
+  it("adds max_age when asked, zero included, and not otherwise", () => {
+    const base = {
+      discovery: makeDiscovery(),
+      clientId: "my-client",
+      redirectUri: "https://app.example.com/api/auth/sso/oidc/callback",
+      scope: "openid",
+      state: "state-123",
+      codeChallenge: "challenge-abc",
+    };
+    expect(new URL(buildAuthorizationUrl({ ...base, maxAge: 0 })).searchParams.get("max_age")).toBe("0");
+    expect(new URL(buildAuthorizationUrl(base)).searchParams.has("max_age")).toBe(false);
   });
 
   it("preserves authorization_endpoint query params when the IdP includes them", () => {
@@ -714,5 +730,34 @@ describe("response size guard (MAX_RESPONSE_BYTES)", () => {
     await expect(fetchUserInfo(makeDiscovery(), "at")).rejects.toThrow(
       "Response from https://idp.example.com/userinfo exceeds 1048576 bytes"
     );
+  });
+});
+
+describe("readIdTokenClaims", () => {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = (claims: unknown) => `${part({ alg: "RS256" })}.${part(claims)}.sig`;
+
+  it("reads sub and auth_time from the payload", () => {
+    expect(readIdTokenClaims(token({ sub: "abc", auth_time: 1_800_000_000, iss: "https://idp" }))).toEqual({
+      sub: "abc",
+      auth_time: 1_800_000_000,
+    });
+  });
+
+  it("drops claims of the wrong type", () => {
+    expect(readIdTokenClaims(token({ sub: 7, auth_time: "1800000000" }))).toEqual({
+      sub: undefined,
+      auth_time: undefined,
+    });
+  });
+
+  it("returns null for anything that is not a JWT with an object payload", () => {
+    expect(readIdTokenClaims(undefined)).toBeNull();
+    expect(readIdTokenClaims("")).toBeNull();
+    expect(readIdTokenClaims("only.two")).toBeNull();
+    expect(readIdTokenClaims("a..c")).toBeNull();
+    expect(readIdTokenClaims(`${part({})}.not-json.sig`)).toBeNull();
+    expect(readIdTokenClaims(token(["array"]))).toBeNull();
+    expect(readIdTokenClaims(token("string"))).toBeNull();
   });
 });

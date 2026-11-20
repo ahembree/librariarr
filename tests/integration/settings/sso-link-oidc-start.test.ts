@@ -171,6 +171,8 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     // of treating this as a login.
     const session = getMockSession();
     expect(session.oidcFlow).toBe("link");
+    // Timed: an abandoned link cannot be finished later from a copied cookie.
+    expect(Date.now() - session.oidcStartedAt!).toBeLessThan(5000);
     expect(session.oidcState).toBe("s");
     expect(session.oidcVerifier).toBe("v");
   });

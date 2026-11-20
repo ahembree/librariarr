@@ -7,6 +7,11 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// The stream re-reads the session's User row on a timer (see
+// `src/lib/auth/session-standing.ts`); this is that row.
+const { findUser } = vi.hoisted(() => ({ findUser: vi.fn() }));
+vi.mock("@/lib/db", () => ({ prisma: { user: { findUnique: findUser } } }));
+
 import { GET } from "@/app/api/events/stream/route";
 import { eventBus } from "@/lib/events/event-bus";
 
@@ -32,6 +37,7 @@ describe("GET /api/events/stream — the SSE body", () => {
 
   beforeEach(() => {
     clearMockSession();
+    findUser.mockReset().mockResolvedValue({ sessionVersion: 3 });
   });
 
   afterEach(async () => {
@@ -51,7 +57,7 @@ describe("GET /api/events/stream — the SSE body", () => {
   });
 
   it("opens an event stream that starts with a connected event", async () => {
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
     const res = await GET();
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/event-stream");
@@ -71,7 +77,7 @@ describe("GET /api/events/stream — the SSE body", () => {
     const lastEventAtByType = eventBus.lastEventAtByType();
     expect(typeof lastEventAtByType["settings:changed"]).toBe("number");
 
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
     const res = await GET();
     reader = res.body!.getReader();
     const [connected] = parseEvents((await readChunk(reader))!);
@@ -79,7 +85,7 @@ describe("GET /api/events/stream — the SSE body", () => {
   });
 
   it("forwards only the session user's events, with their meta", async () => {
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
     const res = await GET();
     reader = res.body!.getReader();
     await readChunk(reader); // connected
@@ -99,7 +105,7 @@ describe("GET /api/events/stream — the SSE body", () => {
   });
 
   it("unsubscribes from the bus as soon as the client disconnects", async () => {
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
     const before = eventBus.listenerCount;
     const res = await GET();
     const r = res.body!.getReader();
@@ -114,7 +120,7 @@ describe("GET /api/events/stream — the SSE body", () => {
 
   it("sends a heartbeat comment every 15 seconds and ends the stream after an hour", async () => {
     vi.useFakeTimers();
-    setMockSession({ userId: "user-1", isLoggedIn: true });
+    setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
     const before = eventBus.listenerCount;
     const res = await GET();
     const r = res.body!.getReader();
@@ -148,5 +154,79 @@ describe("GET /api/events/stream — the SSE body", () => {
     eventBus.emit({ type: "sync:completed", userId: "user-1" });
     vi.advanceTimersByTime(60_000);
     expect(eventBus.listenerCount).toBe(before);
+  });
+
+  // Signing out everywhere or changing the password bumps `sessionVersion`.
+  // Later requests with the old cookie were refused, but a stream it had
+  // already opened kept delivering for up to an hour.
+  describe("a revoked session", () => {
+    it("ends the stream within 30 seconds and releases its subscription", async () => {
+      vi.useFakeTimers();
+      setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
+      const before = eventBus.listenerCount;
+      const res = await GET();
+      const r = res.body!.getReader();
+      await readChunk(r); // connected
+
+      // Still current at the first re-check.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(findUser).toHaveBeenCalledWith({ where: { id: "user-1" }, select: { sessionVersion: true } });
+      expect(eventBus.listenerCount).toBe(before + 1);
+
+      findUser.mockResolvedValue({ sessionVersion: 4 });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(eventBus.listenerCount).toBe(before);
+      let chunk: string | null;
+      while ((chunk = await readChunk(r)) !== null) expect(chunk).toBe(": heartbeat\n\n");
+      // And it stops asking.
+      const asked = findUser.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(findUser).toHaveBeenCalledTimes(asked);
+    });
+
+    it("ends the stream when the account is gone", async () => {
+      vi.useFakeTimers();
+      setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
+      const before = eventBus.listenerCount;
+      const res = await GET();
+      const r = res.body!.getReader();
+      await readChunk(r);
+
+      findUser.mockResolvedValue(null);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(eventBus.listenerCount).toBe(before);
+      await r.cancel().catch(() => {});
+    });
+
+    it("keeps the stream through a database error and asks again", async () => {
+      vi.useFakeTimers();
+      setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
+      const before = eventBus.listenerCount;
+      const res = await GET();
+      const r = res.body!.getReader();
+      await readChunk(r);
+
+      findUser.mockRejectedValue(new Error("connection refused"));
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(eventBus.listenerCount).toBe(before + 1);
+
+      findUser.mockReset().mockResolvedValue({ sessionVersion: 9 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(eventBus.listenerCount).toBe(before);
+      await r.cancel().catch(() => {});
+    });
+
+    it("stops re-checking once the client has disconnected", async () => {
+      vi.useFakeTimers();
+      setMockSession({ userId: "user-1", isLoggedIn: true, sessionVersion: 3 });
+      const res = await GET();
+      const r = res.body!.getReader();
+      await readChunk(r);
+      await r.cancel();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(findUser).not.toHaveBeenCalled();
+    });
   });
 });

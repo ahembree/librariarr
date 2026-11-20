@@ -17,6 +17,8 @@ export interface MockSessionData {
   oidcState?: string;
   oidcVerifier?: string;
   oidcFlow?: "link" | "reauth";
+  /** When the handshake began; the callback refuses one older than ten minutes. */
+  oidcStartedAt?: number;
 }
 
 let currentSession: MockSessionData = { isLoggedIn: false };

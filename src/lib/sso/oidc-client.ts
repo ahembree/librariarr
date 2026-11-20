@@ -227,6 +227,11 @@ export function buildAuthorizationUrl(opts: {
   codeChallenge: string;
   /** OIDC `prompt` — `"login"` asks the IdP to authenticate again. */
   prompt?: string;
+  /**
+   * OIDC `max_age` (seconds). `0` asks for a fresh authentication and obliges
+   * the IdP to return `auth_time` in the ID token.
+   */
+  maxAge?: number;
 }): string {
   const url = new URL(opts.discovery.authorization_endpoint);
   url.searchParams.set("response_type", "code");
@@ -237,7 +242,41 @@ export function buildAuthorizationUrl(opts: {
   url.searchParams.set("code_challenge", opts.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   if (opts.prompt) url.searchParams.set("prompt", opts.prompt);
+  if (opts.maxAge !== undefined) url.searchParams.set("max_age", String(opts.maxAge));
   return url.toString();
+}
+
+/** The ID token claims this client reads. */
+export interface OidcIdTokenClaims {
+  sub?: string;
+  /** When the end user authenticated at the IdP (seconds since the epoch). */
+  auth_time?: number;
+}
+
+/**
+ * Read the claims of an ID token received from the token endpoint.
+ *
+ * The signature is not checked, deliberately and only because of where the
+ * token comes from: it is the body of this client's own TLS request to the
+ * issuer's token endpoint, which OpenID Connect Core §3.1.3.7 accepts in place
+ * of signature validation. Never use this on a token that arrived through the
+ * browser. Returns `null` for anything that is not a JWT with a JSON payload.
+ */
+export function readIdTokenClaims(idToken: string | undefined): OidcIdTokenClaims | null {
+  if (typeof idToken !== "string") return null;
+  const parts = idToken.split(".");
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const payload: unknown = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const { sub, auth_time: authTime } = payload as Record<string, unknown>;
+    return {
+      sub: typeof sub === "string" ? sub : undefined,
+      auth_time: typeof authTime === "number" && Number.isFinite(authTime) ? authTime : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function exchangeCodeForToken(opts: {

@@ -61,7 +61,29 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", getExternalBaseUrl(request)));
   }
   const session = await getSession();
+  // Browsers send `Sec-Fetch-Site` only to a trustworthy origin (https, or
+  // localhost). On a plain-http install it is absent, so a page anywhere that
+  // navigates here with `Referrer-Policy: no-referrer` arrives with no
+  // Origin, no Referer and no label — exactly like the layout's own redirect —
+  // and the SameSite=Lax cookie rides the top-level GET: it signed the admin
+  // out on every device, as often as the page cared to.
+  //
+  // So a session that is still VALID is signed out by this GET only when the
+  // request shows where it came from: a matching Origin or Referer (checked
+  // above when present), or the browser's own `same-origin` / `none`. The one
+  // caller that sends none of them is the layout, and it redirects here only
+  // for a session `getSession()` has already refused — which the branch below
+  // still clears. The Sign Out button is a POST.
+  const showsItsOrigin =
+    request.headers.has("origin") ||
+    request.headers.has("referer") ||
+    fetchSite === "same-origin" ||
+    fetchSite === "none";
+  if (session.isLoggedIn && !showsItsOrigin) {
+    return NextResponse.redirect(new URL("/", getExternalBaseUrl(request)));
+  }
   await revokeAllSessions(session.userId);
+  if (session.userId) apiLogger.info("Auth", "Signed out — every session revoked", auditMeta(request));
   session.destroy();
   return NextResponse.redirect(new URL("/login", getExternalBaseUrl(request)));
 }

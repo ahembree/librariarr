@@ -8,9 +8,18 @@ import {
   discoverOidc,
   exchangeCodeForToken,
   fetchUserInfo,
+  readIdTokenClaims,
   resolveRedirectUri,
+  type OidcIdTokenClaims,
   type OidcUserInfo,
 } from "@/lib/sso/oidc-client";
+import {
+  OIDC_REAUTH_ALLOW_UNVERIFIED_ENV,
+  allowsUnverifiedOidcReauth,
+  clearOidcHandshake,
+  isOidcHandshakeFresh,
+  reauthFreshness,
+} from "@/lib/sso/handshake";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
 import { auditMeta } from "@/lib/auth/audit";
@@ -92,9 +101,7 @@ export async function GET(request: NextRequest) {
     // Clears only a confirmation's own handshake — another flow's belongs to
     // that flow's callback.
     if (session.oidcFlow === "reauth") {
-      session.oidcState = undefined;
-      session.oidcVerifier = undefined;
-      session.oidcFlow = undefined;
+      clearOidcHandshake(session);
       await session.save();
     }
     return redirectAfterReauth(request, {
@@ -136,22 +143,29 @@ export async function GET(request: NextRequest) {
 
   const expectedState = session.oidcState;
   const verifier = session.oidcVerifier;
+  const startedAt = session.oidcStartedAt;
   const linkFlowUserId = isLinkFlow ? session.userId! : null;
   const reauthUserId = isReauthFlow ? session.userId! : null;
 
   // Always wipe the transient handshake fields, even if the exchange fails —
   // they're single-use and shouldn't outlive the redirect they were issued for.
-  session.oidcState = undefined;
-  session.oidcVerifier = undefined;
-  session.oidcFlow = undefined;
+  clearOidcHandshake(session);
   await session.save();
 
   if (!expectedState || !verifier || !statesEqual(state, expectedState)) {
     apiLogger.warn("Auth", "OIDC state mismatch on callback", auditMeta(request));
     return fail("state_mismatch");
   }
+  // A handshake is good for ten minutes (handshake.ts): one abandoned and
+  // completed later — from a copy of the cookie it was left in — is refused
+  // with the code every flow already explains as "expired, try again".
+  if (!isOidcHandshakeFresh(startedAt)) {
+    apiLogger.warn("Auth", "OIDC callback refused: the sign-in was started more than ten minutes ago", auditMeta(request));
+    return fail("state_mismatch");
+  }
 
   let userInfo: OidcUserInfo;
+  let idTokenClaims: OidcIdTokenClaims | null;
   try {
     const discovery = await discoverOidc(settings.oidcIssuer!);
     const tokens = await exchangeCodeForToken({
@@ -163,6 +177,7 @@ export async function GET(request: NextRequest) {
       codeVerifier: verifier,
     });
     userInfo = await fetchUserInfo(discovery, tokens.access_token);
+    idTokenClaims = readIdTokenClaims(tokens.id_token);
   } catch (error) {
     apiLogger.error("Auth", "OIDC code exchange failed", {
       error: String(error),
@@ -188,6 +203,31 @@ export async function GET(request: NextRequest) {
         `OIDC re-authentication refused: sub=${subject} is not the identity linked to this account`
       );
       return redirectAfterReauth(request, { error: "not_linked" });
+    }
+    // The subject matching proves who the provider has a session for. Whether
+    // they authenticated just now is the ID token's `auth_time` (see
+    // `reauthFreshness`): the `prompt=login` that asked for it went through
+    // the browser and can be dropped from the URL. A token naming someone else
+    // than the userinfo answer is not this sign-in's.
+    const freshness =
+      idTokenClaims?.sub !== undefined && idTokenClaims.sub !== subject
+        ? "stale"
+        : reauthFreshness(idTokenClaims?.auth_time, startedAt);
+    if (freshness === "stale") {
+      apiLogger.warn(
+        "Auth",
+        "OIDC re-authentication refused: the identity provider answered from an existing session instead of signing the user in again",
+        auditMeta(request),
+      );
+      return redirectAfterReauth(request, { error: "not_fresh" });
+    }
+    if (freshness === "unknown" && !allowsUnverifiedOidcReauth()) {
+      apiLogger.warn(
+        "Auth",
+        `OIDC re-authentication refused: the identity provider did not say when the user signed in (no auth_time in the ID token). Set ${OIDC_REAUTH_ALLOW_UNVERIFIED_ENV}=true if it cannot.`,
+        auditMeta(request),
+      );
+      return redirectAfterReauth(request, { error: "not_fresh" });
     }
     attempt.succeeded();
     session.authenticatedAt = Date.now();
