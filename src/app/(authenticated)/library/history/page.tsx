@@ -574,35 +574,45 @@ export default function HistoryPage() {
   // Token guards against a stale slow response landing after a quick
   // filter/page flip and overwriting the current result set.
   const reqToken = useRef(0);
+  // The query (filters, sort and page) whose rows are on screen. Re-reading it
+  // (a `watch-history:updated` event, a stream reconnect, the end of Refresh)
+  // keeps the rows mounted while the request runs: the skeleton is shorter
+  // than the table, so swapping it in sent the page back to the top. Only a
+  // different query shows it.
+  const shownQueryRef = useRef<string | null>(null);
 
   const fetchHistory = useCallback(async (fetchPage: number) => {
     const token = ++reqToken.current;
-    setLoading(true);
+    const params = new URLSearchParams({
+      page: String(fetchPage),
+      limit: String(PAGE_SIZE),
+      sortBy,
+      sortOrder,
+    });
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (selectedServerId !== "all") params.set("serverId", selectedServerId);
+    if (selectedTypes.size > 0) params.set("type", [...selectedTypes].join("|"));
+    if (selectedUsernames.size > 0) params.set("username", [...selectedUsernames].join("|"));
+    if (selectedPlatforms.size > 0) params.set("platform", [...selectedPlatforms].join("|"));
+    if (selectedResolutions.size > 0) params.set("resolution", [...selectedResolutions].join("|"));
+    const query = params.toString();
+    const quiet = shownQueryRef.current === query;
+    if (!quiet) setLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: String(fetchPage),
-        limit: String(PAGE_SIZE),
-        sortBy,
-        sortOrder,
-      });
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (selectedServerId !== "all") params.set("serverId", selectedServerId);
-      if (selectedTypes.size > 0) params.set("type", [...selectedTypes].join("|"));
-      if (selectedUsernames.size > 0) params.set("username", [...selectedUsernames].join("|"));
-      if (selectedPlatforms.size > 0) params.set("platform", [...selectedPlatforms].join("|"));
-      if (selectedResolutions.size > 0) params.set("resolution", [...selectedResolutions].join("|"));
-
-      const res = await fetch(`/api/media/history?${params}`);
+      const res = await fetch(`/api/media/history?${query}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       if (token !== reqToken.current) return;
+      shownQueryRef.current = query;
       setItems(data.items || []);
       setTotalCount(data.pagination?.totalCount ?? 0);
       setPage(fetchPage);
       setUsernames(data.usernames ?? []);
       setPlatforms(data.platforms ?? []);
     } catch {
-      if (token !== reqToken.current) return;
+      // A failed re-read of the rows on screen leaves them there.
+      if (token !== reqToken.current || quiet) return;
+      shownQueryRef.current = null;
       setItems([]);
       setTotalCount(0);
     } finally {

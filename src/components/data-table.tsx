@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useColumnResize } from "@/hooks/use-column-resize";
@@ -9,6 +9,9 @@ import { arrangePinnedColumns, parseStoredPins, togglePinnedId } from "@/lib/tab
 import { rowSurfaceClass } from "@/lib/table-row-surface";
 import { horizontalThumb, scrollPerThumbPixel } from "@/lib/scroll-thumb";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
+
+/** No rows, before a table's scroll element is known (see `scrollReady`). */
+const NO_ROWS: readonly VirtualItem[] = [];
 
 export interface DataTableColumn<T> {
   id: string;
@@ -252,6 +255,13 @@ export function DataTable<T>({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Whether the walk below has found the scroll element. Until it has, the
+  // table asks the virtualizer for no rows: that is the call that reads (and
+  // keeps) its starting offset, which it writes to the element on attaching,
+  // and read before the element is known it was 0 — a table mounting mid-page
+  // threw the page to the top. The first render draws the spacer instead, as
+  // tall as the list, so nothing collapses meanwhile.
+  const [scrollReady, setScrollReady] = useState(false);
 
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor
@@ -267,6 +277,8 @@ export function DataTable<T>({
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see `scrollReady`
+    setScrollReady(true);
   }, []);
 
   // Where the table starts in the scroll element's content. Re-measured
@@ -393,6 +405,14 @@ export function DataTable<T>({
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    // Read when the virtualizer first needs its offset, which this table puts
+    // off until the layout effect above has found the element (see
+    // `scrollReady`), so it is that element's own offset, never a guess.
+    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
     estimateSize: () => ROW_HEIGHT,
     // Rows are measured: a cell stacking two lines (the Query title column's
     // title and episode line) makes a row taller than the estimate, and
@@ -413,7 +433,7 @@ export function DataTable<T>({
     return () => { ref.current = null; };
   }, [scrollToIndexRef, virtualizer]);
 
-  const virtualRows = virtualizer.getVirtualItems();
+  const virtualRows = scrollReady ? virtualizer.getVirtualItems() : NO_ROWS;
   const firstRendered = virtualRows.length > 0 ? virtualRows[0].index : -1;
   const lastRendered = virtualRows.length > 0 ? virtualRows[virtualRows.length - 1].index : -1;
   useEffect(() => {
@@ -421,9 +441,12 @@ export function DataTable<T>({
   }, [onVisibleRange, firstRendered, lastRendered]);
   const effectiveMargin = virtualizer.options.scrollMargin ?? 0;
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start - effectiveMargin : 0;
+  // Before the scroll box is measured no row is in range: the spacer then
+  // stands for the whole list, so the table never draws 0px tall for a render
+  // (the page around it was clamped to its top when it mounted).
   const paddingBottom = virtualRows.length > 0
     ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
-    : 0;
+    : virtualizer.getTotalSize();
 
   // Named in a visible note, not a tooltip: a touch screen cannot hover, and
   // paused pins happen mostly on phones.

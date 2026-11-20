@@ -1,7 +1,7 @@
 "use client";
 
 import React, { memo, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { QualityChip } from "@/components/quality-chips";
 import {
   audioProfileChipLabel,
@@ -42,6 +42,9 @@ import { intentHandlers } from "@/lib/intent-prefetch";
 import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 import { rowSurfaceClass, type RowTone } from "@/lib/table-row-surface";
 import { RowToneChip } from "@/components/row-tone-chip";
+
+/** No rows, before a table's scroll element is known (see `scrollReady`). */
+const NO_ROWS: readonly VirtualItem[] = [];
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -456,6 +459,13 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollElementRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
+  // Whether the walk below has found the scroll element. Until it has, the
+  // table asks the virtualizer for no rows: that is the call that reads (and
+  // keeps) its starting offset, which it writes to the element on attaching,
+  // and read before the element is known it was 0 — a table mounting mid-page
+  // threw the page to the top. The first render draws the spacer instead, as
+  // tall as the list, so nothing collapses meanwhile.
+  const [scrollReady, setScrollReady] = useState(false);
 
   useLayoutEffect(() => {
     // Walk up the DOM to find the nearest scrollable ancestor (overflow-y: auto/scroll)
@@ -472,6 +482,8 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     if (!scrollElementRef.current) {
       scrollElementRef.current = document.querySelector<HTMLElement>("main");
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see `scrollReady`
+    setScrollReady(true);
   }, []);
 
   const recalcScrollMargin = useCallback(() => {
@@ -503,12 +515,20 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    // Read when the virtualizer first needs its offset, which this table puts
+    // off until the layout effect above has found the element (see
+    // `scrollReady`), so it is that element's own offset, never a guess.
+    initialOffset: () => scrollElementRef.current?.scrollTop ?? 0,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
     scrollMargin,
   });
 
-  const renderedRows = virtualizer.getVirtualItems();
+  const renderedRows = scrollReady ? virtualizer.getVirtualItems() : NO_ROWS;
   const firstRendered = renderedRows.length > 0 ? renderedRows[0].index : -1;
   const lastRendered = renderedRows.length > 0 ? renderedRows[renderedRows.length - 1].index : -1;
   useEffect(() => {
@@ -746,8 +766,17 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
           </TableHeader>
           <TableBody>
             {(() => {
-              const virtualRows = virtualizer.getVirtualItems();
-              if (virtualRows.length === 0) return null;
+              const virtualRows = renderedRows;
+              // Before the scroll box is measured no row is in range: a spacer
+              // stands for the whole list, so the table never draws 0px tall
+              // for a render (the page around it was clamped to its top).
+              if (virtualRows.length === 0) {
+                return virtualizer.getTotalSize() > 0 ? (
+                  <tr aria-hidden="true">
+                    <td colSpan={totalColumnCount} style={{ height: virtualizer.getTotalSize(), padding: 0, border: "none" }} />
+                  </tr>
+                ) : null;
+              }
 
               const scrollMargin = virtualizer.options.scrollMargin ?? 0;
               const paddingTop = virtualRows[0].start - scrollMargin;
