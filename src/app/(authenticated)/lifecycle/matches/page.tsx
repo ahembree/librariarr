@@ -57,6 +57,7 @@ import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
 import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { useListPositionMemory, type ListPositionMemory } from "@/hooks/use-list-position-memory";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
@@ -114,6 +115,8 @@ interface MatchItemsViewProps {
   getHex: (category: ChipColorCategory, value: string) => string;
   show: (section: "badges" | "metadata", key: string) => boolean;
   columnVisibility: Record<string, boolean>;
+  /** The page's list positions, shared by the two views (`useListPositionMemory`). */
+  positionMemory: ListPositionMemory;
 }
 
 /** How a match names its item: the show or artist with the member's own title. */
@@ -251,6 +254,7 @@ function MatchItemsTableView({
   excludingItems,
   exceptedItemIds,
   columnVisibility,
+  positionMemory,
 }: MatchItemsViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -272,8 +276,24 @@ function MatchItemsTableView({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollContainerRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollContainerRef.current?.scrollTop ?? 0,
     estimateSize: () => 45,
     overscan: 10,
+  });
+
+  // A switch to the card view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId: ruleSet.id,
+    getScrollElement: () => scrollContainerRef.current,
+    indexAtOffset: (offset) => virtualizer.getVirtualItemForOffset(offset)?.index ?? -1,
+    keyAt: (index) => items[index]?.id,
+    indexOfKey: (key) => items.findIndex((item) => item.id === key),
+    scrollBoxToIndex: (index) => virtualizer.scrollToIndex(index, { align: "center" }),
   });
 
   function resizeHandle(columnId: string) {
@@ -508,6 +528,7 @@ function MatchItemsCardView({
   exceptedItemIds,
   getHex,
   show,
+  positionMemory,
 }: MatchItemsViewProps) {
   const { columns } = useCardSize();
   const grid = useVirtualPosterGrid({
@@ -517,6 +538,18 @@ function MatchItemsCardView({
     contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
     scrollElement: "own",
     overscan: 5,
+  });
+
+  // A switch to the table view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId: ruleSet.id,
+    getScrollElement: () => grid.scrollElement,
+    ready: grid.scrollElement !== null,
+    indexAtOffset: grid.indexAtOffset,
+    keyAt: (index) => items[index]?.id,
+    indexOfKey: (key) => items.findIndex((item) => item.id === key),
+    scrollBoxToIndex: (index) => grid.scrollToIndex(index),
   });
 
   const renderCard = useCallback(
@@ -585,6 +618,8 @@ export default function RuleMatchesPage() {
   const [loading, setLoading] = useState(true);
   const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">("matches-view-mode", "table");
+  // Each rule set's place in its list, carried across a table/cards switch.
+  const [listPositions] = useState<ListPositionMemory>(() => new Map());
   const [runningRules, { add: markRunning, remove: unmarkRunning }] = useSetState<string>();
   const [reEvalRunning, setReEvalRunning] = useState(false);
   const { size, setSize } = useCardSize();
@@ -911,6 +946,7 @@ export default function RuleMatchesPage() {
                   getHex={getHex}
                   show={show}
                   columnVisibility={columnVisibility}
+                  positionMemory={listPositions}
                 />
               ) : (
                 <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">

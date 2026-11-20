@@ -1902,8 +1902,14 @@ function ProfileFormatsTab({
   const [attachedQuery, setAttachedQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // The instance whose profiles are on screen. Re-reading them after an
+  // action keeps the list mounted while the request runs: the spinner
+  // unmounts it and sends the scroll back to the top. Only the first load
+  // (and a different instance) shows it.
+  const shownInstanceRef = useRef<string | null>(null);
   const load = useCallback(async () => {
-    setLoading(true);
+    const instanceKey = `${serviceType}:${instanceId}`;
+    if (shownInstanceRef.current !== instanceKey) setLoading(true);
     try {
       const [pRes, aRes] = await Promise.all([
         fetch(`/api/tools/trash/profiles?serviceType=${serviceType}&instanceId=${instanceId}`),
@@ -1918,6 +1924,7 @@ function ProfileFormatsTab({
           new Set<string>((pData.instanceFormatNames ?? []).map((n: string) => normalizeCfName(n))),
         );
         setError(null);
+        shownInstanceRef.current = instanceKey;
       } else {
         setError(pData.error ?? "Failed to load quality profiles");
       }
