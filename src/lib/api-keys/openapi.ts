@@ -242,7 +242,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Library",
     summary: "Search by title",
     query: [
-      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters.`, schema: { type: "string", maxLength: MAX_SEARCH_QUERY_LENGTH }, required: true },
+      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters. Matches anywhere in a title, ignoring case; starting it with a double quote matches the whole title (\`"ER"\`, the closing quote optional).`, schema: { type: "string", maxLength: MAX_SEARCH_QUERY_LENGTH }, required: true },
       { name: "type", description: "Library type. Required unless `types` is given; the answer is `{ items }`.", schema: MEDIA_TYPE },
       {
         name: "types",
