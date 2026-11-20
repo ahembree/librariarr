@@ -79,4 +79,58 @@ describe("SearchPalette", () => {
     });
     expect(screen.getByText(/No matches for/)).toBeTruthy();
   });
+  it("sends a quoted query as typed, so the route matches the exact title", async () => {
+    render(createElement(SearchPalette, { open: true, onOpenChange: () => {} }));
+    expect(screen.getByText(/quotes for an exact title/i)).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/search movies/i), { target: { value: '"ER"' } });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    const url = new URL(String(fetchMock.mock.calls[0][0]), "http://x");
+    expect(url.searchParams.get("q")).toBe('"ER"');
+  });
+
+  describe("on a phone", () => {
+    /** A visual viewport that a test can resize, as the iOS keyboard does. */
+    function stubVisualViewport(height: number, offsetTop = 0) {
+      const viewport = Object.assign(new EventTarget(), { height, offsetTop });
+      vi.stubGlobal("visualViewport", viewport);
+      return viewport;
+    }
+
+    it("sizes the palette to the visible viewport, and follows it as the keyboard opens", async () => {
+      const viewport = stubVisualViewport(800);
+      render(createElement(SearchPalette, { open: true, onOpenChange: () => {} }));
+      const content = document.querySelector<HTMLElement>("[data-slot=dialog-content]")!;
+      expect(content.style.getPropertyValue("--palette-height")).toBe("800px");
+      expect(content.style.getPropertyValue("--palette-top")).toBe("0px");
+
+      // The keyboard slides up over the bottom of the screen.
+      await act(async () => {
+        Object.assign(viewport, { height: 420, offsetTop: 12 });
+        viewport.dispatchEvent(new Event("resize"));
+      });
+      expect(content.style.getPropertyValue("--palette-height")).toBe("420px");
+      expect(content.style.getPropertyValue("--palette-top")).toBe("12px");
+    });
+
+    it("puts the keyboard away when the results are dragged", async () => {
+      render(createElement(SearchPalette, { open: true, onOpenChange: () => {} }));
+      const input = screen.getByPlaceholderText(/search movies/i);
+      input.focus();
+      expect(document.activeElement).toBe(input);
+      fireEvent.touchMove(document.querySelector("[data-slot=command-list]")!, { touches: [{ clientX: 10, clientY: 10 }], changedTouches: [{ clientX: 10, clientY: 10 }] });
+      expect(document.activeElement).not.toBe(input);
+      expect((input as HTMLInputElement).value).toBe("");
+    });
+
+    it("closes from Cancel, since a phone has no Esc and nothing outside to tap", () => {
+      const onOpenChange = vi.fn();
+      render(createElement(SearchPalette, { open: true, onOpenChange }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+  });
 });

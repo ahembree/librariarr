@@ -485,4 +485,88 @@ describe("GET /api/media/search", () => {
       await expectJson(await search({ q: "night", types: "" }), 400);
     });
   });
+  describe('an exact title: q starting with a double quote ("ER")', () => {
+    async function library() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+      const shows = await createTestLibrary(server.id, { type: "SERIES" });
+      const music = await createTestLibrary(server.id, { type: "MUSIC" });
+      for (const title of ["ER", "Heroes", "Very Bad Things", "er", "100%"]) {
+        await createTestMediaItem(movies.id, { type: "MOVIE", title });
+      }
+      await createTestMediaItem(shows.id, { type: "SERIES", title: "Pilot", parentTitle: "ER", seasonNumber: 1, episodeNumber: 1 });
+      await createTestMediaItem(shows.id, { type: "SERIES", title: "Pilot", parentTitle: "Mercy Street", seasonNumber: 1, episodeNumber: 1 });
+      await createTestMediaItem(music.id, { type: "MUSIC", title: "Song", parentTitle: "Cher", albumTitle: "Believe" });
+      await createTestMediaItem(music.id, { type: "MUSIC", title: "Song", parentTitle: "Her", albumTitle: "Her" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+    }
+    const titles = async (searchParams: Record<string, string>) =>
+      (await expectJson<{ items: { title: string; scope: string }[] }>(
+        await callRoute(GET, { url: "/api/media/search", searchParams }),
+        200,
+      )).items.map((i) => `${i.scope}:${i.title}`);
+
+    it("matches movies whose whole title is the text, in any case, not those containing it", async () => {
+      await library();
+      expect((await titles({ q: "ER", type: "MOVIE" })).sort()).toEqual(
+        ["individual:ER", "individual:Heroes", "individual:Very Bad Things", "individual:er"].sort(),
+      );
+      expect((await titles({ q: '"ER"', type: "MOVIE" })).sort()).toEqual(["individual:ER", "individual:er"].sort());
+    });
+
+    it("needs no closing quote, so results follow the query as it is typed", async () => {
+      await library();
+      expect((await titles({ q: '"ER', type: "MOVIE" })).sort()).toEqual(["individual:ER", "individual:er"].sort());
+      expect(await titles({ q: '"E', type: "MOVIE" })).toEqual([]);
+    });
+
+    it("matches a show by its whole name with seriesScope", async () => {
+      await library();
+      expect((await titles({ q: "er", type: "SERIES", seriesScope: "true" })).sort()).toEqual(
+        ["series:ER", "series:Mercy Street"].sort(),
+      );
+      expect(await titles({ q: '"er"', type: "SERIES", seriesScope: "true" })).toEqual(["series:ER"]);
+    });
+
+    it("matches an artist and an album by their whole names with musicScope", async () => {
+      await library();
+      expect(await titles({ q: '"her"', type: "MUSIC", musicScope: "true" })).toEqual(["artist:Her"]);
+      expect(await titles({ q: '"believe"', type: "MUSIC", musicScope: "true" })).toEqual(["album:Believe"]);
+    });
+
+    it("matches an episode's own title or its show's name without seriesScope", async () => {
+      await library();
+      expect(await titles({ q: '"pilot"', type: "SERIES" })).toHaveLength(2);
+      expect(await titles({ q: '"er"', type: "SERIES" })).toEqual(["individual:Pilot"]);
+    });
+
+    it("takes a % or _ in the text literally", async () => {
+      await library();
+      expect(await titles({ q: '"100%"', type: "MOVIE" })).toEqual(["individual:100%"]);
+      expect(await titles({ q: '"E_"', type: "MOVIE" })).toEqual([]);
+    });
+
+    it("answers nothing for quotes alone, as for an empty query", async () => {
+      await library();
+      expect(await titles({ q: '""', type: "MOVIE" })).toEqual([]);
+      expect(
+        await expectJson(await callRoute(GET, { url: "/api/media/search", searchParams: { q: '"', types: "MOVIE,SERIES" } }), 200),
+      ).toEqual({ results: { MOVIE: [], SERIES: [] } });
+    });
+
+    it("applies to every type of a types= request, as the command palette sends it", async () => {
+      await library();
+      const body = await expectJson<{ results: Record<string, { title: string }[]> }>(
+        await callRoute(GET, {
+          url: "/api/media/search",
+          searchParams: { q: '"ER"', types: "MOVIE,SERIES,MUSIC", seriesScope: "true", musicScope: "true" },
+        }),
+        200,
+      );
+      expect(body.results.MOVIE.map((i) => i.title).sort()).toEqual(["ER", "er"].sort());
+      expect(body.results.SERIES.map((i) => i.title)).toEqual(["ER"]);
+      expect(body.results.MUSIC).toEqual([]);
+    });
+  });
 });

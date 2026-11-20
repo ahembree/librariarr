@@ -45,6 +45,11 @@ describe("useScrollToTop", () => {
     inner.style.overflowY = "auto";
     const innerScroll = vi.fn();
     inner.scrollTo = innerScroll as unknown as HTMLElement["scrollTo"];
+    // happy-dom does no layout: give both boxes the geometry of a page whose
+    // own scroll box fills <main> (`h-full`), which is what makes it the page's.
+    Object.defineProperty(main, "clientHeight", { value: 600 });
+    main.getBoundingClientRect = () => ({ top: 56, height: 600 }) as DOMRect;
+    inner.getBoundingClientRect = () => ({ top: 56, height: 600 }) as DOMRect;
     wrapper.append(inner);
     main.append(wrapper);
     const { rerender } = renderHook(() => useScrollToTop());

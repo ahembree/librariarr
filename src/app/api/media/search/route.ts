@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
-import { escapeLike } from "@/lib/filters/escape-like";
+import { parseTitleSearch, titleSearchFilter, titleSearchPattern, type TitleSearch } from "@/lib/search/title-search";
 import { Prisma } from "@/generated/prisma/client";
 import { MAX_SEARCH_QUERY_LENGTH } from "@/lib/api-keys/limits";
 
@@ -26,6 +26,10 @@ const SEARCH_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
 /**
  * `?q=&type=` searches one media type and answers `{ items }`.
  *
+ * `q` matches anywhere in a title, case-insensitively; a `q` that starts with
+ * a double quote is an exact title (`"ER"`: ER, not Heroes), its closing quote
+ * optional (`parseTitleSearch`).
+ *
  * `?q=&types=MOVIE,SERIES,MUSIC` searches several in one request, side by side,
  * and answers `{ results: { MOVIE: [...], SERIES: [...], MUSIC: [...] } }` —
  * each list exactly what `type=` gives for it with the same `seriesScope` /
@@ -35,9 +39,10 @@ const SEARCH_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
  */
 export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
-  // Trimmed for the empty check; every `contains` below gets `escapeLike(q)`
-  // because `contains` is a LIKE pattern Prisma does not escape — a `%` or
-  // `_` in `q` is otherwise a wildcard (see escape-like.ts for the live case).
+  // Trimmed for the empty check; every match below goes through
+  // `titleSearchPattern` / `titleSearchFilter`, which escape it: a LIKE
+  // pattern Prisma does not escape would take a `%` or `_` in `q` for a
+  // wildcard (see escape-like.ts for the live case).
   const q = searchParams.get("q")?.trim();
   const typesParam = searchParams.get("types");
   const type = searchParams.get("type");
@@ -58,26 +63,29 @@ export const GET = withSession(async (session, request: NextRequest) => {
     if (types.length === 0 || types.some((t) => !SEARCH_TYPES.has(t))) {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
     }
+    const search = parseTitleSearch(q ?? "");
     const lists = await Promise.all(
-      types.map((t) => (q ? searchType(session.userId, q, t as SearchType, seriesScope, musicScope) : [])),
+      types.map((t) => (search.text ? searchType(session.userId, search, t as SearchType, seriesScope, musicScope) : [])),
     );
     return NextResponse.json({ results: Object.fromEntries(types.map((t, i) => [t, lists[i]])) });
   }
 
-  if (!q || q.length === 0) {
+  // `""` (or a lone quote) is an exact search for nothing: no results, as an empty `q`.
+  const search = parseTitleSearch(q ?? "");
+  if (!search.text) {
     return NextResponse.json({ items: [] });
   }
   if (!type || !SEARCH_TYPES.has(type)) {
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });
   }
 
-  return NextResponse.json({ items: await searchType(session.userId, q, type as SearchType, seriesScope, musicScope) });
+  return NextResponse.json({ items: await searchType(session.userId, search, type as SearchType, seriesScope, musicScope) });
 });
 
-/** One media type's matches for `q`, as `GET ?type=` lists them. */
+/** One media type's matches for `search`, as `GET ?type=` lists them. */
 async function searchType(
   userId: string,
-  q: string,
+  search: TitleSearch,
   type: SearchType,
   seriesScope: boolean,
   musicScope: boolean,
@@ -94,7 +102,7 @@ async function searchType(
     // matching artist or album never came back at all, and every count was the
     // number of tracks that landed in the window. A copy on another server is
     // the same track, so tracks are counted as `itemCount` counts them.
-    const pattern = escapeLike(q);
+    const pattern = titleSearchPattern(search);
     const [artistGroups, albumGroups] = await Promise.all([
       prisma.$queryRaw<{ id: string; n: number }[]>`
         SELECT (array_agg(m.id ORDER BY m."albumTitle", m.title, m.id))[1] AS id, ${itemCount} AS n
@@ -105,7 +113,7 @@ async function searchType(
           JOIN "Library" l ON l.id = mi."libraryId"
           JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
           WHERE ms."userId" = ${userId} AND mi.type = 'MUSIC'::"LibraryType"
-            AND mi."parentTitle" ILIKE '%' || ${pattern} || '%'
+            AND mi."parentTitle" ILIKE ${pattern}
         ) m
         GROUP BY m."parentTitle"
         ORDER BY m."parentTitle"
@@ -119,7 +127,7 @@ async function searchType(
           JOIN "Library" l ON l.id = mi."libraryId"
           JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
           WHERE ms."userId" = ${userId} AND mi.type = 'MUSIC'::"LibraryType"
-            AND mi."albumTitle" ILIKE '%' || ${pattern} || '%'
+            AND mi."albumTitle" ILIKE ${pattern}
         ) m
         GROUP BY m."parentTitle", m."albumTitle"
         ORDER BY m."parentTitle" NULLS FIRST, m."albumTitle"
@@ -210,7 +218,7 @@ async function searchType(
         JOIN "Library" l ON l.id = mi."libraryId"
         JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
         WHERE ms."userId" = ${userId} AND mi.type = ${type}::"LibraryType"
-          AND mi."parentTitle" ILIKE '%' || ${escapeLike(q)} || '%'
+          AND mi."parentTitle" ILIKE ${titleSearchPattern(search)}
       ) m
       GROUP BY m.g
       ORDER BY MIN(LOWER(m."parentTitle")), m.g
@@ -241,12 +249,12 @@ async function searchType(
   const where: Prisma.MediaItemWhereInput = { ...ownershipFilter };
 
   if (type === "MOVIE") {
-    where.title = { contains: escapeLike(q), mode: "insensitive" };
+    where.title = titleSearchFilter(search);
   } else {
     // Series/music without scope: search by title and parentTitle
     where.OR = [
-      { title: { contains: escapeLike(q), mode: "insensitive" } },
-      { parentTitle: { contains: escapeLike(q), mode: "insensitive" } },
+      { title: titleSearchFilter(search) },
+      { parentTitle: titleSearchFilter(search) },
     ];
   }
 

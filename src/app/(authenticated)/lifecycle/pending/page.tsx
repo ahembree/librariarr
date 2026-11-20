@@ -59,6 +59,7 @@ import { consumeProgressStream } from "@/lib/progress/client";
 import type { ActionRunDetails } from "@/lib/lifecycle/action-report";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { useListPositionMemory, type ListPositionMemory } from "@/hooks/use-list-position-memory";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
@@ -206,6 +207,8 @@ function VirtualizedActionTable({
   onExclude,
   onItemClick,
   isDeletedRuleSet,
+  positionMemory,
+  listId,
 }: {
   items: ActionItem[];
   ruleSetId: string;
@@ -222,6 +225,9 @@ function VirtualizedActionTable({
   onExclude: (action: ActionItem) => void;
   onItemClick: (action: ActionItem) => void;
   isDeletedRuleSet?: boolean;
+  /** The page's list positions, shared with the card view (`useListPositionMemory`). */
+  positionMemory: ListPositionMemory;
+  listId: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedErrors, { toggle: toggleError }] = useSetState<string>();
@@ -229,17 +235,37 @@ function VirtualizedActionTable({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
+    // The virtualizer writes this offset to the scroll element when it attaches
+    // (default 0). Starting from where the element already is keeps a list that
+    // mounts mid-page (a first Run Query or Preview, a re-read) from throwing
+    // the page back to the top (tests/unit/components/virtualizer-initial-offset.test.ts).
+    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
     estimateSize: () => 52,
     overscan: 10,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
+  // A switch to the card view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId,
+    getScrollElement: () => scrollRef.current,
+    indexAtOffset: (offset) => virtualizer.getVirtualItemForOffset(offset)?.index ?? -1,
+    keyAt: (index) => items[index]?.id,
+    indexOfKey: (key) => items.findIndex((a) => a.id === key),
+    scrollBoxToIndex: (index) => virtualizer.scrollToIndex(index, { align: "center" }),
+  });
+
   const virtualRows = virtualizer.getVirtualItems();
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  // Before the box is measured no row is in range: the spacer then stands for
+  // the whole list, so the table never draws 0px tall for a render (a phone,
+  // where the box grows with the list and the page scrolls, was clamped to
+  // its top when the table mounted).
   const paddingBottom =
     virtualRows.length > 0
       ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
-      : 0;
+      : virtualizer.getTotalSize();
 
   return (
     <div className="rounded-lg border">
@@ -528,6 +554,8 @@ function PendingActionCardGrid({
   hold,
   onItemClick,
   exceptedItemIds,
+  positionMemory,
+  listId,
 }: {
   items: ActionItem[];
   ruleSetType: string;
@@ -536,6 +564,9 @@ function PendingActionCardGrid({
   /** Stable: the cards are memoised on it. */
   onItemClick: (action: ActionItem) => void;
   exceptedItemIds: ReadonlySet<string>;
+  /** The page's list positions, shared with the table view (`useListPositionMemory`). */
+  positionMemory: ListPositionMemory;
+  listId: string;
 }) {
   const { columns } = useCardSize();
   const { getHex } = useChipColors();
@@ -554,6 +585,18 @@ function PendingActionCardGrid({
     contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
     scrollElement: "own",
     overscan: 5,
+  });
+
+  // A switch to the table view and back keeps the list's place.
+  useListPositionMemory({
+    memory: positionMemory,
+    listId,
+    getScrollElement: () => grid.scrollElement,
+    ready: grid.scrollElement !== null,
+    indexAtOffset: grid.indexAtOffset,
+    keyAt: (index) => filteredItems[index]?.id,
+    indexOfKey: (key) => filteredItems.findIndex((a) => a.id === key),
+    scrollBoxToIndex: (index) => grid.scrollToIndex(index),
   });
 
   const heldReason = holdReasonOf(hold);
@@ -694,6 +737,8 @@ export default function PendingActionsPage() {
   );
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  // Each rule set's place in its list, carried across a table/cards switch.
+  const [listPositions] = useState<ListPositionMemory>(() => new Map());
   const { size: cardSize, setSize: setCardSize } = useCardSize();
   const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [executingRules, executingRuleActions] = useSetState<string>();
@@ -786,17 +831,37 @@ export default function PendingActionsPage() {
   // Completed while it loaded let it land second and fill the Completed tab
   // with pending rows — without their Execute buttons, which follow the tab.
   const actionsReqToken = useRef(0);
+  // The status tab whose listing is on screen. Re-reading it (after an
+  // Execute, a removal, a realtime event) keeps the rows mounted while the
+  // request runs: the spinner unmounts the list, which drops the page's and
+  // each rule set's scroll position back to the top. Only the first load and
+  // a tab switch show it.
+  const shownStatusRef = useRef<string | null>(null);
+  // A tab whose listing could not be read: shown as that, not as an empty tab.
+  const [listError, setListError] = useState(false);
   const fetchActions = useCallback(async () => {
     const token = ++actionsReqToken.current;
-    setLoading(true);
+    const quiet = shownStatusRef.current === statusFilter;
+    if (!quiet) setLoading(true);
     try {
       const params = new URLSearchParams({ status: statusFilter });
       const response = await fetch(`/api/lifecycle/actions?${params}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (token !== actionsReqToken.current) return;
       setGroups(data.groups || []);
+      setListError(false);
+      shownStatusRef.current = statusFilter;
     } catch (error) {
       console.error("Failed to fetch actions:", error);
+      // A failed re-read leaves the rows on screen. A failed read of another
+      // tab must not leave the previous tab's rows under its name (Pending
+      // rows with no Execute on Completed), nor claim the tab is empty.
+      if (token === actionsReqToken.current && !quiet) {
+        setGroups([]);
+        setListError(true);
+        shownStatusRef.current = null;
+      }
     } finally {
       if (token === actionsReqToken.current) setLoading(false);
     }
@@ -1140,6 +1205,18 @@ export default function PendingActionsPage() {
           <div className="flex justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
+        ) : listError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn't load actions"
+            description="The list could not be read. Try again in a moment."
+            action={
+              <Button variant="outline" size="sm" onClick={() => void fetchActions()}>
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Retry
+              </Button>
+            }
+          />
         ) : filteredGroups.length === 0 ? (
           <EmptyState
             icon={statusFilter === "FAILED" ? CheckCircle2 : Inbox}
@@ -1252,6 +1329,8 @@ export default function PendingActionsPage() {
                         onExclude={excludeItem}
                         onItemClick={openDetailPanel}
                         isDeletedRuleSet={group.ruleSet.deleted}
+                        positionMemory={listPositions}
+                        listId={`${statusFilter}:${group.ruleSet.id}`}
                       />
                     ) : (
                       <PendingActionCardGrid
@@ -1260,6 +1339,8 @@ export default function PendingActionsPage() {
                         hold={group.ruleSet}
                         onItemClick={openDetailPanel}
                         exceptedItemIds={exceptedItemIds}
+                        positionMemory={listPositions}
+                        listId={`${statusFilter}:${group.ruleSet.id}`}
                       />
                     )
                   ) : (

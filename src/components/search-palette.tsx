@@ -95,6 +95,31 @@ function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * On a phone the palette fills the part of the screen the keyboard leaves:
+ * `--palette-top` / `--palette-height` follow the visual viewport. iOS lays
+ * fixed elements out against the layout viewport and slides the keyboard over
+ * it, so a palette sized to the screen kept half its results under the
+ * keyboard, and a drag there panned the whole page instead of the list.
+ */
+function useVisualViewportBox(el: HTMLElement | null) {
+  useEffect(() => {
+    const viewport = typeof window === "undefined" ? undefined : window.visualViewport;
+    if (!viewport || !el) return;
+    const sync = () => {
+      el.style.setProperty("--palette-top", `${viewport.offsetTop}px`);
+      el.style.setProperty("--palette-height", `${viewport.height}px`);
+    };
+    sync();
+    viewport.addEventListener("resize", sync);
+    viewport.addEventListener("scroll", sync);
+    return () => {
+      viewport.removeEventListener("resize", sync);
+      viewport.removeEventListener("scroll", sync);
+    };
+  }, [el]);
+}
+
+/**
  * Global title search (sidebar pill / ⌘K): one query across movies,
  * grouped series, artists, and albums via the existing search API —
  * selecting a result jumps straight to its detail page.
@@ -106,12 +131,19 @@ export function SearchPalette({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The content element, as state: Radix's portal renders it a render after
+  // the dialog mounts, so an effect reading a ref on mount found nothing.
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
+  useVisualViewportBox(content);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Anchored near the top (palette convention) so the dialog grows
-          downward instead of jumping around center as results change */}
+          downward instead of jumping around center as results change. On a
+          phone (below sm) it fills the visible screen instead (see
+          `useVisualViewportBox`), under the status bar in the installed app. */}
       <DialogContent
-        className="top-[16%] translate-y-0 overflow-hidden p-0 sm:max-w-xl"
+        ref={setContent}
+        className="top-[16%] translate-y-0 overflow-hidden p-0 sm:max-w-xl max-sm:pt-[env(safe-area-inset-top)] max-sm:pb-[env(safe-area-inset-bottom)] max-sm:top-[var(--palette-top,0px)] max-sm:left-0 max-sm:flex max-sm:h-[var(--palette-height,100dvh)] max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:flex-col max-sm:rounded-none max-sm:border-0"
         showCloseButton={false}
       >
         <DialogHeader className="sr-only">
@@ -126,6 +158,14 @@ export function SearchPalette({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** A drag through the results puts the keyboard away (the input keeps its text). */
+function dismissKeyboard(event: React.TouchEvent<HTMLElement>) {
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement && event.currentTarget.closest("[cmdk-root]")?.contains(active)) {
+    active.blur();
+  }
 }
 
 function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
@@ -197,23 +237,34 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
   const totalResults =
     results.movies.length + results.series.length + results.artists.length + results.albums.length;
   const hasResults = totalResults > 0;
+  const showCount = hasQuery && hasResults && !loading;
 
   return (
     // Async results — disable cmdk's built-in filtering
     <Command
       shouldFilter={false}
-      className="**:data-[slot=command-input-wrapper]:h-[52px] **:data-[slot=command-input-wrapper]:gap-2.5 **:data-[slot=command-input-wrapper]:px-4 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.14em] [&_[cmdk-group-heading]]:text-faint [&_[cmdk-group]]:px-2 [&_[cmdk-item]]:gap-2.5 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-2.5"
+      className="max-sm:min-h-0 max-sm:flex-1 **:data-[slot=command-input-wrapper]:flex-1 **:data-[slot=command-input-wrapper]:border-b-0 **:data-[slot=command-input-wrapper]:h-[52px] **:data-[slot=command-input-wrapper]:gap-2.5 **:data-[slot=command-input-wrapper]:px-4 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.14em] [&_[cmdk-group-heading]]:text-faint [&_[cmdk-group]]:px-2 [&_[cmdk-item]]:gap-2.5 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-2.5"
     >
-      <CommandInput
-        placeholder="Search movies, series, artists, albums…"
-        value={query}
-        onValueChange={setQuery}
-        // The global *:focus-visible ring boxes the input awkwardly inside
-        // the dialog — focus is already unambiguous here, so suppress it.
-        // text-base below sm: anything under 16px makes iOS Safari zoom the
-        // whole page when the input focuses.
-        className="h-[52px] text-base focus-visible:shadow-none sm:text-[15px]"
-      />
+      <div className="flex items-center border-b">
+        <CommandInput
+          placeholder="Search movies, series, artists, albums…"
+          value={query}
+          onValueChange={setQuery}
+          // The global *:focus-visible ring boxes the input awkwardly inside
+          // the dialog — focus is already unambiguous here, so suppress it.
+          // text-base below sm: anything under 16px makes iOS Safari zoom the
+          // whole page when the input focuses.
+          className="h-[52px] text-base focus-visible:shadow-none sm:text-[15px]"
+        />
+        {/* A phone has no Esc and, full screen, nothing outside to tap. */}
+        <button
+          type="button"
+          onClick={() => onOpenChange(false)}
+          className="shrink-0 px-4 text-sm font-medium text-primary sm:hidden"
+        >
+          Cancel
+        </button>
+      </div>
       {/* Zero-height anchor: the activity bar pulses over the divider while
           fetching, with no layout shift in either state */}
       <div className="relative">
@@ -223,7 +274,13 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
           }`}
         />
       </div>
-      <CommandList className="max-h-[min(420px,60dvh)]">
+      {/* On a phone the list takes the height the input and footer leave,
+          keeps a drag at its ends from moving the page, and puts the keyboard
+          away once you drag it, so the results get the whole screen. */}
+      <CommandList
+        className="max-h-[min(420px,60dvh)] overscroll-y-contain max-sm:max-h-none max-sm:min-h-0 max-sm:flex-1"
+        onTouchMove={dismissKeyboard}
+      >
         {!hasQuery ? (
           <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
             <div className="grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-faint">
@@ -233,6 +290,9 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
               <p className="text-sm font-medium">Search your library</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Movies, series, artists, and albums — by title.
+              </p>
+              <p className="mt-1 text-xs text-faint">
+                Wrap it in quotes for an exact title: &quot;ER&quot;
               </p>
             </div>
           </div>
@@ -329,14 +389,17 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
         </CommandGroup>
       </CommandList>
 
-      {/* Keyboard hints + result count */}
-      <div className="flex items-center justify-between gap-3 border-t bg-surface-0/60 px-4 py-2">
+      {/* Keyboard hints + result count. A phone shows no key hints, so the
+          bar is left out there until it has a count to show. */}
+      <div
+        className={`flex items-center justify-between gap-3 border-t bg-surface-0/60 px-4 py-2 ${
+          showCount ? "" : "max-sm:hidden"
+        }`}
+      >
         <span className="font-mono text-[10.5px] text-faint">
-          {hasQuery && hasResults && !loading
-            ? `${totalResults} result${totalResults === 1 ? "" : "s"}`
-            : ""}
+          {showCount ? `${totalResults} result${totalResults === 1 ? "" : "s"}` : ""}
         </span>
-        <div className="flex items-center gap-3 text-[11px] text-faint">
+        <div className="flex items-center gap-3 text-[11px] text-faint max-sm:hidden">
           <span className="flex items-center gap-1.5">
             <Kbd>↑↓</Kbd> navigate
           </span>
