@@ -42,7 +42,26 @@ describe("createIntegrationHttp", () => {
       baseURL: "https://host/radarr",
       headers: { a: "b" },
       timeout: 1234,
+      // The key stays on the configured host (src/lib/http-credentials.ts).
+      allowAbsoluteUrls: false,
+      beforeRedirect: expect.any(Function),
     });
+  });
+
+  it("drops the API key on a redirect that leaves the configured origin, and keeps it within it", () => {
+    createIntegrationHttp("Radarr", "https://host/radarr", {}, { timeout: 1 });
+    const [config] = createSpy.mock.calls[0] as unknown as [
+      { beforeRedirect: (options: { href: string; headers: Record<string, string> }) => void },
+    ];
+    const { beforeRedirect } = config;
+
+    const elsewhere = { href: "https://auth.example.com/login", headers: { "X-Api-Key": "k", Accept: "application/json" } };
+    beforeRedirect(elsewhere);
+    expect(elsewhere.headers).toEqual({ Accept: "application/json" });
+
+    const same = { href: "https://host/radarr/api/v3/system/status", headers: { "X-Api-Key": "k" } };
+    beforeRedirect(same);
+    expect(same.headers).toEqual({ "X-Api-Key": "k" });
   });
 
   it("registers the retry before the IntegrationError conversion", () => {
