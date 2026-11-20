@@ -1,14 +1,17 @@
-import { gunzip } from "node:zlib";
+import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { withSharedSession } from "@/lib/auth/shared-session";
 import { appCache } from "@/lib/cache/memory-cache";
 import { LIST_RESPONSE_CACHE_PREFIX } from "@/lib/cache/list-response-prefix";
-import { acceptsGzip } from "@/lib/api/json-response";
 import { sortedQueryString } from "@/lib/sorted-query";
 
 const gunzipAsync = promisify(gunzip);
+const gzipAsync = promisify(gzip);
+
+/** zlib level for the kept bodies: lists compress 7–9× at any level, and 3 is the cheapest of those. */
+const STORE_GZIP_LEVEL = 3;
 
 /** As long as `appCache`'s own default: every change to the media set drops it anyway. */
 export const LIST_RESPONSE_CACHE_TTL_MS = 60_000;
@@ -39,12 +42,12 @@ export const LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES = 48 * 1024 * 1024;
 interface StoredResponse {
   status: number;
   headers: [string, string][];
+  /** The body, gzipped for keeping (lists compress 7–9×). */
   body: Uint8Array<ArrayBuffer>;
-  gzip: boolean;
 }
 
 /** Headers recomputed per answer rather than replayed from the stored one. */
-const PER_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "vary"]);
+const PER_RESPONSE_HEADERS = new Set(["content-encoding", "content-length"]);
 
 /**
  * The keys stored, oldest first, with each body's size, so the oldest can be
@@ -98,9 +101,10 @@ export function listCacheKey(name: string, url: string): string {
  * mutation that can change one goes through `invalidateMediaCaches()`, which
  * drops these (`LIST_RESPONSE_CACHE_PREFIX`), and the TTL bounds anything else.
  *
- * The handler always runs with gzip accepted and the compressed body is what
- * is kept (lists compress 7–9×); a caller that does not accept gzip gets it
- * decompressed. Concurrent identical requests share one run of the handler.
+ * The body is kept gzipped (lists compress 7–9×) and answered decompressed:
+ * Next.js compresses Route Handler responses on the way out and drops a
+ * handler's own `Content-Encoding` (see `jsonResponse`). Concurrent
+ * identical requests share one run of the handler.
  * Only a 200 under `LIST_RESPONSE_CACHE_MAX_BYTES` is kept; anything else is
  * passed on as the handler answered it. A request that is not signed in goes
  * straight to the handler, which refuses it as before.
@@ -121,14 +125,12 @@ export function withListResponseCache(
     const stored = await appCache.getOrSet<StoredResponse>(
       key,
       async () => {
-        const headers = new Headers(request.headers);
-        headers.set("accept-encoding", "gzip");
-        const response = await handler(new NextRequest(request.url, { headers }));
+        const response = await handler(request);
+        const compressed = await gzipAsync(new Uint8Array(await response.arrayBuffer()), { level: STORE_GZIP_LEVEL });
         return {
           status: response.status,
           headers: [...response.headers.entries()].filter(([header]) => !PER_RESPONSE_HEADERS.has(header.toLowerCase())),
-          body: new Uint8Array(await response.arrayBuffer()),
-          gzip: response.headers.get("content-encoding") === "gzip",
+          body: new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength) as Uint8Array<ArrayBuffer>,
         };
       },
       LIST_RESPONSE_CACHE_TTL_MS,
@@ -141,21 +143,11 @@ export function withListResponseCache(
       },
     );
 
-    return toResponse(request, stored);
+    return toResponse(stored);
   }
 }
 
-async function toResponse(request: Request, stored: StoredResponse): Promise<Response> {
-  const headers = new Headers(stored.headers);
-  headers.append("Vary", "Accept-Encoding");
-  let body = stored.body;
-  if (stored.gzip) {
-    if (acceptsGzip(request.headers.get("accept-encoding"))) {
-      headers.set("Content-Encoding", "gzip");
-    } else {
-      body = new Uint8Array(await gunzipAsync(stored.body));
-    }
-  }
-  headers.set("Content-Length", String(body.byteLength));
-  return new NextResponse(body, { status: stored.status, headers });
+async function toResponse(stored: StoredResponse): Promise<Response> {
+  const body = new Uint8Array(await gunzipAsync(stored.body));
+  return new NextResponse(body, { status: stored.status, headers: new Headers(stored.headers) });
 }

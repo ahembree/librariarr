@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { gunzipSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -94,21 +94,20 @@ describe("library listing response cache", () => {
     expect(other.items).toHaveLength(2);
   });
 
-  it("serves the stored gzip body to a gzip caller and plain JSON to the rest", async () => {
+  it("answers plain JSON from the store, even to a caller that accepts gzip", async () => {
+    // Next.js compresses on the way out and drops a route's own
+    // Content-Encoding (GHSA-pc58-hwjq-p385); the kept body is answered decompressed.
     await seedMovies(Array.from({ length: 60 }, (_, i) => `Movie ${String(i).padStart(2, "0")} with a long enough title`));
-    const gz = await callRoute(moviesGet, { url: "/api/media/movies?limit=0", headers: { "Accept-Encoding": "gzip" } });
-    expect(gz.status).toBe(200);
-    expect(gz.headers.get("content-encoding")).toBe("gzip");
-    const zipped = Buffer.from(await gz.arrayBuffer());
-    expect(gz.headers.get("content-length")).toBe(String(zipped.byteLength));
-    const fromGzip = JSON.parse(gunzipSync(zipped).toString()) as MoviesBody;
-    expect(fromGzip.items).toHaveLength(60);
+    const first = await callRoute(moviesGet, { url: "/api/media/movies?limit=0", headers: { "Accept-Encoding": "gzip" } });
+    expect(first.status).toBe(200);
+    expect(first.headers.get("content-encoding")).toBeNull();
+    const fresh = (await first.json()) as MoviesBody;
+    expect(fresh.items).toHaveLength(60);
 
-    const plain = await callRoute(moviesGet, { url: "/api/media/movies?limit=0" });
-    expect(plain.headers.get("content-encoding")).toBeNull();
-    expect(plain.headers.get("content-type")).toBe("application/json");
-    expect(plain.headers.get("vary")).toContain("Accept-Encoding");
-    expect(((await plain.json()) as MoviesBody).items).toEqual(fromGzip.items);
+    const cached = await callRoute(moviesGet, { url: "/api/media/movies?limit=0", headers: { "Accept-Encoding": "gzip" } });
+    expect(cached.headers.get("content-encoding")).toBeNull();
+    expect(cached.headers.get("content-type")).toBe("application/json");
+    expect(((await cached.json()) as MoviesBody).items).toEqual(fresh.items);
   });
 
   it("never caches for a caller that is not signed in", async () => {
@@ -218,11 +217,11 @@ describe("library listing response cache", () => {
     it("keeps the listings under their total byte budget, dropping the oldest", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
-      // Incompressible bodies just under the per-entry cap, sent as-is (no
-      // gzip), so each entry stores its full size.
-      const size = LIST_RESPONSE_CACHE_MAX_BYTES - 1024;
+      // Incompressible bodies just under the per-entry cap (gzip's framing on
+      // random bytes adds a little), so each entry stores about its full size.
+      const size = LIST_RESPONSE_CACHE_MAX_BYTES - 64 * 1024;
       const handler = withListResponseCache("test-bytes", async () =>
-        new NextResponse(new Uint8Array(size), { headers: { "Content-Type": "application/octet-stream" } }),
+        new NextResponse(new Uint8Array(randomBytes(size)), { headers: { "Content-Type": "application/octet-stream" } }),
       );
       const fit = Math.floor(LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES / size);
       for (let i = 0; i <= fit; i++) {
