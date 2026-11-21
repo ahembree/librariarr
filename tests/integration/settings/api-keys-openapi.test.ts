@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { gunzipSync } from "node:zlib";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser, createTestApiKey } from "../../setup/test-helpers";
@@ -71,7 +70,7 @@ describe("the OpenAPI document", () => {
     expect(doc.servers).toEqual([{ url: "https://librariarr.example.com/api/v1" }]);
   });
 
-  it("is compressed for a client that accepts gzip", async () => {
+  it("answers plain JSON (Next.js compresses on the way out)", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
     const res = await callRoute(GET, {
@@ -79,8 +78,8 @@ describe("the OpenAPI document", () => {
       headers: { "accept-encoding": "gzip" },
     });
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-encoding")).toBe("gzip");
-    const doc = JSON.parse(gunzipSync(new Uint8Array(await res.arrayBuffer())).toString("utf8")) as Doc;
+    expect(res.headers.get("content-encoding")).toBeNull();
+    const doc = (await res.json()) as Doc;
     expect(doc.openapi).toBe("3.1.0");
   });
 

@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { createGunzip, gunzipSync } from "node:zlib";
 import { progressStreamResponse, HEARTBEAT_INTERVAL_MS } from "@/lib/progress/stream";
 
 async function readLines(response: Response): Promise<Array<Record<string, unknown>>> {
@@ -175,41 +174,26 @@ describe("progressStreamResponse", () => {
     });
   });
 
-  describe("gzip", () => {
-    const gzipRequest = (acceptEncoding = "gzip, deflate, br") =>
-      new Request("http://localhost/api/x", { headers: { "Accept-Encoding": acceptEncoding } });
+  describe("encoding", () => {
+    // Next.js drops a Route Handler's own Content-Encoding (GHSA-pc58-hwjq-p385),
+    // so a gzipped stream would reach the reader as raw deflate bytes.
+    const gzipRequest = () =>
+      new Request("http://localhost/api/x", { headers: { "Accept-Encoding": "gzip, deflate, br" } });
 
-    /** A large result, shaped like a query's rows. */
-    const rows = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({
-        id: `cm${String(i).padStart(10, "0")}xyz`,
-        title: `Movie ${i}`,
-        year: 1950 + (i % 75),
-        resolution: ["4K", "1080P", "720P"][i % 3],
-        matchedCriteria: [{ field: "playCount", operator: "equals", value: "0" }],
-        fileSize: String(i * 1_000_003),
-      }));
-
-    it("gzips the stream for a request that accepts it, and decodes to the same lines", async () => {
-      const run = async (emit: Parameters<Parameters<typeof progressStreamResponse>[0]>[0]) => {
-        emit({ type: "plan", phases: [{ key: "a", label: "A" }] });
-        emit({ type: "phase", key: "a", fraction: 0.5, detail: "half" });
-        return { items: rows(3000) };
-      };
-      const plain = progressStreamResponse(run);
-      const zipped = progressStreamResponse(run, { request: gzipRequest() });
-
-      expect(zipped.headers.get("Content-Encoding")).toBe("gzip");
-      expect(zipped.headers.get("Vary")).toBe("Accept-Encoding");
-      const plainBytes = Buffer.from(await plain.arrayBuffer());
-      const zippedBytes = Buffer.from(await zipped.arrayBuffer());
-      const decoded = gunzipSync(zippedBytes);
-      expect(decoded.toString()).toBe(plainBytes.toString());
-      // 3,000 query rows: ~490 KB as NDJSON, well under a tenth of that gzipped.
-      expect(zippedBytes.byteLength).toBeLessThan(plainBytes.byteLength / 8);
+    it("streams plain NDJSON even to a request that accepts gzip", async () => {
+      const response = progressStreamResponse(async (emit) => {
+        emit({ type: "phase", key: "a", fraction: 0.5 });
+        return { ok: true };
+      }, { request: gzipRequest() });
+      expect(response.headers.get("Content-Encoding")).toBeNull();
+      expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
+      expect(await readLines(response)).toEqual([
+        { type: "phase", key: "a", fraction: 0.5 },
+        { type: "result", result: { ok: true } },
+      ]);
     });
 
-    it("sends each progress event at once, decodable before the task finishes", async () => {
+    it("sends each progress event at once, before the task finishes", async () => {
       let finish!: () => void;
       const done = new Promise<void>((resolve) => (finish = resolve));
       const response = progressStreamResponse(
@@ -223,42 +207,22 @@ describe("progressStreamResponse", () => {
       );
 
       const reader = response.body!.getReader();
-      const gunzip = createGunzip();
-      let decoded = "";
-      gunzip.on("data", (chunk: Buffer) => (decoded += chunk.toString()));
-      // Everything the stream sends goes straight to the decoder.
-      const pumped = (async () => {
-        for (;;) {
-          const { value, done: ended } = await reader.read();
-          if (ended) break;
-          gunzip.write(value);
-        }
-        await new Promise<void>((resolve) => gunzip.end(resolve));
-      })();
-
-      // The first event arrives — and decodes — while the task is still waiting.
-      for (let i = 0; i < 200 && !decoded.includes("\n"); i++) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+      const decoder = new TextDecoder();
+      let text = "";
+      while (!text.includes("\n")) {
+        const { value, done: ended } = await reader.read();
+        if (ended) break;
+        text += decoder.decode(value, { stream: true });
       }
-      expect(JSON.parse(decoded.trim())).toEqual({ type: "phase", key: "a", fraction: 0.25 });
+      expect(JSON.parse(text.trim())).toEqual({ type: "phase", key: "a", fraction: 0.25 });
 
       finish();
-      await pumped;
-      expect(decoded.trim().split("\n").map((l) => JSON.parse(l).type)).toEqual(["phase", "phase", "result"]);
-    });
-
-    it("streams plain NDJSON to a request that does not accept gzip", async () => {
-      const response = progressStreamResponse(async () => ({ ok: true }), { request: gzipRequest("identity") });
-      expect(response.headers.get("Content-Encoding")).toBeNull();
-      expect(await readLines(response)).toEqual([{ type: "result", result: { ok: true } }]);
-    });
-
-    it("ends a gzipped stream cleanly with an error line", async () => {
-      const response = progressStreamResponse(async () => {
-        throw new Error("boom");
-      }, { request: gzipRequest() });
-      const text = gunzipSync(Buffer.from(await response.arrayBuffer())).toString();
-      expect(text).toBe('{"type":"error","message":"boom"}\n');
+      for (;;) {
+        const { value, done: ended } = await reader.read();
+        if (ended) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      expect(text.trim().split("\n").map((l) => JSON.parse(l).type)).toEqual(["phase", "phase", "result"]);
     });
   });
 });
