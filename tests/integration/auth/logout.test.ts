@@ -118,7 +118,11 @@ describe("POST /api/auth/logout", () => {
     const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
     setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
 
-    const response = await callRoute(GET, { url: "/api/auth/logout", method: "GET" });
+    const response = await callRoute(GET, {
+      url: "/api/auth/logout",
+      method: "GET",
+      headers: { Referer: "http://localhost:3000/settings" },
+    });
     expect(response.status).toBe(307);
 
     const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
@@ -145,6 +149,7 @@ describe("GET /api/auth/logout", () => {
     const response = await callRoute(GET, {
       url: "/api/auth/logout",
       method: "GET",
+      headers: { Referer: "http://localhost:3000/" },
     });
 
     // NextResponse.redirect returns a 307 by default
@@ -204,6 +209,51 @@ describe("GET /api/auth/logout", () => {
       expect(getMockSession().isLoggedIn).toBe(true);
     },
   );
+
+  // Over plain http the browser sends no Sec-Fetch-Site at all, so a page
+  // anywhere that navigates here with `Referrer-Policy: no-referrer` arrives
+  // exactly like this: the Lax cookie and nothing else.
+  it("leaves a valid session alone when the request shows nothing about where it came from", async () => {
+    const user = await createTestUser();
+    const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+    const response = await callRoute(GET, { url: "/api/auth/logout", method: "GET" });
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/");
+    const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    expect(after).toBe(before);
+    expect(getMockSession().isLoggedIn).toBe(true);
+  });
+
+  // The layout redirects here, with no headers, for a session `getSession()`
+  // has already refused: the stale cookie is still cleared.
+  it("clears the cookie of a session that is no longer valid, with no headers", async () => {
+    setMockSession({ isLoggedIn: false, oidcState: "left-over" });
+
+    const response = await callRoute(GET, { url: "/api/auth/logout", method: "GET" });
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    expect(getMockSession()).toEqual({ isLoggedIn: false });
+  });
+
+  it("logs out for a navigation from the app's own page", async () => {
+    const user = await createTestUser();
+    const before = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    setMockSession({ userId: user.id, isLoggedIn: true, sessionVersion: before });
+
+    const response = await callRoute(GET, {
+      url: "/api/auth/logout",
+      method: "GET",
+      headers: { Referer: "http://localhost:3000/settings" },
+    });
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    const after = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).sessionVersion;
+    expect(after).toBe(before + 1);
+    expect(getMockSession().isLoggedIn).toBe(false);
+  });
 
   it.each(["same-origin", "none"])("still logs out for a %s navigation", async (fetchSite) => {
     const user = await createTestUser();

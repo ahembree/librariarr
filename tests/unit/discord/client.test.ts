@@ -12,6 +12,7 @@ import {
   buildFailureSummaryEmbed,
   buildMatchChangeEmbed,
   buildMaintenanceEmbed,
+  escapeDiscordMarkdown,
 } from "@/lib/discord/client";
 
 describe("sendDiscordNotification", () => {
@@ -357,5 +358,94 @@ describe("buildApiKeyEmbed", () => {
     ]);
     expect(embed.color).toBe(0x6b7280);
     expect(embed.color).not.toBe(buildApiKeyEmbed("created", key).color);
+  });
+});
+
+// Embed text is Markdown, and item titles come from the media server.
+describe("escapeDiscordMarkdown", () => {
+  it("shows a masked link as the text it is", () => {
+    expect(escapeDiscordMarkdown("[Librariarr: sign in again](https://evil.example/login)")).toBe(
+      "\\[Librariarr: sign in again\\]\\(https:\u200b//evil.example/login\\)",
+    );
+  });
+
+  it("escapes every character Markdown gives a meaning, and mentions", () => {
+    expect(escapeDiscordMarkdown("*bold* _it_ ~s~ `c` ||sp|| > q # h <@1> @everyone a\\b")).toBe(
+      "\\*bold\\* \\_it\\_ \\~s\\~ \\`c\\` \\|\\|sp\\|\\| \\> q \\# h \\<\\@1\\> \\@everyone a\\\\b",
+    );
+  });
+
+  it("breaks a bare URL so it is not turned into a link", () => {
+    expect(escapeDiscordMarkdown("see http://evil.example now")).toBe("see http:\u200b//evil.example now");
+  });
+
+  it("flattens line breaks, so one item cannot pose as several lines", () => {
+    expect(escapeDiscordMarkdown("Movie\n• Fake Item\r\n**Rule**")).toBe("Movie • Fake Item \\*\\*Rule\\*\\*");
+  });
+
+  it("leaves an ordinary title readable", () => {
+    expect(escapeDiscordMarkdown("Spider-Man: No Way Home")).toBe("Spider-Man: No Way Home");
+    expect(escapeDiscordMarkdown("Amélie & Björk — 2001")).toBe("Amélie & Björk — 2001");
+  });
+});
+
+describe("notification embeds escape what they did not write", () => {
+  const LINK = "[Click](https://evil.example)";
+
+  it("item titles in the success, match and failure lists", () => {
+    const success = buildSuccessSummaryEmbed("Rule", "DELETE_RADARR", [LINK]);
+    const match = buildMatchChangeEmbed("Rule", 1, 1, "MOVIE", [LINK], [LINK]);
+    const failure = buildFailureSummaryEmbed("Rule", "DELETE_RADARR", [{ title: LINK, error: "see [docs](http://x.test)" }]);
+
+    for (const embed of [success, match, failure]) {
+      const text = JSON.stringify(embed);
+      expect(text).not.toContain("[Click](");
+      expect(text).not.toContain("](http");
+    }
+    expect(success.fields!.at(-1)!.value).toBe("• \\[Click\\]\\(https:\u200b//evil.example\\)");
+  });
+
+  it("the rule set name, an API key's name and the maintenance message", () => {
+    expect(buildSuccessSummaryEmbed("**Rule**", "DELETE_RADARR", ["a"]).fields![0].value).toBe("\\*\\*Rule\\*\\*");
+    expect(buildMatchChangeEmbed("_Rule_", 1, 0, "MOVIE").title).toBe("Rule Match Update: \\_Rule\\_");
+    const key = buildApiKeyEmbed("created", { name: LINK, prefix: "lbr_abcdef", scopes: [], expiresAt: null });
+    expect(key.fields![0].value).not.toContain("[Click](");
+    expect(buildMaintenanceEmbed(true, LINK).description).not.toContain("[Click](");
+  });
+
+  it("cuts one over-long item instead of overflowing the field", () => {
+    const embed = buildSuccessSummaryEmbed("Rule", "DELETE_RADARR", ["x".repeat(5000)]);
+    const value = embed.fields!.at(-1)!.value;
+    expect(value.length).toBeLessThanOrEqual(1024);
+    expect(value.endsWith("…")).toBe(true);
+  });
+
+  // Title and reason used to be cut together at 200 characters, so a long
+  // title left none of the reason.
+  it("keeps the reason an action failed, however long its title", () => {
+    const title = "A Very Long Title ".repeat(20).trim();
+    const error = "HTTP 400 (DELETE /api/v3/movie/123): This movie cannot be deleted because it is in use. ".repeat(3).trim();
+    const value = buildFailureSummaryEmbed("Rule", "DELETE_RADARR", [{ title, error }]).fields!.at(-1)!.value;
+
+    expect(value).toContain("…: HTTP 400 ");
+    expect(value).toContain("it is in use. HTTP 400");
+    expect(value.length).toBeLessThanOrEqual(1024);
+  });
+
+  it("cuts on characters, never through an emoji", () => {
+    const title = "🎬".repeat(300);
+    const value = buildSuccessSummaryEmbed("Rule", "DELETE_RADARR", [title]).fields!.at(-1)!.value;
+    expect(value).toBe(`• ${"🎬".repeat(200)}…`);
+    expect(value.isWellFormed()).toBe(true);
+  });
+
+  it("keeps one item whose escaping doubles its length inside the field, without a dangling escape", () => {
+    const error = "*".repeat(600);
+    const value = buildFailureSummaryEmbed("Rule", "DELETE_RADARR", [{ title: "T", error }]).fields!.at(-1)!.value;
+    expect(value.length).toBeLessThanOrEqual(1024);
+    expect(value.endsWith("\\*…")).toBe(true);
+    // Every asterisk is still escaped: an odd backslash at the cut would have
+    // escaped the ellipsis instead.
+    expect(value.replace(/\\\*/g, "")).not.toContain("*");
   });
 });

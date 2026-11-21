@@ -45,6 +45,7 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/auth/local/login/route";
+import { apiLogger } from "@/lib/logger";
 
 describe("POST /api/auth/local/login", () => {
   beforeEach(async () => {
@@ -175,6 +176,63 @@ describe("POST /api/auth/local/login", () => {
     // A failed sign-in stays charged.
     expect(mockReserve).toHaveBeenCalledTimes(1);
     expect(mockSucceeded).not.toHaveBeenCalled();
+  });
+
+  // A guessing run against the one admin account used to leave no record.
+  describe("failed sign-ins are logged with the client address, never the credentials", () => {
+    async function localAccount() {
+      const prisma = getTestPrisma();
+      const user = await createTestUser({ username: "localuser" });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { localUsername: "localuser", passwordHash: "hashed_correctpassword" },
+      });
+      await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
+      return user;
+    }
+    const attempt = (body: Record<string, string>) =>
+      callRoute(POST, {
+        url: "/api/auth/local/login",
+        method: "POST",
+        headers: { "x-forwarded-for": "198.51.100.23" },
+        body,
+      });
+    const failures = () => vi.mocked(apiLogger.warn).mock.calls;
+
+    it("logs a wrong password", async () => {
+      await localAccount();
+      await expectJson(await attempt({ username: "localuser", password: "hunter2-wrong" }), 401);
+      expect(failures()).toEqual([
+        ["Auth", "Failed sign-in (password): wrong password", { address: "198.51.100.23" }],
+      ]);
+      expect(JSON.stringify(failures())).not.toContain("hunter2-wrong");
+    });
+
+    it("logs an unknown username without repeating it", async () => {
+      await localAccount();
+      await expectJson(await attempt({ username: "MyRealPassw0rd!", password: "x" }), 401);
+      expect(failures()).toEqual([
+        ["Auth", "Failed sign-in (password): unknown username", { address: "198.51.100.23" }],
+      ]);
+      expect(JSON.stringify(failures())).not.toContain("MyRealPassw0rd!");
+    });
+
+    it("logs an attempt made while password sign-in is off", async () => {
+      const user = await createTestUser();
+      await getTestPrisma().appSettings.create({ data: { userId: user.id, localAuthEnabled: false } });
+      await expectJson(await attempt({ username: "localuser", password: "x" }), 401);
+      expect(failures()).toEqual([
+        ["Auth", "Failed sign-in (password): password sign-in is turned off", { address: "198.51.100.23" }],
+      ]);
+    });
+
+    it("logs the address of a successful sign-in", async () => {
+      await localAccount();
+      mockCompare.mockResolvedValue(true);
+      await expectJson(await attempt({ username: "localuser", password: "correctpassword" }), 200);
+      expect(failures()).toEqual([]);
+      expect(apiLogger.info).toHaveBeenCalledWith("Auth", 'Local login: "localuser"', { address: "198.51.100.23" });
+    });
   });
 
   it("returns 200 on valid credentials", async () => {

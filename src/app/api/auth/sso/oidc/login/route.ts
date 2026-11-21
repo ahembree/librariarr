@@ -10,6 +10,7 @@ import {
 } from "@/lib/sso/oidc-client";
 import { apiLogger } from "@/lib/logger";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { beginOidcHandshake } from "@/lib/sso/handshake";
 
 /**
  * Initiates the OIDC Authorization Code + PKCE flow. The PKCE verifier and
@@ -36,11 +37,10 @@ export async function GET(request: NextRequest) {
     const state = generateState();
 
     const session = await getSession();
-    session.oidcState = state;
-    session.oidcVerifier = verifier;
-    // A login, whatever an abandoned link or re-authentication handshake left
-    // behind: the callback would otherwise finish that flow instead.
-    session.oidcFlow = undefined;
+    // A login (no flow), whatever an abandoned link or re-authentication
+    // handshake left behind: the callback would otherwise finish that flow
+    // instead.
+    beginOidcHandshake(session, { state, verifier });
     await session.save();
 
     const url = buildAuthorizationUrl({

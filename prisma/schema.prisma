@@ -1029,3 +1029,20 @@ model ApiKey {
   @@index([userId])
   @@index([prefix])
 }
+
+/// An address a sign-in has succeeded from. The login rate limiter exempts
+/// such an address from the floor it shares with every unknown one, and kept
+/// that list in memory only: after a restart no address was known, so anyone
+/// sending four wrong passwords a minute kept the admin locked out. Rows are
+/// loaded once per process and written on a successful sign-in
+/// (`src/lib/rate-limit/known-addresses.ts`); older than 30 days is forgotten.
+///
+/// Deliberately NOT in the backup's `TABLE_ORDER`: it describes this
+/// deployment's network, not the account, and has no reference to `User`, so
+/// a restore leaves it as it is.
+model KnownSignInAddress {
+  /// As the rate limiter buckets it: the proxy-reported client address, or
+  /// `unknown` where no proxy header names one.
+  address      String   @id
+  lastSignInAt DateTime @default(now())
+}

@@ -1,6 +1,7 @@
 import { withSession } from "@/lib/auth/with-session";
 import { realtimeBus } from "@/lib/media-server/realtime";
 import { readSessionsSnapshot, type SessionWithServer } from "../snapshot";
+import { endWhenSessionRevoked } from "@/lib/auth/session-standing";
 
 export const dynamic = "force-dynamic";
 
@@ -120,9 +121,17 @@ export const GET = withSession(async (session) => {
         closed = true;
       }, MAX_STREAM_LIFETIME);
 
+      // A sign-out or credential change revokes the cookie this stream was
+      // opened with. It carries who is watching what, from which address and
+      // which file: it ends with the session, not up to an hour later.
+      const stopWatchingSession = endWhenSessionRevoked(session, () => {
+        closed = true;
+      });
+
       // Cleanup when client disconnects
       const checkClosed = setInterval(() => {
         if (closed) {
+          stopWatchingSession();
           clearInterval(pollTimer);
           clearInterval(heartbeatTimer);
           clearInterval(checkClosed);

@@ -308,5 +308,47 @@ describe("Server Libraries endpoints", () => {
       ]);
       expect(mockGetLibraries).toHaveBeenCalledTimes(1);
     });
+
+    it("answers 502 and writes nothing when the server cannot list its libraries", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const existing = await createTestLibrary(server.id, { key: "1", enabled: false });
+      mockGetLibraries.mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:32400"));
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}/libraries`,
+          method: "PUT",
+          body: { libraries: [{ key: "1", enabled: true }, { key: "9", enabled: true }] },
+        },
+      );
+      const body = await expectJson<{ error: string; detail: string }>(response, 502);
+
+      expect(body.error).toBe("Could not load libraries from the media server");
+      expect(body.detail).toBe("connect ECONNREFUSED [internal]:32400");
+      // The library that needed no lookup is untouched too: all or nothing.
+      const row = await getTestPrisma().library.findUnique({ where: { id: existing.id } });
+      expect(row?.enabled).toBe(false);
+    });
+  });
+
+  describe("GET — a server that cannot answer", () => {
+    it("answers 502 with a sanitized reason instead of letting the client's error escape", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      mockGetLibraries.mockRejectedValue(new Error("connect ECONNREFUSED 10.0.0.5:32400"));
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(GET, { id: server.id }, { url: `/api/servers/${server.id}/libraries` });
+      const body = await expectJson<{ error: string; detail: string }>(response, 502);
+
+      expect(body).toEqual({
+        error: "Could not load libraries from the media server",
+        detail: "connect ECONNREFUSED [internal]:32400",
+      });
+    });
   });
 });

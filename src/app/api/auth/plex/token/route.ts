@@ -8,6 +8,7 @@ import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-lim
 import { isSsoOverrideActive } from "@/lib/sso/config";
 import { installedVersion } from "@/lib/version/whats-new";
 import { userHasServers } from "@/lib/api/has-servers";
+import { auditMeta, logSignInFailure } from "@/lib/auth/audit";
 
 const PLEX_TOKEN_BUCKET = "plex-token";
 
@@ -45,6 +46,7 @@ export async function POST(request: NextRequest) {
         settings.plexLoginEnabled === false &&
         !isSsoOverrideActive()
       ) {
+        logSignInFailure(request, "Plex", "Plex sign-in is turned off");
         return NextResponse.json(
           { error: "Plex login is disabled by the administrator." },
           { status: 403 }
@@ -81,6 +83,8 @@ export async function POST(request: NextRequest) {
       session.sessionVersion = existingUser.sessionVersion;
       await session.save();
 
+      apiLogger.info("Auth", `Plex login: "${plexUser.username}"`, auditMeta(request));
+
       return NextResponse.json({
         authenticated: true,
         user: { id: existingUser.id, username: plexUser.username },
@@ -93,6 +97,8 @@ export async function POST(request: NextRequest) {
     // already exists. (Initial check above bounced the post-setup case; this
     // path is for the initial-setup flow.)
     if (initialCount > 0) {
+      // The name is plex.tv's answer for a token it accepted, not caller text.
+      logSignInFailure(request, "Plex", `the Plex account "${plexUser.username}" is not linked to the admin`);
       return NextResponse.json(
         { error: "This Plex account is not linked to the admin user. Use Settings > Authentication to link your Plex account." },
         { status: 403 }
@@ -155,6 +161,8 @@ export async function POST(request: NextRequest) {
     session.sessionVersion = 0;
     await session.save();
 
+    apiLogger.info("Auth", `Setup completed: Plex user "${user.username}" created`, auditMeta(request));
+
     return NextResponse.json({
       authenticated: true,
       user: { id: user.id, username: user.username },
@@ -162,7 +170,9 @@ export async function POST(request: NextRequest) {
       hasServers: false,
     });
   } catch (error) {
-    apiLogger.error("Auth", "Plex token auth failed", { error: String(error) });
+    // Reached when plex.tv rejects the token as well as on a real fault: either
+    // way the attempt stays charged, and the address belongs on the line.
+    apiLogger.error("Auth", "Plex token auth failed", { error: String(error), ...auditMeta(request) });
     return NextResponse.json(
       { error: "Authentication failed" },
       { status: 500 }

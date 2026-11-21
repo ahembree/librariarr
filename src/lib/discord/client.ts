@@ -19,19 +19,75 @@ interface DiscordWebhookPayload {
   embeds?: DiscordEmbed[];
 }
 
+/** Longest title a notification list shows; the rest is cut with an ellipsis. */
+const MAX_LIST_ITEM_LENGTH = 200;
+/**
+ * A failed action's line is its title and the reason it failed, cut
+ * separately: cut together, a long title left none of the reason.
+ */
+const MAX_FAILURE_TITLE_LENGTH = 120;
+const MAX_FAILURE_ERROR_LENGTH = 600;
+
+/**
+ * Text this app did not write, as Discord shows it literally.
+ *
+ * Embed text is Markdown, and what goes into it — a media title, an Arr
+ * instance's error message — comes from the media server, a metadata agent or
+ * another application. An item titled `[Librariarr: sign in again](https://…)`
+ * arrived in the admin's channel as a link reading "Librariarr: sign in
+ * again". Every character Markdown gives a meaning is escaped, a bare URL is
+ * broken so it is not turned into a link, and line breaks are flattened so one
+ * item cannot pose as several lines.
+ */
+export function escapeDiscordMarkdown(text: string): string {
+  return text
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
+    .replace(/[\\*_~`|>\[\]()#<@]/g, "\\$&")
+    // A zero-width space after the scheme: looks the same, is not a link.
+    .replace(/:\/\//g, ":\u200b//");
+}
+
+/** `text` cut to `max` characters — code points, so never half an emoji. */
+function cutText(text: string, max: number): string {
+  // UTF-16 length is never less than the number of code points.
+  if (text.length <= max) return text;
+  const points = Array.from(text);
+  return points.length > max ? `${points.slice(0, max).join("")}…` : text;
+}
+
+/**
+ * Escaped text cut to at most `max` UTF-16 units without leaving half a
+ * surrogate pair or a lone escape character at the end.
+ */
+function fitEscaped(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, Math.max(0, max));
+  if (/[\ud800-\udbff]$/.test(cut)) cut = cut.slice(0, -1);
+  const trailingBackslashes = cut.match(/\\+$/)?.[0].length ?? 0;
+  if (trailingBackslashes % 2 === 1) cut = cut.slice(0, -1);
+  return cut;
+}
+
 // Discord embed field values are capped at 1024 characters.
 // Build a bulleted list that fits within this limit, appending a "…and N more" suffix if truncated.
-function buildTruncatedList(titles: string[], limit = 1024): string {
+// Items are escaped here (`escapeDiscordMarkdown`): pass them as plain text.
+// Each is cut to `itemLimit` characters first; pass Infinity for items the
+// caller has already bounded.
+function buildTruncatedList(titles: string[], limit = 1024, itemLimit = MAX_LIST_ITEM_LENGTH): string {
   const suffix = (remaining: number) => `\n*…and ${remaining} more*`;
   let value = "";
   let count = 0;
 
   for (const title of titles) {
-    const line = `• ${title}\n`;
     // Reserve space for the potential suffix
     const remaining = titles.length - count - 1;
     const wouldNeedSuffix = remaining > 0;
     const reservedSpace = wouldNeedSuffix ? suffix(remaining).length : 0;
+    // Escaping can double an item's length: one item alone must still fit the
+    // field, or Discord refuses the whole notification.
+    const room = limit - reservedSpace - "• …\n".length;
+    const escaped = escapeDiscordMarkdown(cutText(title, itemLimit));
+    const line = escaped.length > room ? `• ${fitEscaped(escaped, room)}…\n` : `• ${escaped}\n`;
 
     if (value.length + line.length + reservedSpace > limit && count > 0) {
       value += suffix(titles.length - count);
@@ -133,7 +189,7 @@ export function buildSuccessSummaryEmbed(
   titles: string[],
 ): DiscordEmbed {
   const fields: DiscordEmbed["fields"] = [
-    { name: "Rule", value: ruleSetName, inline: true },
+    { name: "Rule", value: escapeDiscordMarkdown(ruleSetName), inline: true },
     { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Completed", value: String(titles.length), inline: true },
   ];
@@ -158,14 +214,21 @@ export function buildFailureSummaryEmbed(
   failures: { title: string; error: string }[],
 ): DiscordEmbed {
   const fields: DiscordEmbed["fields"] = [
-    { name: "Rule", value: ruleSetName, inline: true },
+    { name: "Rule", value: escapeDiscordMarkdown(ruleSetName), inline: true },
     { name: "Action", value: formatActionLabel(actionType), inline: true },
     { name: "Failed", value: String(failures.length), inline: true },
   ];
 
-  // No bullet here: `buildTruncatedList` adds it.
-  const itemLines = [...new Set(failures.map((f) => `${f.title}: ${f.error}`))];
-  fields.push({ name: "Items", value: buildTruncatedList(itemLines) });
+  // No bullet here: `buildTruncatedList` adds it. Title and reason are cut
+  // separately, so the reason survives a long title.
+  const itemLines = [
+    ...new Set(
+      failures.map(
+        (f) => `${cutText(f.title, MAX_FAILURE_TITLE_LENGTH)}: ${cutText(f.error, MAX_FAILURE_ERROR_LENGTH)}`,
+      ),
+    ),
+  ];
+  fields.push({ name: "Items", value: buildTruncatedList(itemLines, 1024, Number.POSITIVE_INFINITY) });
 
   return {
     title: `${failures.length} Action${failures.length !== 1 ? "s" : ""} Failed`,
@@ -203,7 +266,7 @@ export function buildMatchChangeEmbed(
   }
 
   return {
-    title: `Rule Match Update: ${ruleSetName}`,
+    title: `Rule Match Update: ${escapeDiscordMarkdown(ruleSetName)}`,
     description: addedCount > 0 && removedCount > 0
       ? `${addedCount} new match${addedCount !== 1 ? "es" : ""} found, ${removedCount} match${removedCount !== 1 ? "es" : ""} removed.`
       : addedCount > 0
@@ -239,7 +302,7 @@ export function buildApiKeyEmbed(event: "created" | "deleted", key: ApiKeyEmbedK
       : "An API key was deleted. Anything that was using it has lost access.",
     color: created ? 0x3b82f6 : 0x6b7280,
     fields: [
-      { name: "Name", value: key.name, inline: true },
+      { name: "Name", value: escapeDiscordMarkdown(key.name), inline: true },
       { name: "Key", value: `${key.prefix}…`, inline: true },
       ...(created
         ? [
@@ -265,7 +328,7 @@ export function buildMaintenanceEmbed(
   return {
     title: enabled ? "Maintenance Mode Enabled" : "Maintenance Mode Disabled",
     description: enabled
-      ? `Server maintenance mode has been activated.${message ? `\n\nMessage: ${message}` : ""}`
+      ? `Server maintenance mode has been activated.${message ? `\n\nMessage: ${escapeDiscordMarkdown(message)}` : ""}`
       : "Server maintenance mode has been deactivated. Streams are no longer being terminated.",
     color: enabled ? 0xf59e0b : 0x22c55e,
     footer: { text: "Librariarr Maintenance" },

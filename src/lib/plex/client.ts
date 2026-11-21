@@ -2,6 +2,8 @@ import axios, { type AxiosInstance } from "axios";
 import https from "https";
 import { NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import { BYPASS_BREAKER } from "@/lib/media-server/health-cache";
+import { confineCredentials } from "@/lib/http-credentials";
+import { fetchForeignArtwork, isServerRelativePath } from "@/lib/media-server/foreign-artwork";
 import {
   instrumentMediaServerClient,
   normalizeMediaServerUrl,
@@ -74,6 +76,9 @@ export class PlexClient implements MediaServerClient {
         Accept: "application/json",
       },
       timeout: 30000,
+      // The token stays on this server: no absolute request URL, and no token
+      // on a redirect that leaves it (`src/lib/http-credentials.ts`).
+      ...confineCredentials(this.baseURL),
     };
 
     // Only skip TLS verification if the user explicitly opted in
@@ -902,6 +907,15 @@ export class PlexClient implements MediaServerClient {
         // Transcoder unavailable or refused (older PMS, disabled transcoder) —
         // fall back to the original path below.
       }
+    }
+
+    // Plex stores some artwork — every cast photo — as an absolute URL on
+    // another host (`https://metadata-static.plex.tv/…`). The transcoder above
+    // fetches those itself; this fallback must not, with the server's client:
+    // its `X-Plex-Token` header would go to whatever host the metadata names.
+    // Such a URL is fetched with no credential at all.
+    if (!isServerRelativePath(path)) {
+      return fetchForeignArtwork(path);
     }
 
     const response = await this.client.get(path, {

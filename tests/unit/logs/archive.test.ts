@@ -33,7 +33,7 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
 vi.mock("fs/promises", () => ({ default: mockFs, ...mockFs }));
 
-import { archiveLogs } from "@/lib/logs/archive";
+import { archiveLogs, discardPreRestoreArchive } from "@/lib/logs/archive";
 
 // fs is fully mocked, so no real path is touched.
 const ARCHIVE_DIR = "/config/logs";
@@ -184,5 +184,52 @@ describe("archiveLogs", () => {
 
     await expect(archiveLogs()).resolves.toBeUndefined();
     expect(mockFs.unlink).not.toHaveBeenCalled();
+  });
+});
+
+// A restore archives the log rows it replaces (`archiveLogsBeforeRestore`,
+// exercised against real files in
+// tests/integration/backup/restore-archives-logs.test.ts); those archives are
+// pruned like the daily ones.
+describe("pre-restore archives", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("are pruned with the daily archives once past retention", async () => {
+    mockPrisma.appSettings.findFirst.mockResolvedValue({ logRetentionDays: 7 });
+    mockPrisma.logEntry.findFirst.mockResolvedValue(null);
+    mockFs.readdir.mockResolvedValue([
+      "logs-2026-05-01-pre-restore-1777600000000.tar.gz",
+      "logs-2026-06-12-pre-restore-1781222400000.tar.gz",
+      "notes.txt",
+    ]);
+
+    await archiveLogs();
+
+    expect(mockFs.unlink).toHaveBeenCalledTimes(1);
+    expect(mockFs.unlink).toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2026-05-01-pre-restore-1777600000000.tar.gz`);
+  });
+
+  it("discards only an archive of its own shape", async () => {
+    await discardPreRestoreArchive("logs-2026-06-13-pre-restore-1781222400000.tar.gz");
+    expect(mockFs.unlink).toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2026-06-13-pre-restore-1781222400000.tar.gz`);
+
+    mockFs.unlink.mockClear();
+    for (const name of ["logs-2026-06-13.tar.gz", "../backups/x.json.gz", "logs-2026-06-13-pre-restore-1.tar.gz/../../x", ""]) {
+      await discardPreRestoreArchive(name);
+    }
+    expect(mockFs.unlink).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when the archive is already gone", async () => {
+    mockFs.unlink.mockRejectedValueOnce(new Error("ENOENT"));
+    await expect(discardPreRestoreArchive("logs-2026-06-13-pre-restore-1781222400000.tar.gz")).resolves.toBeUndefined();
   });
 });

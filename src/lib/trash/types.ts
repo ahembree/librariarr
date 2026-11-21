@@ -211,6 +211,8 @@ export interface ArrNamingConfig {
 export interface TrashCatalog {
   service: ServiceType;
   ref: string;
+  /** The commit of the guides every file of this catalog was read from. */
+  commit?: string;
   customFormats: TrashCustomFormat[];
   /** Guide-defined custom-format categories (from cf-groups). */
   cfGroups: TrashCfGroup[];

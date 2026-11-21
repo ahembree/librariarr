@@ -13,6 +13,7 @@ import { isSameOriginRequest } from "@/lib/url";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { beginOidcHandshake } from "@/lib/sso/handshake";
 
 /**
  * Initiates an OIDC flow for the authenticated admin to LINK their identity,
@@ -76,9 +77,7 @@ export async function POST(request: NextRequest) {
     const { verifier, challenge } = generatePkce();
     const state = generateState();
 
-    session.oidcState = state;
-    session.oidcVerifier = verifier;
-    session.oidcFlow = "link";
+    beginOidcHandshake(session, { state, verifier, flow: "link" });
     await session.save();
 
     const url = buildAuthorizationUrl({

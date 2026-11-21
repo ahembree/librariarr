@@ -3,6 +3,7 @@ import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, discordSettingsSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 /**
  * A Discord webhook URL is a bearer credential — anyone holding it can post
@@ -50,6 +51,15 @@ export const PUT = withSession(async (session, request: NextRequest) => {
     where: { userId: session.userId },
     update: fields,
     create: { userId: session.userId, ...fields },
+  });
+
+  // Where notifications go, and whether an API key being created raises one:
+  // on record, without the webhook URL (it is a credential).
+  logSecurityChange(request, "Discord notification settings changed", {
+    webhookChanged: "discordWebhookUrl" in fields,
+    webhookSet: !!settings.discordWebhookUrl,
+    notifyApiKeys: settings.discordNotifyApiKeys,
+    notifyMaintenance: settings.discordNotifyMaintenance,
   });
 
   return NextResponse.json({

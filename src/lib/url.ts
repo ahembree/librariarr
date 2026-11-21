@@ -79,8 +79,16 @@ export function isSameOriginRequest(
  *
  * Compared by HOST, not full origin: a proxy that terminates TLS but does
  * not set `x-forwarded-proto` would otherwise make every mutation from the
- * app's own UI fail as `https://host` ≠ `http://host`. Scheme carries no
- * CSRF signal here — an attacker on the same host is not a CSRF attacker.
+ * app's own UI fail as `https://host` ≠ `http://host`.
+ *
+ * One scheme difference IS a signal: the app known to be served over https
+ * (`x-forwarded-proto: https`, or an https request URL) and an `Origin` of
+ * `http://` the same host. No page of this app has that origin — but anyone
+ * on the network path can answer for `http://host` and run script there, and
+ * a browser that does not treat the two schemes as different sites sends the
+ * cookie along. That downgrade is refused. The opposite difference (an https
+ * origin, the app believing itself http) is the unlabelled proxy above and
+ * stays allowed.
  *
  * Requests carrying NEITHER `Origin` nor `Referer` are allowed: those are
  * non-browser clients (curl, scripts), which carry no ambient cookie and
@@ -88,24 +96,29 @@ export function isSameOriginRequest(
  * that omit `Origin` on same-origin requests.
  */
 export function isTrustedMutationOrigin(request: NextRequest): boolean {
-  const expectedHost = expectedRequestHost(request);
+  const expected = new URL(getExternalBaseUrl(request));
   const origin = request.headers.get("origin");
-  if (origin) return hostOf(origin) === expectedHost;
+  if (origin) return isOwnOrigin(origin, expected);
   const referer = request.headers.get("referer");
-  if (referer) return hostOf(referer) === expectedHost;
+  if (referer) return isOwnOrigin(referer, expected);
   return true;
 }
 
-function hostOf(url: string): string | null {
+/** Same host as the app, and not the http downgrade of an app served over https. */
+function isOwnOrigin(url: string, expected: URL): boolean {
+  let parsed: URL;
   try {
-    return new URL(url).host.toLowerCase();
+    parsed = new URL(url);
   } catch {
-    return null;
+    return false;
   }
+  if (parsed.host.toLowerCase() !== expected.host.toLowerCase()) return false;
+  return !(expected.protocol === "https:" && parsed.protocol === "http:");
 }
 
-function expectedRequestHost(request: NextRequest): string {
-  return new URL(getExternalBaseUrl(request)).host.toLowerCase();
+/** Whether the request reached the app over https (directly, or as its proxy reports). */
+export function isHttpsRequest(request: Pick<Request, "url" | "headers">): boolean {
+  return getExternalBaseUrl(request).startsWith("https://");
 }
 
 export function getExternalBaseUrl(request: Pick<Request, "url" | "headers">): string {

@@ -22,6 +22,7 @@ import {
 import { runAsApiKey, type ApiKeyPrincipal } from "./principal";
 import { isApiScope, type ApiScope } from "./scopes";
 import { FULL_LISTING_REQUEST_COST } from "./limits";
+import { invalidateKnownApiKeyPrefixes, knownApiKeyPrefixes } from "./known-prefixes";
 
 /**
  * The `/api/v1` authentication boundary.
@@ -249,8 +250,11 @@ export async function authenticateApiKey(
 
   const verifiedId = recentlyVerifiedId(presented);
   if (!verifiedId) {
+    // Full only while someone presents a thousand keys a minute that do not
+    // exist. A key whose prefix IS issued still goes on to be verified, so a
+    // flood of made-up keys cannot shut a real one out (known-prefixes.ts).
     const floor = apiKeyUnknownLookupFloor.peek(UNKNOWN_LOOKUPS);
-    if (floor.limited) return tooManyRequests(floor.retryAfterMs);
+    if (floor.limited && !(await hasIssuedPrefix(presented))) return tooManyRequests(floor.retryAfterMs);
   }
 
   let row: ApiKeyRow | null;
@@ -369,10 +373,24 @@ function lookUpAndVerify(presented: string): Promise<Lookup> {
   return run;
 }
 
-/** Test-only: forget every verified key and in-flight verification. */
+/**
+ * Whether a key with this one's prefix has been issued. A database error
+ * reads as no: under a flood, with the database failing, the answer stays the
+ * refusal it was.
+ */
+async function hasIssuedPrefix(presented: string): Promise<boolean> {
+  try {
+    return (await knownApiKeyPrefixes()).has(apiKeyLookupPrefix(presented));
+  } catch {
+    return false;
+  }
+}
+
+/** Test-only: forget every verified key, in-flight verification and the cached prefixes. */
 export function _resetVerifiedApiKeysForTesting(): void {
   verifiedKeys.clear();
   verificationsInFlight.clear();
+  invalidateKnownApiKeyPrefixes();
 }
 
 function recentlyVerifiedId(presented: string): string | undefined {

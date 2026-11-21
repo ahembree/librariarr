@@ -9,6 +9,7 @@ import {
 } from "./health-cache";
 import { logger } from "@/lib/logger";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { hideTransportDetails } from "@/lib/http-credentials";
 
 /**
  * A media server's base URL without trailing slashes — the one spelling every
@@ -40,8 +41,10 @@ interface InstrumentOptions {
  *     once with `ServerUnreachableError`, unless it carries `BYPASS_BREAKER`;
  *  2. request timing and debug logging;
  *  3. on success, clearing the breaker; on failure, a debug log line;
- *  4. `configureRetry`, last, so it sees the raw AxiosError, with a terminal
- *     network failure marking the server unreachable.
+ *  4. `configureRetry`, so it sees the raw AxiosError, with a terminal
+ *     network failure marking the server unreachable;
+ *  5. `hideTransportDetails`, last: the error a caller receives no longer
+ *     prints its request headers.
  *
  * Kept in one place because Plex and Jellyfin/Emby each carried a copy and the
  * two had already drifted (the base-URL normalization, the error detail).
@@ -91,5 +94,13 @@ export function instrumentMediaServerClient(client: AxiosInstance, options: Inst
 
   configureRetry(client, logPrefix, logger, {
     onTerminalNetworkError: (error) => markUnreachable(baseURL, error),
+  });
+
+  // After the retry (which needs the whole error): these clients throw the raw
+  // AxiosError, and one a route lets escape is printed with its request
+  // headers — the server's token among them.
+  client.interceptors.response.use(undefined, (error) => {
+    hideTransportDetails(error);
+    return Promise.reject(error);
   });
 }

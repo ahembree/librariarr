@@ -29,6 +29,7 @@ import {
   tracearrInstanceUpdateSchema,
 } from "@/lib/validation";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 /**
  * The routes every integration instance type answers — the list and create,
@@ -289,6 +290,7 @@ export function instanceCollectionRoutes(config: IntegrationConfig) {
     // A new instance changes what an unscoped Arr read covers, so the preview
     // cache must not answer from the instances that existed before it.
     instanceChanged(config, instance.id);
+    logSecurityChange(request, `${config.label} instance "${instance.name}" added`);
 
     return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
   });
@@ -343,11 +345,17 @@ export function instanceItemRoutes(config: IntegrationConfig) {
         })
       : await update();
     instanceChanged(config, id);
+    // Where the stored key is sent, and the key itself: never their values.
+    logSecurityChange(request, `${config.label} instance "${instance.name}" updated`, {
+      urlChanged,
+      keyChanged: !!apiKey,
+      enabled: instance.enabled,
+    });
 
     return NextResponse.json({ instance: sanitize(instance) });
   });
 
-  const DELETE = withSession(async (session, _request: NextRequest, { params }: RouteContext) => {
+  const DELETE = withSession(async (session, request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
 
     const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
@@ -362,6 +370,7 @@ export function instanceItemRoutes(config: IntegrationConfig) {
       await delegateOf(config).delete({ where: { id } });
     }
     instanceChanged(config, id);
+    logSecurityChange(request, `${config.label} instance "${existing.name}" removed`);
 
     return NextResponse.json({ success: true });
   });

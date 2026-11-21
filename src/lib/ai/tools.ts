@@ -19,6 +19,8 @@ const MEDIA_TYPES = ["MOVIE", "SERIES", "MUSIC"] as const;
 const DIMENSION_IDS = DIMENSION_REGISTRY.map((d) => d.id);
 const OPERATOR_VALUES = new Set<string>(CONDITION_OPERATORS.map((o) => o.value));
 const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
+/** Longest filter value `search_media` accepts — far more than any title, genre or path needs. */
+export const MAX_SEARCH_VALUE_LENGTH = 500;
 
 // Search is restricted to fields that need no external service. Arr/Seerr fields
 // are deliberately excluded: without wiring the Arr/Seerr metadata fetch they'd
@@ -334,6 +336,13 @@ const searchMedia: AiTool = {
       const value = f.value;
       if (!valueless && (value === undefined || value === null || value === "")) {
         return { data: { error: `Operator "${operator}" on "${field}" requires a value.` } };
+      }
+      // The model chose this value, possibly from text a media server
+      // controls, and Phase 2 compares it against every candidate item.
+      if (typeof value === "string" && value.length > MAX_SEARCH_VALUE_LENGTH) {
+        return {
+          data: { error: `The value for "${field}" is too long (at most ${MAX_SEARCH_VALUE_LENGTH} characters).` },
+        };
       }
       rules.push({
         id: `r${i}`,

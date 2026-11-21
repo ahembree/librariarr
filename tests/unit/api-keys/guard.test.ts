@@ -62,8 +62,10 @@ interface Row {
 /** The mocked ApiKey table, answering the guard's two queries. */
 const table = new Map<string, Row>();
 function serveTable() {
-  m.findMany.mockImplementation(async ({ where }: { where: { prefix: string } }) =>
-    [...table.values()].filter((row) => row.prefix === where.prefix),
+  // With `where`: the rows sharing a presented key's prefix. Without: every
+  // issued prefix, which the guard caches for a flood (known-prefixes.ts).
+  m.findMany.mockImplementation(async ({ where }: { where?: { prefix: string } } = {}) =>
+    where ? [...table.values()].filter((row) => row.prefix === where.prefix) : [...table.values()].map(({ prefix }) => ({ prefix })),
   );
   m.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const row = table.get(where.id);
@@ -506,7 +508,7 @@ describe("authenticateApiKey — unknown-key floor", () => {
     floorStore().clear();
   });
 
-  it("stops looking up keys nobody has used once a minute's worth of unknown ones went by — never a key in use", async () => {
+  it("stops looking up keys that were never issued once a minute's worth of unknown ones went by — never a real key", async () => {
     const active = await addKey("key-active", { lastUsedAt: new Date() });
     const idle = await addKey("key-idle", { lastUsedAt: new Date() });
     const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
@@ -526,27 +528,56 @@ describe("authenticateApiKey — unknown-key floor", () => {
     const warnings = m.warn.mock.calls.filter(([, msg]) => String(msg).includes("unrecognised API keys"));
     expect(warnings).toHaveLength(1);
 
-    // Past the floor: an unknown key is refused without a lookup…
+    // Past the floor: unknown keys are refused, and however many arrive they
+    // cost one query between them — the list of issued prefixes, cached.
     const lookupsAtFloor = lookups();
-    const refused = await auth(newApiKey());
-    expect(refused.ok === false && refused.response.status).toBe(429);
-    // …and so is a valid key that has not been used lately (idle integrations
-    // wait the minute out)…
-    const idleRefused = await auth(idle.key);
-    expect(idleRefused.ok === false && idleRefused.response.status).toBe(429);
-    expect(lookups()).toBe(lookupsAtFloor);
-    // …but the key in use is still read (so deleting it would still revoke
-    // it) and still works.
-    expect((await auth(active.key)).ok).toBe(true);
+    for (let i = 0; i < 50; i++) {
+      const refused = await auth(newApiKey());
+      expect(refused.ok === false && refused.response.status).toBe(429);
+    }
     expect(lookups()).toBe(lookupsAtFloor + 1);
+    expect(m.findMany).toHaveBeenLastCalledWith({ select: { prefix: true } });
+
+    // A real key that has not been used lately is NOT shut out by the flood:
+    // its prefix is an issued one, so it goes on to be verified. Refusing it
+    // let anyone lock every polling integration out with ~17 requests a second.
+    const lookupsBeforeIdle = lookups();
+    expect((await auth(idle.key)).ok).toBe(true);
+    expect(lookups()).toBe(lookupsBeforeIdle + 1);
+
+    // The key in use is still read by id (so deleting it would still revoke
+    // it) and still works.
+    const lookupsBeforeActive = lookups();
+    expect((await auth(active.key)).ok).toBe(true);
+    expect(lookups()).toBe(lookupsBeforeActive + 1);
     // A malformed key never reached the database before and still does not.
     const malformed = await auth("lbr_not-a-key");
     expect(malformed.ok === false && malformed.response.status).toBe(401);
-    expect(lookups()).toBe(lookupsAtFloor + 1);
+    expect(lookups()).toBe(lookupsBeforeActive + 1);
+  });
 
-    // The minute passes.
-    floorStore().clear();
+  it("refuses a real key during a flood when the issued prefixes cannot be read", async () => {
+    const idle = await addKey("key-idle");
+    const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
+    for (let i = 0; i < apiKeyUnknownLookupFloor.maxAttempts; i++) await auth(newApiKey());
+
+    m.findMany.mockRejectedValueOnce(new Error("db down"));
+    const refused = await auth(idle.key);
+    expect(refused.ok === false && refused.response.status).toBe(429);
+
+    // The failure is not cached: the next request reads them and gets through.
     expect((await auth(idle.key)).ok).toBe(true);
+  });
+
+  it("still bounds what a forged key under a real prefix can cost, by the verification floor", async () => {
+    const real = await addKey("key-real");
+    const auth = (key: string) => authenticateApiKey(request({ authorization: `Bearer ${key}` }), "media:read");
+    for (let i = 0; i < apiKeyUnknownLookupFloor.maxAttempts; i++) await auth(newApiKey());
+
+    // Same prefix as the real key, a different secret: verified, and refused.
+    const forged = real.key.slice(0, real.prefix.length) + newApiKey().slice(real.prefix.length);
+    const res = await auth(forged);
+    expect(res.ok === false && res.response.status).toBe(401);
   });
 });
 

@@ -11,6 +11,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
 import { compareSemver } from "@/lib/version/semver";
+import { archiveLogsBeforeRestore, discardPreRestoreArchive } from "@/lib/logs/archive";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -143,8 +144,14 @@ export const BACKUP_TABLE_ORDER = [
  * restoring the set the backup captured — which would bring back any key
  * deleted since, silently undoing a revocation. Third-party apps need new keys
  * after a restore; a backup file never carries key material, not even hashes.
+ *
+ * `knownSignInAddress`: the addresses a sign-in has succeeded from, which the
+ * login rate limiter exempts from its shared floor. It describes this
+ * deployment's network rather than the account, references no other table (so
+ * the restore's `TRUNCATE "User" CASCADE` leaves it alone), and is rebuilt by
+ * the next sign-in.
  */
-export const BACKUP_EXCLUDED_TABLES = ["apiKey"] as const;
+export const BACKUP_EXCLUDED_TABLES = ["apiKey", "knownSignInAddress"] as const;
 
 const TABLE_ORDER = BACKUP_TABLE_ORDER;
 
@@ -283,6 +290,22 @@ export async function restoreBackup(
 
   logger.info("Backup", `Restoring from backup: ${filename}`);
 
+  // The restore replaces the log table too. Keep what it holds now in the log
+  // archive first; a restore is a recovery tool, so failing to is logged and
+  // does not stop it.
+  // Reported in the "Restore completed" line: anything logged before the
+  // truncate below is itself replaced.
+  let archivedLogs: string | null = null;
+  let logArchiveError: string | null = null;
+  try {
+    archivedLogs = await archiveLogsBeforeRestore();
+  } catch (error) {
+    logArchiveError = String(error);
+    logger.error("Backup", "Could not archive the log entries before the restore — they will be replaced", {
+      error: logArchiveError,
+    });
+  }
+
   /** Tracearr-mapped servers whose archive walk the restore restarted. */
   let tracearrRestarted = 0;
 
@@ -392,7 +415,13 @@ export async function restoreBackup(
     // backfill slice that read it in between and stored a page would leave the
     // server holding rows, and so never restarted.
     tracearrRestarted = await restartTracearrBackfillWithoutPlays(tx);
-  }, { timeout: 300000 }); // 5 min timeout for large restores
+  }, { timeout: 300000 }) // 5 min timeout for large restores
+    .catch(async (error: unknown) => {
+      // Rolled back: the log rows are still in the table, so the copy made of
+      // them is redundant — and each further attempt would leave another.
+      if (archivedLogs) await discardPreRestoreArchive(archivedLogs);
+      throw error;
+    });
 
   if (tracearrRestarted > 0) {
     logger.info(
@@ -432,7 +461,16 @@ export async function restoreBackup(
   }
 
   onProgress?.({ phase: "complete", message: "Restore completed" });
-  logger.info("Backup", `Restore completed from ${filename}`);
+  logger.info(
+    "Backup",
+    `Restore completed from ${filename}` +
+      (archivedLogs ? ` — the log entries from before it are in the log archive as ${archivedLogs}` : ""),
+  );
+  if (logArchiveError) {
+    logger.warn("Backup", "The log entries from before the restore could not be archived and were replaced", {
+      error: logArchiveError,
+    });
+  }
 }
 
 export async function listBackups(): Promise<BackupInfo[]> {

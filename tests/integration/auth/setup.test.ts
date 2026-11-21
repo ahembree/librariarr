@@ -55,7 +55,7 @@ describe("POST /api/auth/setup", () => {
     const response = await callRoute(POST, {
       url: "/api/auth/setup",
       method: "POST",
-      body: { username: "newuser", password: "password123" },
+      body: { username: "newuser", password: "correct-horse-9" },
     });
     const body = await expectJson<{ error: string }>(response, 403);
     expect(body.error).toBe("Setup has already been completed");
@@ -78,7 +78,7 @@ describe("POST /api/auth/setup", () => {
     const response = await callRoute(POST, {
       url: "/api/auth/setup",
       method: "POST",
-      body: { username: "ab", password: "password123" },
+      body: { username: "ab", password: "correct-horse-9" },
     });
     const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");

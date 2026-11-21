@@ -5,6 +5,8 @@ import { configureRetry } from "@/lib/http-retry";
 import {
   treeUrl,
   rawUrl,
+  commitUrl,
+  COMMIT_SHA_PATTERN,
   servicePaths,
   catalogCacheKey,
   CATALOG_TTL_MS,
@@ -68,9 +70,9 @@ async function mapConcurrent<T, R>(
  * was cached for hours, silently dropping managed resources and (for a profile
  * referencing the dropped CF) zeroing its score on the next sync.
  */
-async function fetchJson<T>(path: string): Promise<T> {
+async function fetchJson<T>(path: string, commit: string): Promise<T> {
   try {
-    const { data } = await http.get<T>(rawUrl(path));
+    const { data } = await http.get<T>(rawUrl(path, commit));
     return data;
   } catch (err) {
     const msg = (err as Error).message;
@@ -93,10 +95,42 @@ export async function fetchTrashCatalog(
   return appCache.getOrSet(key, () => buildCatalog(service), CATALOG_TTL_MS);
 }
 
+/**
+ * The commit `TRASH_REF` names right now. A catalog is a few hundred requests
+ * against a branch that moves: fetched by branch name, a push landing midway
+ * built one catalog out of two revisions of the guides, and nothing recorded
+ * which revision was written to Sonarr or Radarr. Every request of a build
+ * goes to this one commit instead, and the catalog carries its id. An operator
+ * who wants a revision of their choosing sets `TRASH_GUIDES_REF` to a commit.
+ */
+async function resolveCommit(): Promise<string> {
+  if (COMMIT_SHA_PATTERN.test(TRASH_REF)) return TRASH_REF;
+  let sha: unknown;
+  try {
+    // The `sha` media type answers with the commit id alone. The default one
+    // sends the whole commit — every changed file with its patch — to learn
+    // forty characters. A mirror that ignores the media type still answers
+    // with the object, so both shapes are read.
+    const { data } = await http.get<string | { sha?: unknown }>(commitUrl(), {
+      headers: { Accept: "application/vnd.github.sha" },
+    });
+    sha = typeof data === "string" ? data.trim() : data?.sha;
+  } catch (err) {
+    const msg = (err as Error).message;
+    logger.warn("TrashSync", `Failed to resolve guide revision ${TRASH_REF}: ${msg}`);
+    throw new Error(`Failed to resolve guide revision ${TRASH_REF}: ${msg}`);
+  }
+  if (typeof sha !== "string" || !COMMIT_SHA_PATTERN.test(sha)) {
+    throw new Error(`Failed to resolve guide revision ${TRASH_REF}: GitHub did not name a commit`);
+  }
+  return sha;
+}
+
 async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
   const paths = servicePaths(service);
 
-  const { data: tree } = await http.get<{ tree: TreeEntry[] }>(treeUrl());
+  const commit = await resolveCommit();
+  const { data: tree } = await http.get<{ tree: TreeEntry[] }>(treeUrl(commit));
   const files = (tree.tree ?? []).filter(
     (e) => e.type === "blob" && e.path.endsWith(".json"),
   );
@@ -111,11 +145,11 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
   const namingPaths = inDir(paths.naming);
 
   const [cfRaw, cfGroupRaw, qpRaw, qsRaw, namingRaw] = await Promise.all([
-    mapConcurrent(cfPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashCustomFormat>(p)),
-    mapConcurrent(cfGroupPaths, FETCH_CONCURRENCY, (p) => fetchJson<RawCfGroup>(p)),
-    mapConcurrent(qpPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualityProfile>(p)),
-    mapConcurrent(qsPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualitySize>(p)),
-    mapConcurrent(namingPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashNaming>(p)),
+    mapConcurrent(cfPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashCustomFormat>(p, commit)),
+    mapConcurrent(cfGroupPaths, FETCH_CONCURRENCY, (p) => fetchJson<RawCfGroup>(p, commit)),
+    mapConcurrent(qpPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualityProfile>(p, commit)),
+    mapConcurrent(qsPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashQualitySize>(p, commit)),
+    mapConcurrent(namingPaths, FETCH_CONCURRENCY, (p) => fetchJson<TrashNaming>(p, commit)),
   ]);
 
   const customFormats = cfRaw.filter(
@@ -146,6 +180,7 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
   const catalog: TrashCatalog = {
     service,
     ref: TRASH_REF,
+    commit,
     customFormats: customFormats.sort((a, b) => a.name.localeCompare(b.name)),
     cfGroups,
     qualityProfiles: qualityProfiles.sort((a, b) => a.name.localeCompare(b.name)),
@@ -156,7 +191,7 @@ async function buildCatalog(service: ServiceType): Promise<TrashCatalog> {
 
   logger.info(
     "TrashSync",
-    `Loaded ${service} guide catalog: ${catalog.customFormats.length} custom formats, ` +
+    `Loaded ${service} guide catalog at ${TRASH_REF}@${commit.slice(0, 12)}: ${catalog.customFormats.length} custom formats, ` +
       `${catalog.qualityProfiles.length} quality profiles, ` +
       `${catalog.qualitySize ? 1 : 0} quality-size, ${catalog.naming ? 1 : 0} naming`,
   );

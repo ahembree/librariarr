@@ -18,9 +18,12 @@ vi.mock("axios", () => ({
 }));
 
 import { fetchTrashCatalog, catalogHasResource, deriveCategories } from "@/lib/trash/catalog";
-import { treeUrl, rawUrl } from "@/lib/trash/constants";
+import { commitUrl, treeUrl, rawUrl } from "@/lib/trash/constants";
 import { appCache } from "@/lib/cache/memory-cache";
 import type { TrashCatalog } from "@/lib/trash/types";
+
+/** The commit the guides branch names; every request of a build goes to it. */
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 const tree = {
   tree: [
@@ -52,6 +55,7 @@ beforeEach(() => {
   appCache.clear();
   mockGet.mockReset();
   mockGet.mockImplementation((url: string) => {
+    if (url.includes("/commits/")) return Promise.resolve({ data: { sha: COMMIT } });
     if (url.includes("git/trees")) return Promise.resolve({ data: tree });
     const key = Object.keys(files).find((k) => url.endsWith(k));
     if (key) return Promise.resolve({ data: files[key] });
@@ -70,13 +74,19 @@ describe("fetchTrashCatalog", () => {
     // One tree listing, then each Radarr guide file from the raw CDN — Sonarr
     // files (and the `cf` directory entry) are never requested.
     const urls = mockGet.mock.calls.map((c) => c[0] as string);
-    expect(urls[0]).toBe(treeUrl());
-    expect(urls.slice(1).sort()).toEqual(
+    // The branch is resolved to a commit once; the tree and every file are
+    // then read from THAT commit, so a push midway cannot mix two revisions.
+    expect(urls[0]).toBe(commitUrl());
+    expect(urls[1]).toBe(treeUrl(COMMIT));
+    expect(urls.slice(2).sort()).toEqual(
       tree.tree
         .filter((e) => e.type === "blob" && e.path.startsWith("docs/json/radarr/"))
-        .map((e) => rawUrl(e.path))
+        .map((e) => rawUrl(e.path, COMMIT))
         .sort(),
     );
+    expect(urls.slice(1).every((url) => url.includes(COMMIT))).toBe(true);
+    expect(cat.ref).toBe("master");
+    expect(cat.commit).toBe(COMMIT);
     // cf-groups become categories mapping to their custom-format trash_ids.
     expect(cat.cfGroups).toHaveLength(1);
     expect(cat.cfGroups[0].name).toBe("[Audio] Audio Formats");
@@ -90,11 +100,45 @@ describe("fetchTrashCatalog", () => {
     expect(mockGet.mock.calls.length).toBe(after);
   });
 
+  // The default media type sends the whole commit — every changed file with
+  // its patch — to learn forty characters.
+  it("asks GitHub for the commit id alone, and reads it as text or as an object", async () => {
+    const serve = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes("/commits/") ? Promise.resolve({ data: `${COMMIT}\n` }) : serve(url),
+    );
+
+    const cat = await fetchTrashCatalog("RADARR");
+
+    expect(cat.commit).toBe(COMMIT);
+    const [url, config] = mockGet.mock.calls[0];
+    expect(url).toBe(commitUrl());
+    expect(config).toEqual({ headers: { Accept: "application/vnd.github.sha" } });
+    expect(mockGet.mock.calls[1][0]).toBe(treeUrl(COMMIT));
+  });
+
+  it("fails the build, uncached, when the branch cannot be resolved to a commit", async () => {
+    const serve = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes("/commits/") ? Promise.resolve({ data: { sha: "not-a-commit" } }) : serve(url),
+    );
+    await expect(fetchTrashCatalog("RADARR")).rejects.toThrow("GitHub did not name a commit");
+
+    mockGet.mockImplementation((url: string) =>
+      url.includes("/commits/") ? Promise.reject(new Error("rate limited")) : serve(url),
+    );
+    await expect(fetchTrashCatalog("RADARR")).rejects.toThrow("Failed to resolve guide revision master: rate limited");
+
+    // Nothing was cached: the next call builds, and succeeds.
+    mockGet.mockImplementation(serve);
+    expect((await fetchTrashCatalog("RADARR")).commit).toBe(COMMIT);
+  });
+
   it("re-fetches when force is set", async () => {
     await fetchTrashCatalog("RADARR");
     const before = mockGet.mock.calls.length;
     await fetchTrashCatalog("RADARR", { force: true });
-    // The whole build again: the tree and every file.
+    // The whole build again: the commit, the tree and every file.
     expect(mockGet.mock.calls.length).toBe(2 * before);
   });
 });

@@ -44,6 +44,8 @@ const OIDC_TIMEOUT_MS = 10 * 60 * 1000;
 const OIDC_ERRORS: Record<string, string> = {
   not_linked: "That SSO account is not the one linked to Librariarr.",
   state_mismatch: "The SSO sign-in expired. Try again.",
+  not_fresh:
+    "Your identity provider did not ask you to sign in again, so this could not be confirmed. Sign out there and try again, or confirm another way.",
   session_lost: "Your session ended. Sign in again.",
 };
 

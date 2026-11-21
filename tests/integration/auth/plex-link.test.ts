@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 // file deepcode ignore HardcodedNonCryptoSecret/test: Test file with hardcoded values to run validation tests
@@ -237,5 +237,41 @@ describe("POST /api/auth/plex/link", () => {
     const linked = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(linked.plexId).toBe("88888");
     expect(linked.plexToken).toBe("direct-token");
+  });
+
+  // An abandoned SSO handshake must not ride along in the session: its flow
+  // marker used to be left behind, which is what tells the OIDC callback to
+  // link an identity.
+  it("clears every field of a leftover OIDC handshake, the flow included", async () => {
+    const user = await createUserWithoutPlex();
+    setMockSession({
+      userId: user.id,
+      isLoggedIn: true,
+      authenticatedAt: Date.now(),
+      oidcState: "left-over",
+      oidcVerifier: "left-over",
+      oidcFlow: "link",
+      oidcStartedAt: Date.now(),
+    });
+    mockGetPlexUser.mockResolvedValue({
+      id: 88889,
+      uuid: "plex-uuid-direct-2",
+      email: "direct2@example.com",
+      username: "DirectUser2",
+      authToken: "direct-token-2",
+      thumb: "",
+    });
+
+    await expectJson(
+      await callRoute(POST, { url: "/api/auth/plex/link", method: "POST", body: { authToken: "direct-token-2" } }),
+      200,
+    );
+
+    const session = getMockSession();
+    expect(session.oidcState).toBeUndefined();
+    expect(session.oidcVerifier).toBeUndefined();
+    expect(session.oidcFlow).toBeUndefined();
+    expect(session.oidcStartedAt).toBeUndefined();
+    expect(session.isLoggedIn).toBe(true);
   });
 });

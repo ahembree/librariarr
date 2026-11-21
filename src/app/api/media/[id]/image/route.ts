@@ -149,6 +149,13 @@ export const GET = withSession(async (
       () => client.fetchImage(thumbPath, { width: effectiveWidth }),
       maxWidth ? { maxWidth } : undefined,
     );
+    // The cache answers WebP; what remains is a body sharp could not decode,
+    // passed on with the content type the media server sent. Only a picture
+    // goes back to the browser — an HTML or JSON answer (an error page, or a
+    // path that is not artwork at all) is a failed fetch.
+    if (!result.contentType.toLowerCase().startsWith("image/")) {
+      throw new Error(`Upstream answered ${result.contentType.split(";")[0]} instead of an image`);
+    }
     const etag = `"${result.cacheKey}"`;
     return new NextResponse(new Uint8Array(result.data), {
       headers: {

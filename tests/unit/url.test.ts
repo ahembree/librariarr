@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import { getExternalBaseUrl, isTrustedMutationOrigin } from "@/lib/url";
+import { getExternalBaseUrl, isHttpsRequest, isTrustedMutationOrigin } from "@/lib/url";
 
 function makeRequest(
   url: string,
@@ -165,5 +165,59 @@ describe("isTrustedMutationOrigin (CSRF guard for /api mutations)", () => {
       origin: "http://localhost:3000",
     });
     expect(isTrustedMutationOrigin(req)).toBe(true);
+  });
+
+  // No page of an app served over https has an `http://` origin, but anyone on
+  // the network path can answer for it — and a browser that does not treat the
+  // two schemes as different sites sends the cookie along.
+  describe("the http downgrade of an app served over https", () => {
+    it("is refused when the proxy says the request arrived over https", () => {
+      const req = makeRequest("http://127.0.0.1:3000/api/servers/1", {
+        "x-forwarded-host": "app.example.com",
+        "x-forwarded-proto": "https",
+        origin: "http://app.example.com",
+      });
+      expect(isTrustedMutationOrigin(req)).toBe(false);
+    });
+
+    it("is refused by Referer too", () => {
+      const req = makeRequest("http://127.0.0.1:3000/api/servers/1", {
+        "x-forwarded-host": "app.example.com",
+        "x-forwarded-proto": "https",
+        referer: "http://app.example.com/settings",
+      });
+      expect(isTrustedMutationOrigin(req)).toBe(false);
+    });
+
+    it("is refused when the request URL itself is https", () => {
+      const req = makeRequest("https://app.example.com/api/servers/1", {
+        host: "app.example.com",
+        origin: "http://app.example.com",
+      });
+      expect(isTrustedMutationOrigin(req)).toBe(false);
+    });
+
+    it("leaves the app's own https origin, and a plain-http install, working", () => {
+      const https = makeRequest("http://127.0.0.1:3000/api/x", {
+        "x-forwarded-host": "app.example.com",
+        "x-forwarded-proto": "https",
+        origin: "https://app.example.com",
+      });
+      const http = makeRequest("http://192.168.1.5:3000/api/x", {
+        host: "192.168.1.5:3000",
+        origin: "http://192.168.1.5:3000",
+      });
+      expect(isTrustedMutationOrigin(https)).toBe(true);
+      expect(isTrustedMutationOrigin(http)).toBe(true);
+    });
+  });
+});
+
+describe("isHttpsRequest", () => {
+  it("follows x-forwarded-proto, then the request URL", () => {
+    expect(isHttpsRequest(makeRequest("http://127.0.0.1:3000/", { "x-forwarded-proto": "https" }))).toBe(true);
+    expect(isHttpsRequest(makeRequest("http://127.0.0.1:3000/", { "x-forwarded-proto": "http" }))).toBe(false);
+    expect(isHttpsRequest(makeRequest("https://app.example.com/", {}))).toBe(true);
+    expect(isHttpsRequest(makeRequest("http://localhost:3000/", {}))).toBe(false);
   });
 });

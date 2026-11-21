@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
+import { confineCredentials } from "@/lib/http-credentials";
 import type {
   AiChatResult,
   AiConfig,
@@ -144,6 +145,8 @@ function makeHttp(config: AiConfig, headers: Record<string, string>): AxiosInsta
     baseURL: config.baseUrl,
     timeout: REQUEST_TIMEOUT_MS,
     headers: { "Content-Type": "application/json", ...headers },
+    // The provider key stays on the configured host (`src/lib/http-credentials.ts`).
+    ...confineCredentials(config.baseUrl),
   });
   http.interceptors.response.use(
     (r) => r,

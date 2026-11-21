@@ -31,7 +31,7 @@ vi.mock("@/lib/media/watch-analytics", () => ({
 }));
 vi.mock("@/lib/query/query-engine", () => ({ executeQuery: m.executeQuery }));
 
-import { getAiToolMap, getAiTools } from "@/lib/ai/tools";
+import { getAiToolMap, getAiTools, MAX_SEARCH_VALUE_LENGTH } from "@/lib/ai/tools";
 
 const tools = getAiToolMap();
 function run(name: string, args: Record<string, unknown> = {}) {
@@ -347,6 +347,22 @@ describe("search_media", () => {
     const many = Array.from({ length: 25 }, () => ({ field: "title", operator: "contains", value: "a" }));
     await run("search_media", { filters: many });
     expect(m.executeQuery.mock.calls[1][0].groups[0].rules).toHaveLength(20);
+  });
+
+  it("refuses a filter value longer than the cap without running the query", async () => {
+    const result = await run("search_media", {
+      filters: [{ field: "title", operator: "matchesWildcard", value: "*".repeat(MAX_SEARCH_VALUE_LENGTH + 1) }],
+    });
+    expect(result.data).toEqual({
+      error: `The value for "title" is too long (at most ${MAX_SEARCH_VALUE_LENGTH} characters).`,
+    });
+    expect(m.executeQuery).not.toHaveBeenCalled();
+
+    m.executeQuery.mockResolvedValue({ items: [], pagination: { hasMore: false } });
+    await run("search_media", {
+      filters: [{ field: "title", operator: "contains", value: "a".repeat(MAX_SEARCH_VALUE_LENGTH) }],
+    });
+    expect(m.executeQuery).toHaveBeenCalledTimes(1);
   });
 
   it("over-fetches and collapses dedupKey twins when dedup is on", async () => {

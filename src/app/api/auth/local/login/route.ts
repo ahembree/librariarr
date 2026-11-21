@@ -7,6 +7,7 @@ import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadPasswordSignInState, passwordSignInEnabled } from "@/lib/auth/password-sign-in";
 import { userHasServers } from "@/lib/api/has-servers";
+import { auditMeta, logSignInFailure } from "@/lib/auth/audit";
 
 /**
  * A real cost-12 bcrypt hash of a throwaway string. Compared against on the
@@ -51,6 +52,7 @@ export async function POST(request: NextRequest) {
     // applies the same one, so a password the login refuses counts for
     // nothing anywhere.
     if (!passwordSignInEnabled(await loadPasswordSignInState())) {
+      logSignInFailure(request, "password", "password sign-in is turned off");
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
@@ -66,6 +68,7 @@ export async function POST(request: NextRequest) {
       // time does not tell the caller whether the username exists (a cost-12
       // compare is ~250ms; skipping it made an unknown name answer in ~5ms).
       await bcrypt.compare(password, UNKNOWN_USER_DUMMY_HASH);
+      logSignInFailure(request, "password", user ? "the account has no password" : "unknown username");
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
@@ -74,6 +77,7 @@ export async function POST(request: NextRequest) {
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
+      logSignInFailure(request, "password", "wrong password");
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
@@ -90,7 +94,7 @@ export async function POST(request: NextRequest) {
     session.sessionVersion = user.sessionVersion;
     await session.save();
 
-    apiLogger.info("Auth", `Local login: "${user.username}"`);
+    apiLogger.info("Auth", `Local login: "${user.username}"`, auditMeta(request));
 
     return NextResponse.json({
       authenticated: true,

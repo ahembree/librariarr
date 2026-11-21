@@ -1,6 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+// The table the addresses a sign-in succeeded from are stored in.
+const store = vi.hoisted(() => ({ findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() }));
+vi.mock("@/lib/db", () => ({ prisma: { knownSignInAddress: store } }));
+
+import { apiLogger } from "@/lib/logger";
+import { auditAddress } from "@/lib/rate-limit/client-ip";
 import {
   RateLimiter,
+  _resetLockoutLogForTesting,
   getClientIp,
   checkRateLimit,
   checkAuthRateLimit,
@@ -10,8 +24,15 @@ import {
   reserveAuthAttempt,
   rememberAuthenticatedAddress,
   isKnownAddress,
+  knownAddressesLoaded,
   _resetKnownAddressesForTesting,
 } from "@/lib/rate-limit/rate-limiter";
+
+beforeEach(() => {
+  store.findMany.mockReset().mockResolvedValue([]);
+  store.upsert.mockReset().mockResolvedValue({});
+  store.deleteMany.mockReset().mockResolvedValue({ count: 0 });
+});
 
 // Every client-address assertion below assumes forwarded headers are trusted
 // (the default); a TRUST_PROXY_HEADERS=false in the shell must not change them.
@@ -637,5 +658,170 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
     for (let i = 0; i < 10_050; i++) authRateLimiter.check(`flood:10.${i >> 16}.${(i >> 8) & 255}.${i & 255}`);
     const perIp = (authRateLimiter as unknown as { store: Map<string, unknown> }).store;
     expect(perIp.size).toBe(10_000);
+  });
+});
+
+// A lockout used to leave no trace: a password-guessing run against the one
+// admin account showed nowhere.
+describe("lockouts are logged, once per window", () => {
+  const request = (ip: string) =>
+    new Request("http://localhost/api/auth/local/login", { headers: { "x-forwarded-for": ip } });
+  const warnings = () => vi.mocked(apiLogger.warn).mock.calls.filter(([source]) => source === "RateLimit");
+
+  beforeEach(() => {
+    authRateLimiter.clear();
+    authGlobalRateLimiter.clear();
+    _resetKnownAddressesForTesting();
+    _resetLockoutLogForTesting();
+    vi.mocked(apiLogger.warn).mockClear();
+  });
+
+  it("logs the address whose budget ran out, and not again for the refusals that follow", () => {
+    for (let i = 0; i < 10; i++) reserveAuthAttempt(request("198.51.100.7"), "login");
+    expect(warnings()).toHaveLength(0);
+
+    for (let i = 0; i < 25; i++) expect(peekAuthRateLimit(request("198.51.100.7"), "login")?.status).toBe(429);
+    expect(reserveAuthAttempt(request("198.51.100.7"), "login").refused?.status).toBe(429);
+
+    expect(warnings()).toEqual([
+      [
+        "RateLimit",
+        'Too many attempts on "login" from 198.51.100.7 — refusing it until the window resets',
+        { bucket: "login", address: "198.51.100.7" },
+      ],
+    ]);
+  });
+
+  it("logs the floor once when rotating addresses exhaust it", () => {
+    for (let i = 0; i < 60; i++) reserveAuthAttempt(request(`203.0.113.${i}`), "login");
+    for (let i = 0; i < 10; i++) expect(peekAuthRateLimit(request(`192.0.2.${i}`), "login")?.status).toBe(429);
+
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0][1]).toContain('Too many failed attempts on "login" across addresses no sign-in has succeeded from');
+  });
+
+  it("logs each bucket and address separately", () => {
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.7"), "plex-init");
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.8"), "plex-init");
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request("198.51.100.7"), "setup");
+    expect(warnings().map(([, , meta]) => meta)).toEqual([
+      { bucket: "plex-init", address: "198.51.100.7" },
+      { bucket: "plex-init", address: "198.51.100.8" },
+      { bucket: "setup", address: "198.51.100.7" },
+    ]);
+  });
+
+  it("repeats at most 64 characters of an address a client wrote", () => {
+    const long = "9".repeat(300);
+    expect(auditAddress(request(long))).toHaveLength(64);
+    for (let i = 0; i < 11; i++) checkAuthRateLimit(request(long), "login");
+    expect((warnings()[0][2] as { address: string }).address).toHaveLength(64);
+  });
+});
+
+// Kept in memory only, a restart forgot every address a sign-in had succeeded
+// from — and whoever was sending four wrong passwords a minute then held the
+// floor against the admin too.
+describe("addresses a sign-in succeeded from survive a restart", () => {
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  const request = (ip: string) =>
+    new Request("http://localhost/api/auth/local/login", { headers: { "x-forwarded-for": ip } });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(() => {
+    authRateLimiter.clear();
+    authGlobalRateLimiter.clear();
+    _resetKnownAddressesForTesting();
+    _resetLockoutLogForTesting();
+  });
+
+  it("stores the address of a successful sign-in, once an hour at most", async () => {
+    const attempt = reserveAuthAttempt(request("198.51.100.7"), "login");
+    if (attempt.refused) throw new Error("refused");
+    attempt.succeeded();
+    await flush();
+
+    expect(store.upsert).toHaveBeenCalledTimes(1);
+    const { where, create, update } = store.upsert.mock.calls[0][0];
+    expect(where).toEqual({ address: "198.51.100.7" });
+    expect(create.address).toBe("198.51.100.7");
+    expect(update.lastSignInAt).toBeInstanceOf(Date);
+    // Rows past their 30 days are dropped on the way.
+    expect(store.deleteMany).toHaveBeenCalledTimes(1);
+
+    rememberAuthenticatedAddress(request("198.51.100.7"));
+    await flush();
+    expect(store.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not store an address whose sign-in failed", async () => {
+    reserveAuthAttempt(request("203.0.113.50"), "login");
+    await flush();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
+  it("reads the stored addresses back after a restart, and exempts them from the floor again", async () => {
+    store.findMany.mockResolvedValue([{ address: "198.51.100.7", lastSignInAt: new Date(Date.now() - 86_400_000) }]);
+    // A restart: nothing in memory.
+    _resetKnownAddressesForTesting();
+    await knownAddressesLoaded();
+
+    expect(store.findMany.mock.calls[0][0].where.lastSignInAt.gt.getTime()).toBeGreaterThan(Date.now() - THIRTY_DAYS - 5000);
+    expect(isKnownAddress("198.51.100.7")).toBe(true);
+    expect(isKnownAddress("203.0.113.9")).toBe(false);
+
+    // The flood that used to lock the admin out after a restart.
+    for (let i = 0; i < 60; i++) reserveAuthAttempt(request(`203.0.113.${i}`), "login");
+    expect(peekAuthRateLimit(request("192.0.2.1"), "login")?.status).toBe(429);
+    expect(peekAuthRateLimit(request("198.51.100.7"), "login")).toBeNull();
+    expect(reserveAuthAttempt(request("198.51.100.7"), "login").refused).toBeNull();
+  });
+
+  it("reads them once per process, however often it is asked", async () => {
+    isKnownAddress("a");
+    isKnownAddress("b");
+    await knownAddressesLoaded();
+    isKnownAddress("c");
+    expect(store.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps working when they cannot be read, and tries again later", async () => {
+    store.findMany.mockRejectedValueOnce(new Error("db down"));
+    await expect(knownAddressesLoaded()).resolves.toBeUndefined();
+
+    // The failed read is not remembered as done: the next question reads again.
+    store.findMany.mockResolvedValue([{ address: "198.51.100.7", lastSignInAt: new Date() }]);
+    await knownAddressesLoaded();
+    expect(store.findMany).toHaveBeenCalledTimes(2);
+    expect(isKnownAddress("198.51.100.7")).toBe(true);
+  });
+
+  it("does not let a stored row replace a sign-in made since the process started", async () => {
+    let release: (rows: unknown[]) => void = () => {};
+    store.findMany.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    const loading = knownAddressesLoaded();
+    rememberAuthenticatedAddress(request("198.51.100.7"));
+    // A row about to expire, for an address that just signed in again.
+    release([{ address: "198.51.100.7", lastSignInAt: new Date(Date.now() - THIRTY_DAYS + 1000) }]);
+    await loading;
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 5000);
+      expect(isKnownAddress("198.51.100.7")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a failed write does not fail the sign-in, and is tried again on the next one", async () => {
+    store.upsert.mockRejectedValueOnce(new Error("db down"));
+    expect(() => rememberAuthenticatedAddress(request("198.51.100.7"))).not.toThrow();
+    await flush();
+    expect(isKnownAddress("198.51.100.7")).toBe(true);
+
+    rememberAuthenticatedAddress(request("198.51.100.7"));
+    await flush();
+    expect(store.upsert).toHaveBeenCalledTimes(2);
   });
 });

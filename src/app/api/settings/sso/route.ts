@@ -17,6 +17,7 @@ import {
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired, ssoLinkedToIssuer } from "@/lib/auth/reauth";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -367,6 +368,13 @@ export async function PUT(request: NextRequest) {
   // signing key, etc.) takes effect on the next login instead of waiting for
   // the TTL to expire.
   invalidateOidcDiscoveryCache();
+
+  // Which identity SSO trusts, never the client secret.
+  logSecurityChange(request, "SSO settings changed", {
+    ssoEnabled: updated.ssoEnabled,
+    ssoMode: updated.ssoMode,
+    issuer: updated.ssoMode === "FORWARD_AUTH" ? "forward-auth" : updated.oidcIssuer,
+  });
 
   // hasPreviousConfig should reflect the *post-save* row state, not just
   // whether this PUT happened to take a snapshot. A no-op save preserves

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { rotateSession } from "@/lib/auth/session";
 import { currentSsoIssuer, getSsoSettings, isForwardAuthMissingSecret, isSsoUsable } from "@/lib/sso/config";
 import { apiLogger } from "@/lib/logger";
+import { auditMeta } from "@/lib/auth/audit";
 import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
@@ -55,7 +56,8 @@ export async function GET(request: NextRequest) {
   if (!hasForwardAuthSecret(request.headers)) {
     apiLogger.warn(
       "Auth",
-      `Forward-auth login rejected: the ${FORWARD_AUTH_PROXY_HEADER} header is missing or wrong — the request did not come through the configured proxy`
+      `Forward-auth login rejected: the ${FORWARD_AUTH_PROXY_HEADER} header is missing or wrong — the request did not come through the configured proxy`,
+      auditMeta(request),
     );
     return NextResponse.redirect(new URL("/login?sso_error=untrusted_proxy", baseUrl));
   }
@@ -98,7 +100,8 @@ export async function GET(request: NextRequest) {
   if (!user || !user.ssoEnabled) {
     apiLogger.warn(
       "Auth",
-      `Forward-auth login rejected: no linked account for "${subject}"`
+      `Forward-auth login rejected: no linked account for "${subject}"`,
+      auditMeta(request),
     );
     return NextResponse.redirect(new URL("/login?sso_error=not_linked", baseUrl));
   }
@@ -138,7 +141,7 @@ export async function GET(request: NextRequest) {
   session.sessionVersion = user.sessionVersion;
   await session.save();
 
-  apiLogger.info("Auth", `SSO (forward-auth) login: "${user.username}"`);
+  apiLogger.info("Auth", `SSO (forward-auth) login: "${user.username}"`, auditMeta(request));
 
   return NextResponse.redirect(new URL("/", baseUrl));
 }

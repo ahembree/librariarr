@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth/session";
 import { withSession } from "@/lib/auth/with-session";
 import { eventBus } from "@/lib/events/event-bus";
 import type { AppEvent } from "@/lib/events/event-bus";
+import { endWhenSessionRevoked } from "@/lib/auth/session-standing";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,7 @@ export const GET = withSession(async (session) => {
         cleanedUp = true;
         closed = true;
         unsubscribe();
+        stopWatchingSession();
         clearInterval(heartbeatTimer);
         clearInterval(checkClosed);
         clearTimeout(maxLifetimeTimer);
@@ -85,6 +87,10 @@ export const GET = withSession(async (session) => {
 
       // Safety net: tear down after max lifetime
       const maxLifetimeTimer = setTimeout(cleanup, MAX_STREAM_LIFETIME);
+
+      // A sign-out or credential change revokes the cookie this stream was
+      // opened with; the stream ends with it instead of an hour later.
+      const stopWatchingSession = endWhenSessionRevoked(session, () => cleanup());
 
       // Backstop: catch a `closed` flip from a failed enqueue (where cancel()
       // isn't invoked) and tear down promptly.

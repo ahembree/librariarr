@@ -44,11 +44,14 @@ vi.mock("@/lib/api-keys/notify", async (importOriginal) => {
 import { GET, POST } from "@/app/api/settings/api-keys/route";
 import { DELETE } from "@/app/api/settings/api-keys/[id]/route";
 import { GET as meGET } from "@/app/api/v1/me/route";
-import { API_KEY_PATTERN, verifyApiKey } from "@/lib/api-keys/keys";
+import { API_KEY_PATTERN, newApiKey, verifyApiKey } from "@/lib/api-keys/keys";
+import { _resetVerifiedApiKeysForTesting } from "@/lib/api-keys/guard";
+import { knownApiKeyPrefixes } from "@/lib/api-keys/known-prefixes";
 import { MAX_API_KEYS } from "@/lib/api-keys/manage";
 import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
 import {
   _resetKnownAddressesForTesting,
+  apiKeyUnknownLookupFloor,
   authGlobalRateLimiter,
   authRateLimiter,
 } from "@/lib/rate-limit/rate-limiter";
@@ -659,4 +662,59 @@ describe("/api/settings/api-keys", () => {
       await vi.waitFor(() => expect(mockSendDiscord).toHaveBeenCalled());
     });
   });
+
+  // While someone presents a thousand made-up keys a minute, the guard asks
+  // its cached list of issued prefixes which keys are worth verifying. The
+  // routes that change that list must drop it, or a key created during the
+  // flood is answered 429 until the cache expires.
+  describe("the guard's cached key prefixes follow create and delete", () => {
+    const floorStore = () => (apiKeyUnknownLookupFloor as unknown as { store: Map<string, unknown> }).store;
+    const fillTheFloor = () => {
+      for (let i = 0; i <= apiKeyUnknownLookupFloor.maxAttempts; i++) apiKeyUnknownLookupFloor.check("unknown-lookups");
+    };
+
+    beforeEach(() => {
+      floorStore().clear();
+      _resetVerifiedApiKeysForTesting();
+    });
+    afterEach(() => {
+      floorStore().clear();
+      _resetVerifiedApiKeysForTesting();
+    });
+
+    it("a key created during a flood authenticates at once", async () => {
+      await login();
+      fillTheFloor();
+      // The flood has made the guard cache the prefixes — none are issued yet.
+      expect((await knownApiKeyPrefixes()).size).toBe(0);
+      expect((await callMe(newApiKey())).status).toBe(429);
+
+      const created = await expectJson<{ apiKey: ApiKeyDto; key: string }>(
+        await create({ name: "Made mid-flood", scopes: ["media:read"], expiresAt: null }),
+        201,
+      );
+
+      expect((await knownApiKeyPrefixes()).has(created.apiKey.prefix)).toBe(true);
+      expect((await callMe(created.key)).status).toBe(200);
+      // A key that was never issued is still refused without a lookup.
+      expect((await callMe(newApiKey())).status).toBe(429);
+    });
+
+    it("a deleted key's prefix leaves the list with it", async () => {
+      await login();
+      const created = await expectJson<{ apiKey: ApiKeyDto; key: string }>(
+        await create({ name: "Short-lived", scopes: ["media:read"], expiresAt: null }),
+        201,
+      );
+      expect((await knownApiKeyPrefixes()).has(created.apiKey.prefix)).toBe(true);
+
+      await expectJson(
+        await callRouteWithParams(DELETE, { id: created.apiKey.id }, { url: "/api/settings/api-keys/x", method: "DELETE" }),
+        200,
+      );
+
+      expect((await knownApiKeyPrefixes()).has(created.apiKey.prefix)).toBe(false);
+    });
+  });
 });
+

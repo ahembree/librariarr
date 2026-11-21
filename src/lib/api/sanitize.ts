@@ -71,3 +71,44 @@ export function sanitizeErrorDetail(
   cleaned = cleaned.replace(/\b(?:[\w-]+\.)+plex\.direct\b/gi, "[internal]");
   return cleaned;
 }
+
+/** Name-lookup error codes: what follows is always the host that was looked up. */
+const LOOKUP_ERROR_CODES = "ENOTFOUND|EAI_AGAIN";
+/**
+ * Connection error codes: followed by `address:port` when Node names one
+ * (`connect ECONNREFUSED 203.0.113.7:32400`) — and by ordinary words when it
+ * does not, which must be left alone. `EPROTO` and `ECONNRESET` are not here:
+ * what follows them is the TLS or socket detail, never an address.
+ */
+const CONNECT_ERROR_CODES = "ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|EHOSTDOWN|ENETUNREACH|EADDRNOTAVAIL";
+
+/**
+ * Remove every network address from error text, public ones included.
+ *
+ * `sanitizeErrorDetail` hides private addresses and keeps the rest, because
+ * the admin reading the message needs to know WHICH host did not answer
+ * (`getaddrinfo ENOTFOUND plex.example.com`). A third-party integration
+ * reading the same row through the public API does not: the public API strips
+ * a media server's `url` and `machineId` from every response
+ * (`src/lib/api-keys/trim-internals.ts`), and a failed sync's error text
+ * handed the same address back — the server's public IP, DNS name and port.
+ * Applied on top of `sanitizeErrorDetail`, for the public API only.
+ */
+export function redactNetworkAddresses(text: string): string {
+  return (
+    text
+      // scheme://host[:port] — the path, if any, is kept (it is the API route).
+      .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>()]+/gi, "[address]")
+      // The host a lookup failed on: `getaddrinfo ENOTFOUND plex.example.com`.
+      .replace(new RegExp(`\\b(${LOOKUP_ERROR_CODES})\\s+[^\\s,;)]+`, "g"), "$1 [address]")
+      // The address a connection failed to, when one is named — recognised by
+      // its port: `connect ECONNREFUSED 203.0.113.7:32400`, `… ::1:32400`.
+      .replace(new RegExp(`\\b(${CONNECT_ERROR_CODES})\\s+[^\\s,;)]*:\\d{1,5}(?![\\w:])`, "g"), "$1 [address]")
+      // A certificate mismatch lists the host and every name on the certificate.
+      .replace(/\b(Host|DNS|IP Address):\s*[^\s,;)]+/g, "$1: [address]")
+      // Any IPv4 address left, with its port.
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g, "[address]")
+      // A bracketed IPv6 literal, with its port.
+      .replace(/\[[0-9a-f:.%]*:[0-9a-f:.%]*\](?::\d{1,5})?/gi, "[address]")
+  );
+}

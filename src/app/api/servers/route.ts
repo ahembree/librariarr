@@ -11,6 +11,8 @@ import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { apiLogger } from "@/lib/logger";
 import type { SyncJob } from "@/generated/prisma/client";
+import { logSecurityChange } from "@/lib/auth/audit";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * The user's media servers.
@@ -174,6 +176,9 @@ export const POST = withSession(async (session, request: NextRequest) => {
       invalidateMediaCaches();
       // Reconcile the realtime WebSocket (url/token may have changed).
       eventBus.emit({ type: "server:changed", userId: session.userId, meta: { serverId: server.id } });
+      logSecurityChange(request, `Media server "${server.name}" re-added — its address and token were replaced`, {
+        urlChanged: stripTrailingSlashes(existing.url) !== stripTrailingSlashes(server.url),
+      });
       return NextResponse.json({ server: sanitize(server), updated: true }, { status: 200 });
     }
   }
@@ -197,6 +202,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
 
   // Open a realtime WebSocket for the newly-added server.
   eventBus.emit({ type: "server:changed", userId: session.userId, meta: { serverId: server.id } });
+  logSecurityChange(request, `Media server "${server.name}" (${server.type}) added`);
 
   return NextResponse.json({ server: sanitize(server) }, { status: 201 });
 });

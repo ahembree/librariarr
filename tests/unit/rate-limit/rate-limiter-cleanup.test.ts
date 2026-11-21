@@ -1,5 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+// The stored known addresses: nothing stored, nothing written.
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    knownSignInAddress: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+  },
+}));
+
 type Module = typeof import("@/lib/rate-limit/rate-limiter");
 
 const FIVE_MIN = 5 * 60 * 1000;
@@ -44,8 +61,8 @@ describe("rate-limiter periodic cleanup", () => {
     expect(cleanup).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    // auth, auth floor, AI, and the five API-key limiters.
-    expect(cleanup).toHaveBeenCalledTimes(8);
+    // auth, auth floor, AI, the five API-key limiters, and the lockout log's.
+    expect(cleanup).toHaveBeenCalledTimes(9);
     const swept = new Set(cleanup.mock.contexts);
     for (const limiter of [
       mod.authRateLimiter,

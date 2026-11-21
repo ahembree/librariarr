@@ -7,6 +7,7 @@ import { validateRequest, plexLinkSchema } from "@/lib/validation";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
+import { clearOidcHandshake } from "@/lib/sso/handshake";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   // Verify user still exists (handles stale sessions after DB reset)
@@ -74,8 +75,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // accumulate in long-lived authenticated sessions. The token stays in the
     // User row only (see `SessionData`).
     session.sessionVersion = currentUser.sessionVersion;
-    session.oidcState = undefined;
-    session.oidcVerifier = undefined;
+    clearOidcHandshake(session);
     await session.save();
 
     apiLogger.info("Auth", `Plex account linked for user "${session.userId}"`);

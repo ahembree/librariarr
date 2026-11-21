@@ -211,11 +211,15 @@ describe("/api/auth/reauth/*", () => {
       const url = new URL(authorizationUrl);
       expect(`${url.origin}${url.pathname}`).toBe(`${ISSUER}/auth`);
       expect(url.searchParams.get("prompt")).toBe("login");
+      // Obliges the IdP to report `auth_time`, which the callback requires.
+      expect(url.searchParams.get("max_age")).toBe("0");
       expect(url.searchParams.get("client_id")).toBe("client");
       expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3000/api/auth/sso/oidc/callback");
       expect(url.searchParams.get("code_challenge_method")).toBe("S256");
       const session = getMockSession();
       expect(session.oidcFlow).toBe("reauth");
+      // Timed: the callback refuses a handshake older than ten minutes.
+      expect(Date.now() - session.oidcStartedAt!).toBeLessThan(5000);
       expect(session.oidcVerifier).toEqual(expect.any(String));
       expect(url.searchParams.get("state")).toBe(session.oidcState);
       // The attempt's nonce rides in the state, so the popup's report reaches

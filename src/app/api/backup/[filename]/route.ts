@@ -4,10 +4,11 @@ import { getBackupFilePath, deleteBackup } from "@/lib/backup/backup-service";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import fs from "fs/promises";
+import { logSecurityChange } from "@/lib/auth/audit";
 
 export const GET = withSession(async (
   session,
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ filename: string }> }
 ) => {
   // The file carries the Plex token (User.plexToken) and every server's and
@@ -29,6 +30,8 @@ export const GET = withSession(async (
 
   try {
     const data = await fs.readFile(filepath);
+    // The file holds every stored credential: who took a copy is on record.
+    logSecurityChange(request, `Backup downloaded: ${filename}`);
     const isGz = filename.endsWith(".gz");
     return new NextResponse(data, {
       headers: {
@@ -46,7 +49,7 @@ export const GET = withSession(async (
 
 export const DELETE = withSession(async (
   session,
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ filename: string }> }
 ) => {
   const { filename } = await params;
@@ -55,5 +58,6 @@ export const DELETE = withSession(async (
     return NextResponse.json({ error: "Backup not found" }, { status: 404 });
   }
 
+  logSecurityChange(request, `Backup deleted: ${filename}`);
   return NextResponse.json({ success: true });
 });

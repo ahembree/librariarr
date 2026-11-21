@@ -3,6 +3,7 @@ import https from "https";
 import { NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import { ARTIST_MBID_SCHEME, firstMbid } from "@/lib/media/musicbrainz";
 import { BYPASS_BREAKER } from "./health-cache";
+import { confineCredentials } from "@/lib/http-credentials";
 import { instrumentMediaServerClient, normalizeMediaServerUrl } from "./http-instrumentation";
 import type { MediaServerClient, MediaServerClientOptions, LibraryItemType } from "./client";
 import type {
@@ -162,6 +163,9 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
         "Content-Type": "application/json",
       },
       timeout: 30000,
+      // The token stays on this server: no absolute request URL, and no token
+      // on a redirect that leaves it (`src/lib/http-credentials.ts`).
+      ...confineCredentials(this.baseURL),
     };
 
     if (options?.skipTlsVerify) {

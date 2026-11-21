@@ -158,7 +158,7 @@ The guide catalog is cached for 6 hours. Click **Refresh** to fetch the latest d
 
 If the guide can't be reached (a GitHub outage, or blocked outbound access), the page keeps your app selected and shows a **guide catalog unavailable** notice with a **Retry** button, rather than a partial or empty list. A failed fetch is never cached, so a later retry loads the complete catalog once the source is reachable again.
 
-The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` (default `TRaSH-Guides/Guides`) and `TRASH_GUIDES_REF` (default `master`) environment variables — useful if you maintain a fork or an internal mirror.
+The source repository and branch can be overridden with the `TRASH_GUIDES_REPO` (default `TRaSH-Guides/Guides`) and `TRASH_GUIDES_REF` (default `master`) environment variables — useful if you maintain a fork or an internal mirror. Each time the guide is loaded, the branch is resolved to the commit it names at that moment and every file is read from that one commit, so a guide update landing midway can never produce a mix of two revisions; the commit is recorded in System Logs. To stay on a revision you have reviewed, set `TRASH_GUIDES_REF` to a full commit id.
 
 <Aside type="tip">
   Librariarr fetches guide files over HTTPS from the public guides repository. If your deployment restricts outbound network access, allow access to `raw.githubusercontent.com` and `api.github.com` (or point the environment variables at a reachable mirror).
