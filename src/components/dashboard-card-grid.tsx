@@ -297,6 +297,9 @@ function renderCard(card: CardEntry, ctx: CardContext): React.ReactNode {
           topSeries={stats.topSeries ?? []}
           topMusic={stats.topMusic ?? []}
           filterType={filterType}
+          serverId={serverId}
+          display={display}
+          onDisplayChange={onDisplayChange}
           onMovieClick={ctx.onMovieClick}
           onSeriesClick={ctx.onSeriesClick}
           onArtistClick={ctx.onArtistClick}

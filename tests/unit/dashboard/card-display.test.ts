@@ -5,6 +5,7 @@ import {
   effectiveCardType,
   isValidCardDisplay,
   normalizeCardDisplay,
+  sameCardDisplay,
   toggleHiddenValue,
   withDisplay,
 } from "@/lib/dashboard/card-display";
@@ -126,5 +127,26 @@ describe("display in the saved layout", () => {
   it("loads a malformed display as what is usable of it", () => {
     expect(resolveLayout(layout({ view: "pie", topN: 10 })).main[0].display).toEqual({ topN: 10 });
     expect(resolveLayout(layout("junk")).main[0]).toEqual({ id: "quality-breakdown", size: 6 });
+  });
+});
+
+describe("Top Played time range", () => {
+  it("validates, normalizes, stores and compares the range", () => {
+    expect(isValidCardDisplay({ range: "month" })).toBe(true);
+    expect(isValidCardDisplay({ range: "decade" })).toBe(false);
+    expect(normalizeCardDisplay({ range: "3months" })).toEqual({ range: "3months" });
+    expect(normalizeCardDisplay({ range: "decade" })).toBeUndefined();
+    expect(withDisplay(undefined, { range: "year" })).toEqual({ range: "year" });
+    expect(withDisplay({ range: "year" }, { range: undefined })).toBeUndefined();
+    expect(sameCardDisplay({ range: "week" }, { range: "week" })).toBe(true);
+    expect(sameCardDisplay({ range: "week" }, { range: "month" })).toBe(false);
+  });
+
+  it("is kept in a saved layout", () => {
+    const saved = {
+      main: [{ id: "top-played", size: 12, display: { range: "week" } }], movies: [], series: [], music: [],
+    } as unknown as DashboardLayout;
+    expect(isValidLayout(saved)).toBe(true);
+    expect(resolveLayout(saved).main[0].display).toEqual({ range: "week" });
   });
 });
