@@ -1,9 +1,12 @@
 /**
  * A dashboard card's own display choices — its view, how many values it
- * lists, its type pick and the values left out of its totals — saved with the
+ * lists, its type pick, the values left out of its totals and (Top Played)
+ * its time range — saved with the
  * layout (`CardEntry.display`), so they survive a reload and entering or
  * leaving the layout editor. Only what differs from the defaults is stored.
  */
+
+import { isPlayRange, type PlayRange } from "@/lib/dashboard/play-range";
 
 export type CardMediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -23,6 +26,8 @@ export interface CardDisplay {
   type?: CardTypePick;
   /** Values left out of the card's totals (clicked off in its list or legend). */
   hidden?: string[];
+  /** Top Played: the time-range preset its lists rank plays over; absent is all time. */
+  range?: PlayRange;
 }
 
 export const TOP_N_CHOICES = [5, 10, 15, 20] as const;
@@ -32,7 +37,7 @@ export const MAX_HIDDEN_VALUES = 30;
 export const MAX_HIDDEN_VALUE_LENGTH = 100;
 
 const TYPE_PICKS = new Set<string>(["ALL", "MOVIE", "SERIES", "MUSIC"]);
-const DISPLAY_KEYS = new Set(["view", "topN", "type", "hidden"]);
+const DISPLAY_KEYS = new Set(["view", "topN", "type", "hidden", "range"]);
 
 function isTopN(value: unknown): value is number | null {
   return value === null || (TOP_N_CHOICES as readonly unknown[]).includes(value);
@@ -50,6 +55,7 @@ export function isValidCardDisplay(raw: unknown): raw is CardDisplay {
   if (display.view !== undefined && display.view !== "donut") return false;
   if (display.topN !== undefined && !isTopN(display.topN)) return false;
   if (display.type !== undefined && !(typeof display.type === "string" && TYPE_PICKS.has(display.type))) return false;
+  if (display.range !== undefined && !isPlayRange(display.range)) return false;
   if (display.hidden !== undefined) {
     if (!Array.isArray(display.hidden) || display.hidden.length > MAX_HIDDEN_VALUES) return false;
     if (!display.hidden.every(isHiddenValue)) return false;
@@ -71,6 +77,7 @@ export function normalizeCardDisplay(raw: unknown): CardDisplay | undefined {
     ...(display.view === "donut" && { view: "donut" as const }),
     ...(isTopN(display.topN) && { topN: display.topN }),
     ...(typeof display.type === "string" && TYPE_PICKS.has(display.type) && { type: display.type as CardTypePick }),
+    ...(isPlayRange(display.range) && { range: display.range }),
     hidden,
   });
 }
@@ -87,6 +94,7 @@ export function withDisplay(current: CardDisplay | undefined, patch: Partial<Car
   if (merged.topN !== undefined && merged.topN !== DEFAULT_TOP_N) next.topN = merged.topN;
   if (merged.type !== undefined) next.type = merged.type;
   if (merged.hidden && merged.hidden.length > 0) next.hidden = merged.hidden;
+  if (merged.range !== undefined) next.range = merged.range;
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -100,6 +108,7 @@ export function sameCardDisplay(a: CardDisplay | undefined, b: CardDisplay | und
     a.view === b.view &&
     a.topN === b.topN &&
     a.type === b.type &&
+    a.range === b.range &&
     hiddenA.length === hiddenB.length &&
     hiddenA.every((v, i) => v === hiddenB[i])
   );

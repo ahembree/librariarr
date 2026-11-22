@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Film, Tv, Music, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,16 @@ import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { InsightCard, InsightEmpty } from "@/components/dashboard/insight-card";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
 import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useDashboardCardDisplay } from "@/hooks/use-dashboard-card-display";
+import type { CardDisplay } from "@/lib/dashboard/card-display";
+import { PLAY_RANGE_OPTIONS, isPlayRange, playRangeLabel, type PlayRange } from "@/lib/dashboard/play-range";
 
 interface TopMovie {
   id: string;
@@ -34,6 +44,11 @@ interface TopPlayedProps {
   topSeries: TopSeries[];
   topMusic: TopMusic[];
   filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  /** The dashboard's server pick, for the windowed lists' request. */
+  serverId?: string;
+  /** The card's saved display choices (its time range) and their setter. */
+  display?: CardDisplay;
+  onDisplayChange?: (next: CardDisplay | undefined) => void;
   onMovieClick?: (movieId: string) => void;
   onSeriesClick?: (seriesName: string, mediaItemId?: string) => void;
   onArtistClick?: (mediaItemId: string) => void;
@@ -138,31 +153,143 @@ function RankedRow({
   );
 }
 
+interface WindowLists {
+  topMovies: TopMovie[];
+  topSeries: TopSeries[];
+  topMusic: TopMusic[];
+}
+
+const ALL_TIME = "all";
+
+/**
+ * How often a windowed list is asked again on its own. The window rolls with
+ * the clock, so on a page with no sync or watch-history event to refetch the
+ * stats, plays that aged out would otherwise stay listed. With the route's
+ * 5-minute cache, a list on screen is at most about ten minutes behind.
+ */
+export const WINDOW_REFRESH_MS = 5 * 60_000;
+
+/**
+ * The lists over a time-range preset, from `GET /api/media/stats/top-played`.
+ * Asked again whenever the all-time lists change identity (the page refetches
+ * its stats on every sync and watch-history event) and every
+ * `WINDOW_REFRESH_MS`, so the window rolls forward on a quiet page too.
+ * `null` while the first answer for the current range is outstanding.
+ */
+function useWindowLists(
+  range: PlayRange | undefined,
+  serverId: string | undefined,
+  refreshToken: unknown,
+): { lists: WindowLists | null; failed: boolean } {
+  const [state, setState] = useState<{ key: string; lists: WindowLists | null; failed: boolean }>({
+    key: "",
+    lists: null,
+    failed: false,
+  });
+  const key = range ? `${range}:${serverId ?? ""}` : "";
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!range) return;
+    const interval = setInterval(() => setTick((t) => t + 1), WINDOW_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [range]);
+
+  useEffect(() => {
+    if (!range) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ range });
+    if (serverId) params.set("serverId", serverId);
+    fetch(`/api/media/stats/top-played?${params}`, { signal: controller.signal })
+      .then((res) => (res.ok ? (res.json() as Promise<WindowLists>) : Promise.reject(new Error(String(res.status)))))
+      .then((lists) => setState({ key, lists, failed: false }))
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        // Keep a range's previous answer on a failed refresh.
+        setState((prev) => (prev.key === key && prev.lists ? prev : { key, lists: null, failed: true }));
+      });
+    return () => controller.abort();
+  }, [range, serverId, key, refreshToken, tick]);
+
+  if (!range || state.key !== key) return { lists: null, failed: false };
+  return { lists: state.lists, failed: state.failed };
+}
+
 export function TopPlayed({
-  topMovies,
-  topSeries,
-  topMusic,
+  topMovies: allTimeMovies,
+  topSeries: allTimeSeries,
+  topMusic: allTimeMusic,
   filterType,
+  serverId,
+  display,
+  onDisplayChange,
   onMovieClick,
   onSeriesClick,
   onArtistClick,
 }: TopPlayedProps) {
+  const [choices, updateChoices] = useDashboardCardDisplay(display, onDisplayChange, filterType);
+  const range = choices.range;
+  const { lists: windowLists, failed } = useWindowLists(range, serverId, allTimeMovies);
+
   const showMovies = !filterType || filterType === "MOVIE";
   const showSeries = !filterType || filterType === "SERIES";
   const showMusic = !filterType || filterType === "MUSIC";
 
-  if (topMovies.length === 0 && topSeries.length === 0 && topMusic.length === 0) {
+  const lists = range ? windowLists : { topMovies: allTimeMovies, topSeries: allTimeSeries, topMusic: allTimeMusic };
+  const topMovies = lists?.topMovies ?? [];
+  const topSeries = lists?.topSeries ?? [];
+  const topMusic = lists?.topMusic ?? [];
+
+  // All time with no plays at all: nothing to show (as before). A window keeps
+  // the card, so its range can be changed back.
+  if (!range && topMovies.length === 0 && topSeries.length === 0 && topMusic.length === 0) {
     return null;
   }
+
+  const rangeLabel = playRangeLabel(range).toLowerCase();
+  const loading = range !== undefined && lists === null && !failed;
+  const emptyMessage = (kind: string) =>
+    failed
+      ? "Failed to load play data."
+      : loading
+        ? "Loading…"
+        : range
+          ? `No ${kind} plays in the ${rangeLabel}.`
+          : `No ${kind} play data yet.`;
+  const subLine = (count: number) =>
+    count > 0 ? `top ${count} · ${range ? rangeLabel : "by play count"}` : range ? rangeLabel : undefined;
+
+  const rangeSelect = (
+    <Select
+      value={range ?? ALL_TIME}
+      onValueChange={(v) => updateChoices({ range: isPlayRange(v) ? v : undefined })}
+    >
+      <SelectTrigger size="sm" className="w-32 min-w-0 max-w-full text-xs" aria-label="Time range">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL_TIME}>All Time</SelectItem>
+        {PLAY_RANGE_OPTIONS.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+  // One picker for the three lists, on the first one shown.
+  const firstShown = showMovies ? "movies" : showSeries ? "series" : "music";
+  const controlsFor = (list: "movies" | "series" | "music") => (list === firstShown ? rangeSelect : undefined);
 
   const movieCard = (
     <InsightCard
       icon={Film}
       title="Most Played Movies"
-      sub={topMovies.length > 0 ? `top ${topMovies.length} · by play count` : undefined}
+      sub={subLine(topMovies.length)}
+      controls={controlsFor("movies")}
     >
       {topMovies.length === 0 ? (
-        <InsightEmpty icon={Film} message="No movie play data yet." />
+        <InsightEmpty icon={Film} message={emptyMessage("movie")} />
       ) : (
         <div className="space-y-0.5">
           {topMovies.map((movie, i) => {
@@ -210,10 +337,11 @@ export function TopPlayed({
     <InsightCard
       icon={Tv}
       title="Most Played Series"
-      sub={topSeries.length > 0 ? `top ${topSeries.length} · by play count` : undefined}
+      sub={subLine(topSeries.length)}
+      controls={controlsFor("series")}
     >
       {topSeries.length === 0 ? (
-        <InsightEmpty icon={Tv} message="No series play data yet." />
+        <InsightEmpty icon={Tv} message={emptyMessage("series")} />
       ) : (
         <div className="space-y-0.5">
           {topSeries.map((series, i) => {
@@ -270,10 +398,11 @@ export function TopPlayed({
     <InsightCard
       icon={Music}
       title="Most Played Artists"
-      sub={topMusic.length > 0 ? `top ${topMusic.length} · by play count` : undefined}
+      sub={subLine(topMusic.length)}
+      controls={controlsFor("music")}
     >
       {topMusic.length === 0 ? (
-        <InsightEmpty icon={Music} message="No music play data yet." />
+        <InsightEmpty icon={Music} message={emptyMessage("music")} />
       ) : (
         <div className="space-y-0.5">
           {topMusic.map((artist, i) => {
