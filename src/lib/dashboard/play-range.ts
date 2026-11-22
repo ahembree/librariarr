@@ -8,10 +8,10 @@
 export type PlayRange = "week" | "month" | "3months" | "year";
 
 export const PLAY_RANGE_OPTIONS: readonly { value: PlayRange; label: string; days: number }[] = [
-  { value: "week", label: "Last Week", days: 7 },
-  { value: "month", label: "Last Month", days: 30 },
-  { value: "3months", label: "Last 3 Months", days: 90 },
-  { value: "year", label: "Last Year", days: 365 },
+  { value: "week", label: "Last 7 Days", days: 7 },
+  { value: "month", label: "Last 30 Days", days: 30 },
+  { value: "3months", label: "Last 90 Days", days: 90 },
+  { value: "year", label: "Last 365 Days", days: 365 },
 ];
 
 const DAYS_BY_RANGE = new Map<string, number>(PLAY_RANGE_OPTIONS.map((o) => [o.value, o.days]));

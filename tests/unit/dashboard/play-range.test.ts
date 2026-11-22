@@ -12,7 +12,7 @@ describe("play-range", () => {
   });
 
   it("labels a preset, and none as All Time", () => {
-    expect(playRangeLabel("3months")).toBe("Last 3 Months");
+    expect(playRangeLabel("3months")).toBe("Last 90 Days");
     expect(playRangeLabel(undefined)).toBe("All Time");
   });
 
