@@ -55,28 +55,32 @@ export async function computeTopPlayedInWindow(
 async function topMoviesInWindow(serverIds: string[], dedupEnabled: boolean, since: Date): Promise<WindowTopMovie[]> {
   // Without dedup each copy is its own title, as in the all-time list.
   const titleKey = dedupEnabled ? `COALESCE(mi."dedupKey", mi.id)` : `mi.id`;
-  const top = await prisma.$queryRawUnsafe<{ title_key: string; plays: number }[]>(
-    `SELECT ${titleKey} AS title_key, COUNT(*)::int AS plays
+  const top = await prisma.$queryRawUnsafe<{ title_key: string; keyed: boolean; plays: number }[]>(
+    `SELECT ${titleKey} AS title_key, ${dedupEnabled ? `(mi."dedupKey" IS NOT NULL)` : "false"} AS keyed,
+       COUNT(*)::int AS plays
      FROM "WatchHistory" wh
      JOIN "MediaItem" mi ON wh."mediaItemId" = mi.id
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1::text[]) AND mi.type = 'MOVIE'::"LibraryType"
        AND wh."watchedAt" >= $2 AND ${completedPlaySql("wh")}
-     GROUP BY 1
+     GROUP BY 1, 2
      ORDER BY plays DESC, title_key
      LIMIT ${TOP_LIMIT}`,
     serverIds, since,
   );
   if (top.length === 0) return [];
-  const keys = top.map((t) => t.title_key);
+  // Looked up by `dedupKey` and by `id` separately, each an index probe: a
+  // filter on the COALESCE expression could use neither and read every film.
+  const keys = top.filter((t) => t.keyed).map((t) => t.title_key);
+  const ids = top.filter((t) => !t.keyed).map((t) => t.title_key);
   const reps = await prisma.$queryRawUnsafe<(Omit<WindowTopMovie, "playCount"> & { title_key: string })[]>(
     `SELECT DISTINCT ON (${titleKey}) ${titleKey} AS title_key, mi.id, mi.title, mi.year, mi."thumbUrl"
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1::text[]) AND mi.type = 'MOVIE'::"LibraryType"
-       AND ${titleKey} = ANY($2::text[])
+       AND (mi."dedupKey" = ANY($2::text[]) OR mi.id = ANY($3::text[]))
      ORDER BY ${titleKey}, mi."dedupCanonical" DESC, mi.id`,
-    serverIds, keys,
+    serverIds, keys, ids,
   );
   const repByKey = new Map(reps.map((r) => [r.title_key, r]));
   return top.flatMap((t) => {

@@ -162,9 +162,18 @@ interface WindowLists {
 const ALL_TIME = "all";
 
 /**
+ * How often a windowed list is asked again on its own. The window rolls with
+ * the clock, so on a page with no sync or watch-history event to refetch the
+ * stats, plays that aged out would otherwise stay listed. With the route's
+ * 5-minute cache, a list on screen is at most about ten minutes behind.
+ */
+export const WINDOW_REFRESH_MS = 5 * 60_000;
+
+/**
  * The lists over a time-range preset, from `GET /api/media/stats/top-played`.
- * Asked again whenever the all-time lists change identity: the page refetches
- * its stats on every sync and watch-history event, so the window follows them.
+ * Asked again whenever the all-time lists change identity (the page refetches
+ * its stats on every sync and watch-history event) and every
+ * `WINDOW_REFRESH_MS`, so the window rolls forward on a quiet page too.
  * `null` while the first answer for the current range is outstanding.
  */
 function useWindowLists(
@@ -178,6 +187,13 @@ function useWindowLists(
     failed: false,
   });
   const key = range ? `${range}:${serverId ?? ""}` : "";
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!range) return;
+    const interval = setInterval(() => setTick((t) => t + 1), WINDOW_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [range]);
 
   useEffect(() => {
     if (!range) return;
@@ -193,7 +209,7 @@ function useWindowLists(
         setState((prev) => (prev.key === key && prev.lists ? prev : { key, lists: null, failed: true }));
       });
     return () => controller.abort();
-  }, [range, serverId, key, refreshToken]);
+  }, [range, serverId, key, refreshToken, tick]);
 
   if (!range || state.key !== key) return { lists: null, failed: false };
   return { lists: state.lists, failed: state.failed };
