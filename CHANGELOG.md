@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.35.0](https://github.com/ahembree/librariarr/compare/v0.34.0...v0.35.0) (2026-11-22)
+
+
+### Features
+
+* **dashboard:** add time range presets to the top played card ([#555](https://github.com/ahembree/librariarr/issues/555)) ([a98972f](https://github.com/ahembree/librariarr/commit/a98972fc324182b620e1453ab96324d8a28b1a40))
+* **logs:** log failed sign-ins, lockouts and security-relevant settings changes ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **security:** add opt-in HSTS through HSTS_MAX_AGE ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+
+
+### Bug Fixes
+
+* **api:** keep real API keys working during a flood of unknown keys ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **api:** remove hosts and addresses from error text returned to API keys ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** close event streams when their session is revoked ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** end a session 30 days after the last sign-in ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** refuse common and easily guessed passwords ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** refuse the http origin of an app served over https ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** remember the addresses a sign-in succeeded from across restarts ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **auth:** stop another site signing the admin out over plain http ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **backup:** archive the log entries a restore replaces ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **backup:** require a recent sign-in to change the backup encryption password ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **discord:** escape Markdown in notification titles and error text ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **lifecycle:** keep the list and scroll position when a page re-reads after an action ([#552](https://github.com/ahembree/librariarr/issues/552)) ([97baacb](https://github.com/ahembree/librariarr/commit/97baacb4a273a3aa96e1100f9e3f324996f21c74))
+* **lifecycle:** re-schedule a non-destructive action after the item matches again ([#540](https://github.com/ahembree/librariarr/issues/540)) ([3a622ee](https://github.com/ahembree/librariarr/commit/3a622ee6ca8a395c5a4afe5790d84bb9fe7e9b35))
+* **plex:** fetch artwork hosted elsewhere without the Plex token ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **rules:** match wildcards with a bounded matcher instead of a regular expression ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **security:** keep stored API keys and tokens on the host they were saved for ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **servers:** answer 502 when a media server cannot list its libraries ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **sso:** expire an OIDC sign-in ten minutes after it starts ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **sso:** require the identity provider to sign in again for an OIDC confirmation ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+* **trash:** read each guide catalog from a single commit ([460d03f](https://github.com/ahembree/librariarr/commit/460d03f91da64b59310dde32950efa41d73240f2))
+
 ## [0.34.0](https://github.com/ahembree/librariarr/compare/v0.33.0...v0.34.0) (2026-11-08)
 
 
