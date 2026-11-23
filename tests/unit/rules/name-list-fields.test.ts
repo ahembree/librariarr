@@ -15,7 +15,7 @@
  * complement on a populated item.
  */
 import { describe, it, expect } from "vitest";
-import { CONDITION_FIELDS } from "@/lib/conditions/fields";
+import { CONDITION_FIELDS, getConditionField } from "@/lib/conditions/fields";
 import { isOperatorApplicable, isOperatorVisible } from "@/lib/conditions/helpers";
 import { evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
 import { evaluateAllQueryRulesInMemory } from "@/lib/query/query-engine";
@@ -69,10 +69,11 @@ const ITEM: Record<string, unknown> = {
   lastEpisodeAiredAt: "2024-01-01T00:00:00.000Z",
 };
 
+// A per-user field (User Last Played) names its user: "alice" (in ITEM's history).
 const rule = (field: string, operator: string, value: string, negate?: boolean) =>
   [{
     id: "g", condition: "AND",
-    rules: [{ id: "r", field, operator, value, condition: "AND", negate }],
+    rules: [{ id: "r", field, operator, value, condition: "AND", negate, ...(getConditionField(field)?.requiresUser ? { user: "alice" } : {}) }],
     groups: [],
   }] as never;
 

@@ -31,6 +31,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 import { withEveryMemberValues, withGroupParentTitle } from "@/lib/conditions/series-aggregates";
+import { USER_LAST_PLAYED_MAP, latestPlayByUser } from "@/lib/conditions/user-last-played";
 
 export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
@@ -55,7 +56,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
     ? {
         watchHistory: {
           where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
+          select: { serverUsername: true, watchedAt: true },
         },
       }
     : {};
@@ -295,6 +296,14 @@ export const POST = withSession(async (session, request: NextRequest) => {
       lastEpisodeAiredAt: latestEpisodeAired?.toISOString() ?? null,
       streams: allStreams,
       watchedByUsers,
+      // Each user's latest counted play of any member (User Last Played).
+      [USER_LAST_PLAYED_MAP]: latestPlayByUser(
+        allItems.flatMap((ep) =>
+          "watchHistory" in ep
+            ? (ep.watchHistory as Array<{ serverUsername: string | null; watchedAt: Date | null }>)
+            : []
+        )
+      ),
     });
   }
 

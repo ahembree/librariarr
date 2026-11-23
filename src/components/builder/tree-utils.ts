@@ -55,11 +55,14 @@ export function validateAllRules<R extends BaseRule>(
   groups: BaseGroup<R>[],
   getFieldType: (field: string) => "number" | "text" | "date" | "boolean",
   isValuelessOperator?: (op: string) => boolean,
+  /** Whether a field also names a user (User Last Played): a rule on one needs it. */
+  requiresUser?: (field: string) => boolean,
 ): boolean {
   for (const g of groups) {
     if (g.enabled === false) continue;
     for (const rule of g.rules) {
       if (rule.enabled === false) continue;
+      if (requiresUser?.(rule.field) && !(typeof rule.user === "string" && rule.user.trim() !== "")) return false;
       if (isValuelessOperator?.(rule.operator)) continue;
       const val = String(rule.value).trim();
       if (val === "") return false;
@@ -86,7 +89,7 @@ export function validateAllRules<R extends BaseRule>(
         if (isNaN(Number(val))) return false;
       }
     }
-    if (!validateAllRules(g.groups ?? [], getFieldType, isValuelessOperator))
+    if (!validateAllRules(g.groups ?? [], getFieldType, isValuelessOperator, requiresUser))
       return false;
   }
   return true;

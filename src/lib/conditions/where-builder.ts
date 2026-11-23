@@ -34,6 +34,7 @@ import { isStreamQueryField } from "./stream-query";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { wildcardToRegex } from "./wildcard";
+import { isUserLastPlayedField, ruleUserOf } from "./user-last-played";
 import type { Condition } from "./types";
 
 function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
@@ -823,6 +824,10 @@ export function ruleToWhere(rule: Condition): Prisma.MediaItemWhereInput {
   // Phase 2 by hasSeasonsBehindLatestRules.
   if (field === SEASONS_BEHIND_LATEST_FIELD) return {};
   if (isCrossSystemField(field)) return {};
+  // User Last Played reads one user's latest play off the watchHistory rows
+  // (user-last-played.ts): evaluated in Phase 2 only, forced by
+  // hasUserLastPlayedRules. Without a user the rule is dead in both phases.
+  if (isUserLastPlayedField(field)) return ruleUserOf(rule) ? {} : UNSATISFIABLE_WHERE;
   // Stream-query fields only make sense inside a stream-query group (handled by
   // buildStreamQueryClause). One reaching this dispatcher is a misplaced rule.
   if (isStreamQueryField(field)) return UNSATISFIABLE_WHERE;

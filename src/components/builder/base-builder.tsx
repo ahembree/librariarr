@@ -94,6 +94,7 @@ import {
 import type { LifecycleRuleCondition } from "@/lib/rules/types";
 import { isOperatorVisible } from "@/lib/conditions/helpers";
 import { useBuilderHoverSetter } from "./hover-context";
+import { UserPicker, perUserOptions } from "./user-picker";
 import type {
   BaseRule,
   BaseGroup,
@@ -285,6 +286,12 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
 
   const isNullOp = config.isValuelessOperator?.(rule.operator) ?? false;
 
+  // A per-user criterion's user, picked from the users with a counted play
+  // (the Watched By User values); the rule's own kept when no longer listed.
+  const requiresUser = fieldDef?.requiresUser ?? false;
+  const ruleUser = typeof rule.user === "string" ? rule.user : "";
+  const userOptions = requiresUser ? perUserOptions(distinctValues?.watchedByUser, ruleUser) : [];
+
   const useSingleDropdown =
     !isNullOp &&
     (fieldType === "boolean" ||
@@ -358,7 +365,8 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
         </Select>
       )}
 
-      <div className="flex gap-2 w-full sm:w-auto">
+      {/* Wraps at phone widths when a per-user field adds its user picker. */}
+      <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
         {/* Field selector — searchable, grouped by section */}
         <Popover open={fieldOpen} onOpenChange={setFieldOpen}>
           <PopoverTrigger asChild>
@@ -438,7 +446,9 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                             value={`${section.label} ${f.label} ${f.value}`}
                             disabled={disabled}
                             onSelect={() => {
-                              onUpdate(groupId, rule.id, { field: f.value } as Partial<R>);
+                              onUpdate(groupId, rule.id, (
+                                f.requiresUser ? { field: f.value } : { field: f.value, user: undefined }
+                              ) as Partial<R>);
                               setFieldOpen(false);
                             }}
                           >
@@ -472,6 +482,26 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
             </Command>
           </PopoverContent>
         </Popover>
+
+        {/* User picker — a per-user criterion (User Last Played) names whose
+            plays it reads, beside its date comparison */}
+        {requiresUser && (
+          userOptions.length > 0 ? (
+            <UserPicker
+              value={ruleUser}
+              options={userOptions}
+              onChange={(u) => onUpdate(groupId, rule.id, { user: u } as Partial<R>)}
+            />
+          ) : (
+            <Input
+              value={ruleUser}
+              onChange={(e) => onUpdate(groupId, rule.id, { user: e.target.value } as Partial<R>)}
+              placeholder="User"
+              aria-label="User"
+              className="min-w-0 flex-[1_1_100%] sm:flex-none sm:w-36"
+            />
+          )
+        )}
 
         {/* Predicate selector — operator + negation in one control */}
         <Select
@@ -829,6 +859,8 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
       rules: g.rules.map((r) => {
         if (r.id !== ruleId) return r;
         const updated = { ...r, ...updates };
+        // A field that names no user drops the previous field's user.
+        if ("user" in updates && updates.user === undefined) delete updated.user;
         if (updates.field) {
           // Match the dropdown filter above (operator must be visible for the new field).
           const applicable = config.operators.filter((op) =>

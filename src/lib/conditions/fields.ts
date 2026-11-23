@@ -29,6 +29,9 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "ratingCount", label: "Rating Count", type: "number", section: "activity" },
   { value: "isWatchlisted", label: "Is Watchlisted", type: "boolean", section: "activity", knownValues: ["true", "false"] },
   { value: "lastPlayedAt", label: "Last Played", type: "date", section: "activity", readsPlayActivity: true },
+  // The date one named user (`Condition.user`) last played the item — see
+  // user-last-played.ts. Phase 2 only (forced by `hasUserLastPlayedRules`).
+  { value: "userLastPlayedAt", label: "User Last Played", type: "date", section: "activity", readsPlayActivity: true, requiresUser: true },
   { value: "addedAt", label: "Date Added", type: "date", section: "activity" },
   { value: "originallyAvailableAt", label: "Release Date", type: "date", section: "activity", dateOnly: true },
 

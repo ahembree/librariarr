@@ -1030,6 +1030,8 @@ const queryRuleSchema: z.ZodType = z.object({
   condition: z.enum(["AND", "OR"]),
   negate: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  // The user a per-user criterion compares for (User Last Played).
+  user: z.string().max(200).optional(),
 });
 
 const queryGroupSchema: z.ZodType = z.lazy(() =>

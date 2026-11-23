@@ -938,7 +938,7 @@ export async function detectAndSaveMatches(
           // "was matching" (i.e. dropped for some unexplained reason) when in
           // fact it dropped precisely because the abandoned play never counted.
           ...(hasWatchedByUserRules(rules)
-            ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+            ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true, watchedAt: true } } }
             : {}),
           library: {
             select: {

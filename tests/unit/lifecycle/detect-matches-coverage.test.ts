@@ -230,11 +230,12 @@ describe("stale match explanations", () => {
     expect(info).toContain(`Removed stale match "Some Show" from rule set "Test Rule Set" (was matching: resolution equals 4K, NOT playCount equals 0)`);
     expect(info).toContain(`Removed stale match "Gone" from rule set "Test Rule Set" (item no longer exists)`);
     expect(info).toContain(`Removed stale match "Legacy" from rule set "Test Rule Set"`);
-    // The re-evaluation loads only completed plays for watchedByUser rules.
+    // The re-evaluation loads only completed plays for watchedByUser rules
+    // (with their dates, which User Last Played reads).
     const staleLoad = mockPrisma.mediaItem.findMany.mock.calls.find((c) => (c[0] as { include?: object }).include);
     expect((staleLoad![0] as { include: { watchHistory?: unknown } }).include.watchHistory).toEqual({
       where: COMPLETED_PLAY_FILTER,
-      select: { serverUsername: true },
+      select: { serverUsername: true, watchedAt: true },
     });
     expect((staleLoad![0] as { where: unknown }).where).toEqual({
       id: { in: ["dropped", "unexplained", "gone", "legacy"] },

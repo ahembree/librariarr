@@ -18,7 +18,7 @@ function searchFieldReference(): string {
   const bySection = new Map<string, string[]>();
   for (const f of SEARCH_FIELDS) {
     const list = bySection.get(f.section) ?? [];
-    list.push(`${f.value} (${f.type})`);
+    list.push(`${f.value} (${f.type})${f.requiresUser ? " [needs user]" : ""}`);
     bySection.set(f.section, list);
   }
   const lines: string[] = [];
@@ -62,7 +62,7 @@ ${dimensions}
 
 # search_media fields (grouped) — filter as {field, operator, value}
 ${searchFieldReference()}
-Operators: ${operators}. Use isNull/isNotNull with no value. Dates: inLastDays/notInLastDays take a number of days; before/after take a date. Arr/Seerr-specific and metadata-provider fields are NOT available to you.
+Operators: ${operators}. Use isNull/isNotNull with no value. A field marked [needs user] also takes user (a server username): {field: "userLastPlayedAt", user: "alice", operator: "inLastDays", value: 30} is "alice played it in the last 30 days". Dates: inLastDays/notInLastDays take a number of days; before/after take a date. Arr/Seerr-specific and metadata-provider fields are NOT available to you.
 
 # Units and notes
 - File sizes from the tools are already in GB. Play counts are cumulative unless you used get_watch_trends (rolling window).

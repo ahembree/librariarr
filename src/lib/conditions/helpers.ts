@@ -3,6 +3,7 @@ import { isNonNullableNonTextField } from "./field-metadata";
 import { CONDITION_OPERATORS } from "./operators";
 import { STREAM_QUERY_FIELDS, isStreamQueryGroup } from "./stream-query";
 import type { Condition, ConditionGroup, ConditionFieldType } from "./types";
+import { USER_LAST_PLAYED_FIELD } from "./user-last-played";
 
 // ─── Field-set predicates ────────────────────────────────────────────────
 
@@ -397,8 +398,18 @@ export function hasSeasonsBehindLatestRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => f === SEASONS_BEHIND_LATEST_FIELD);
 }
 
+/**
+ * Whether any rule reads the `watchHistory` rows themselves — Watched By User
+ * (who) and User Last Played (who and when). The engines load the relation,
+ * with `serverUsername` and `watchedAt`, only then.
+ */
 export function hasWatchedByUserRules(groups: ConditionGroup[]): boolean {
-  return anyRuleMatches(groups, (f) => f === "watchedByUser");
+  return anyRuleMatches(groups, (f) => f === "watchedByUser" || f === USER_LAST_PLAYED_FIELD);
+}
+
+/** User Last Played has no Phase-1 clause: it forces Phase 2 in both engines. */
+export function hasUserLastPlayedRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === USER_LAST_PLAYED_FIELD);
 }
 
 /**

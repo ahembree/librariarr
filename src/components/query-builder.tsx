@@ -41,6 +41,7 @@ export function validateAllRules(groups: QueryGroup[]): boolean {
       ?? STREAM_QUERY_FIELDS.find((f) => f.value === field)?.type
       ?? "text",
     (op) => op === "isNull" || op === "isNotNull",
+    (field) => getConditionField(field)?.requiresUser === true,
   );
 }
 

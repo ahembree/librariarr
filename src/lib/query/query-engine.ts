@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
 import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
+import { USER_LAST_PLAYED_FIELD, isUserLastPlayedField, ruleUserOf, userLastPlayedOf, hasUserLastPlayedRules } from "@/lib/conditions";
 import { isStreamQueryField, isStreamQueryGroup } from "@/lib/rules/types";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
@@ -159,7 +160,7 @@ const WATCH_HISTORY_SELECT = {
   // `watchedByUser` rule matches a different set depending on
   // whether something else forced in-memory re-evaluation.
   where: COMPLETED_PLAY_FILTER,
-  select: { serverUsername: true },
+  select: { serverUsername: true, watchedAt: true },
 } as const;
 
 /** Build the shared WHERE clause from a query definition and resolved server IDs */
@@ -500,7 +501,7 @@ async function runQueryDefinition(
   const willEvaluate = willFetchArr || willFetchSeerr || hasWildcardRules(groups) ||
     hasStreamQueryInMemoryRules(groups) || hasCrossSystemRules(groups) || hasArrRules(groups) ||
     hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) ||
-    hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
+    hasArrayFieldRules(groups) || hasUserLastPlayedRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
   const phases: ProgressPhase[] = [
     { key: "servers", label: "Resolving servers" },
     ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
@@ -552,7 +553,7 @@ async function runQueryDefinition(
 
   // Determine if we need unified in-memory evaluation
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasUserLastPlayedRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
 
   // Build base WHERE (includes type filter + conditions). Built AFTER the
   // in-memory decision so pre-filter (superset) composition applies when
@@ -908,7 +909,7 @@ async function executeUngrouped(
 ): Promise<QueryResult> {
   // When any in-memory evaluation is needed (external rules, wildcards, stream query computed fields), fetch all items
   const hasCrossSystem = hasCrossSystemRules(groups);
-  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
+  const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasUserLastPlayedRules(groups) || hasStreamCountRules(groups) || hasSeasonsBehindLatestRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
     ? buildItemSelectFull(groups)
@@ -1337,9 +1338,13 @@ function evaluateQueryRuleInMemory(
     // Series-aggregate date fields (attached by serializeSeriesAggregateForEval).
     // Without these, aggregate date comparisons fell through to the text
     // default and every comparison operator returned false.
-    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt"]);
+    "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt",
+    USER_LAST_PLAYED_FIELD]);
   if (dateFields.has(field)) {
-    const raw = item[field];
+    // User Last Played: the rule's user's latest counted play (user-last-played.ts);
+    // no user → dead rule, bypassing negate, as Phase 1.
+    if (isUserLastPlayedField(field) && !ruleUserOf(rule)) return false;
+    const raw = isUserLastPlayedField(field) ? userLastPlayedOf(item, ruleUserOf(rule)) : item[field];
     const itemDate = raw ? new Date(String(raw)) : null;
     let result: boolean;
     if (operator === "isNull") {
