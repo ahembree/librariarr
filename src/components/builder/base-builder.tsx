@@ -94,6 +94,7 @@ import {
 import type { LifecycleRuleCondition } from "@/lib/rules/types";
 import { isOperatorVisible } from "@/lib/conditions/helpers";
 import { useBuilderHoverSetter } from "./hover-context";
+import { UserPicker, perUserOptions } from "./user-picker";
 import type {
   BaseRule,
   BaseGroup,
@@ -289,11 +290,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
   // (the Watched By User values); the rule's own kept when no longer listed.
   const requiresUser = fieldDef?.requiresUser ?? false;
   const ruleUser = typeof rule.user === "string" ? rule.user : "";
-  const userOptions = requiresUser
-    ? [...new Set([...(distinctValues?.watchedByUser ?? []), ...(ruleUser.trim() ? [ruleUser] : [])])].filter(
-        (v) => typeof v === "string" && v.trim().length > 0,
-      )
-    : [];
+  const userOptions = requiresUser ? perUserOptions(distinctValues?.watchedByUser, ruleUser) : [];
 
   const useSingleDropdown =
     !isNullOp &&
@@ -490,28 +487,18 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
             plays it reads, beside its date comparison */}
         {requiresUser && (
           userOptions.length > 0 ? (
-            <Select
-              value={ruleUser || undefined}
-              onValueChange={(v) => onUpdate(groupId, rule.id, { user: v } as Partial<R>)}
-            >
-              <SelectTrigger className="min-w-0 flex-1 sm:flex-none sm:w-36" aria-label="User">
-                <SelectValue placeholder="Select user..." />
-              </SelectTrigger>
-              <SelectContent>
-                {userOptions.map((u) => (
-                  <SelectItem key={u} value={u}>
-                    {u}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UserPicker
+              value={ruleUser}
+              options={userOptions}
+              onChange={(u) => onUpdate(groupId, rule.id, { user: u } as Partial<R>)}
+            />
           ) : (
             <Input
               value={ruleUser}
               onChange={(e) => onUpdate(groupId, rule.id, { user: e.target.value } as Partial<R>)}
               placeholder="User"
               aria-label="User"
-              className="min-w-0 flex-1 sm:flex-none sm:w-36"
+              className="min-w-0 flex-[1_1_100%] sm:flex-none sm:w-36"
             />
           )
         )}
