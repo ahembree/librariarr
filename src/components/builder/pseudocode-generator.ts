@@ -194,7 +194,8 @@ function processGroups<R extends BaseRule, G extends BaseGroup<R>>(
         const rule = item.rule;
         const ruleDisabled = groupDisabled || rule.enabled === false;
         const field = fieldMap.get(rule.field);
-        const fieldLabel = field?.label ?? rule.field;
+        const ruleUser = typeof rule.user === "string" ? rule.user.trim() : "";
+        const fieldLabel = (field?.label ?? rule.field) + (ruleUser ? ` (${ruleUser})` : "");
         const fieldType = field?.type ?? "text";
         const opDef = opMap.get(rule.operator);
 

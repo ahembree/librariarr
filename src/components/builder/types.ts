@@ -9,6 +9,8 @@ export interface BaseRule {
   condition: LifecycleRuleCondition;
   negate?: boolean;
   enabled?: boolean;
+  /** The user a per-user field compares for (`FieldDef.requiresUser`). */
+  user?: string;
 }
 
 /** Constraint for any group type (LifecycleRuleGroup & QueryGroup both satisfy this) */
@@ -34,6 +36,8 @@ export interface FieldDef {
   section: string;
   enumerable?: boolean;
   knownValues?: string[];
+  /** The criterion also names a user (`BaseRule.user`): the row shows a user picker. */
+  requiresUser?: boolean;
 }
 
 /** Operator definition */

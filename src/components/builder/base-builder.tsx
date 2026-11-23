@@ -285,6 +285,16 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
 
   const isNullOp = config.isValuelessOperator?.(rule.operator) ?? false;
 
+  // A per-user criterion's user, picked from the users with a counted play
+  // (the Watched By User values); the rule's own kept when no longer listed.
+  const requiresUser = fieldDef?.requiresUser ?? false;
+  const ruleUser = typeof rule.user === "string" ? rule.user : "";
+  const userOptions = requiresUser
+    ? [...new Set([...(distinctValues?.watchedByUser ?? []), ...(ruleUser.trim() ? [ruleUser] : [])])].filter(
+        (v) => typeof v === "string" && v.trim().length > 0,
+      )
+    : [];
+
   const useSingleDropdown =
     !isNullOp &&
     (fieldType === "boolean" ||
@@ -438,7 +448,9 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
                             value={`${section.label} ${f.label} ${f.value}`}
                             disabled={disabled}
                             onSelect={() => {
-                              onUpdate(groupId, rule.id, { field: f.value } as Partial<R>);
+                              onUpdate(groupId, rule.id, (
+                                f.requiresUser ? { field: f.value } : { field: f.value, user: undefined }
+                              ) as Partial<R>);
                               setFieldOpen(false);
                             }}
                           >
@@ -472,6 +484,36 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
             </Command>
           </PopoverContent>
         </Popover>
+
+        {/* User picker — a per-user criterion (User Last Played) names whose
+            plays it reads, beside its date comparison */}
+        {requiresUser && (
+          userOptions.length > 0 ? (
+            <Select
+              value={ruleUser || undefined}
+              onValueChange={(v) => onUpdate(groupId, rule.id, { user: v } as Partial<R>)}
+            >
+              <SelectTrigger className="flex-1 sm:flex-none sm:w-36" aria-label="User">
+                <SelectValue placeholder="Select user..." />
+              </SelectTrigger>
+              <SelectContent>
+                {userOptions.map((u) => (
+                  <SelectItem key={u} value={u}>
+                    {u}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Input
+              value={ruleUser}
+              onChange={(e) => onUpdate(groupId, rule.id, { user: e.target.value } as Partial<R>)}
+              placeholder="Username"
+              aria-label="User"
+              className="flex-1 sm:flex-none sm:w-36"
+            />
+          )
+        )}
 
         {/* Predicate selector — operator + negation in one control */}
         <Select
@@ -829,6 +871,8 @@ function GroupCardImpl<R extends BaseRule, G extends BaseGroup<R>>({
       rules: g.rules.map((r) => {
         if (r.id !== ruleId) return r;
         const updated = { ...r, ...updates };
+        // A field that names no user drops the previous field's user.
+        if ("user" in updates && updates.user === undefined) delete updated.user;
         if (updates.field) {
           // Match the dropdown filter above (operator must be visible for the new field).
           const applicable = config.operators.filter((op) =>

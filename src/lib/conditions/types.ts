@@ -39,6 +39,12 @@ export interface Condition {
   condition: ConditionLogic;
   negate?: boolean;
   enabled?: boolean;
+  /**
+   * The user a per-user field compares for (`requiresUser` in the registry —
+   * User Last Played): the server username whose plays are read. A rule on
+   * such a field without one is dead (matches nothing, `negate` aside).
+   */
+  user?: string;
 }
 
 export interface ConditionGroup {
@@ -128,6 +134,12 @@ export interface ConditionField {
    * local time it shows the day before anywhere west of UTC.
    */
   dateOnly?: boolean;
+  /**
+   * The criterion compares for one named user (`Condition.user`) as well as
+   * its operator and value — User Last Played. The builder shows a user
+   * picker, and a rule without a user is invalid (`ruleUserOf`).
+   */
+  requiresUser?: boolean;
 }
 
 export interface ConditionOperatorDef {

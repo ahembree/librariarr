@@ -22,6 +22,7 @@ import {
   hasExternalIdFieldRules as hasExternalIdFieldGroupRules,
   hasCustomFormatScoreRules as hasCustomFormatScoreGroupRules,
   hasWatchedByUserRules as hasWatchedByUserGroupRules,
+  hasUserLastPlayedRules as hasUserLastPlayedGroupRules,
   hasPlayActivityRules as hasPlayActivityGroupRules,
   hasEpisodeLevelRules as hasEpisodeLevelGroupRules,
   hasSeasonsBehindLatestRules as hasSeasonsBehindLatestGroupRules,
@@ -59,6 +60,12 @@ import {
   withEveryMemberValues,
   everyMemberValuesOf,
   type GroupSelection,
+  USER_LAST_PLAYED_FIELD,
+  USER_LAST_PLAYED_MAP,
+  isUserLastPlayedField,
+  ruleUserOf,
+  userLastPlayedOf,
+  latestPlayByUser,
 } from "@/lib/conditions";
 import {
   isUnconfiguredContainsRule,
@@ -297,11 +304,17 @@ export function hasCustomFormatScoreRules(rules: LifecycleRule[] | LifecycleRule
 }
 
 /**
- * Check if any rule uses the watchedByUser field (requires WatchHistory eager-load).
+ * Check if any rule reads the watchHistory rows — Watched By User or User Last
+ * Played (requires the WatchHistory eager-load).
  * Accepts both grouped and flat rule shapes.
  */
 export function hasWatchedByUserRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   return hasWatchedByUserGroupRules(asGroups(rules));
+}
+
+/** User Last Played has no Phase-1 clause: it forces the in-memory pass. */
+function hasUserLastPlayedRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  return hasUserLastPlayedGroupRules(asGroups(rules));
 }
 
 /**
@@ -1192,7 +1205,12 @@ function evaluateRuleAgainstItem(
     return false;
   }
 
-  const itemValue = isEpisodeLevelField(field) ? episodeLevelValue(item, field) : item[field];
+  // User Last Played: the named user's latest counted play, then the shared
+  // date semantics below. No user → dead rule (bypasses negate), as Phase 1.
+  if (isUserLastPlayedField(field) && !ruleUserOf(rule)) return false;
+  const itemValue = isUserLastPlayedField(field)
+    ? userLastPlayedOf(item, ruleUserOf(rule))
+    : isEpisodeLevelField(field) ? episodeLevelValue(item, field) : item[field];
 
   // isNull/isNotNull — universal check for all remaining fields
   if (operator === "isNull" || operator === "isNotNull") {
@@ -1274,6 +1292,7 @@ function evaluateRuleAgainstItem(
   const dateFields = new Set([
     "lastPlayedAt", "addedAt", "originallyAvailableAt",
     "latestEpisodeViewDate", "lastEpisodeAddedAt", "lastEpisodeAiredAt", "seriesLastPlayedAt",
+    USER_LAST_PLAYED_FIELD,
   ]);
   if (dateFields.has(field)) {
     const itemDate = itemValue ? new Date(itemValue as string) : null;
@@ -1552,6 +1571,8 @@ function getActualValueForField(
   item: Record<string, unknown>,
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata,
+  /** The rule's user, for a per-user field (User Last Played). */
+  user?: string,
 ): string | null {
   // Helper to format dates nicely. A date-only field (release, premiere, air
   // date) is a calendar day stored as UTC midnight, and the date operators
@@ -1688,6 +1709,11 @@ function getActualValueForField(
     return deduped.length > 0 ? deduped.join(", ") : "none";
   }
 
+  // User Last Played: the rule's user's latest counted play.
+  if (field === USER_LAST_PLAYED_FIELD) {
+    return fmtDate(userLastPlayedOf(item, user ?? "")) ?? "never";
+  }
+
   // File size (bytes → human readable)
   if (field === "fileSize") {
     const bytes = item.fileSize ? Number(BigInt(item.fileSize as string)) : 0;
@@ -1794,6 +1820,12 @@ function everyMemberActualValue(
   return shown.join("; ") + (more > 0 ? `; ${more} more` : "");
 }
 
+/** A matched criterion's label: a per-user field names its user ("User Last Played (alice)"). */
+function criterionLabel(label: string, rule: LifecycleRule): string {
+  const user = isUserLastPlayedField(rule.field) ? ruleUserOf(rule) : "";
+  return user ? `${label} (${user})` : label;
+}
+
 export function getMatchedCriteriaForItems(
   items: Array<Record<string, unknown>>,
   rules: LifecycleRule[] | LifecycleRuleGroup[],
@@ -1839,14 +1871,14 @@ export function getMatchedCriteriaForItems(
 
         criteria.push({
           ruleId: rule.id,
-          field: fieldLabelMap.get(rule.field) ?? rule.field,
+          field: criterionLabel(fieldLabelMap.get(rule.field) ?? rule.field, rule),
           operator: OPERATOR_SYMBOLS[rule.operator] ?? rule.operator,
           value: displayValue,
           negate: !!rule.negate,
           groupName,
           actualValue: (members
             ? everyMemberActualValue(rule.field, item, members)
-            : getActualValueForField(rule.field, item, arrMeta, seerrMeta)) ?? undefined,
+            : getActualValueForField(rule.field, item, arrMeta, seerrMeta, ruleUserOf(rule))) ?? undefined,
         });
       }
     }
@@ -1905,7 +1937,7 @@ export function getActualValuesForAllRules(
     for (const { rule } of allRulesWithGroup) {
       const actual = everyMember && isEveryMemberField(rule.field)
         ? everyMemberActualValue(rule.field, item, everyMember)
-        : getActualValueForField(rule.field, item, arrMeta, seerrMeta);
+        : getActualValueForField(rule.field, item, arrMeta, seerrMeta, ruleUserOf(rule));
       if (actual != null) values.set(rule.id, actual);
     }
 
@@ -2086,7 +2118,7 @@ export async function evaluateSeriesScope(
           // `watchedByUser` rule matches a different set depending on
           // whether something else forced in-memory re-evaluation.
           where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
+          select: { serverUsername: true, watchedAt: true },
         } } : {}),
       library: {
         select: {
@@ -2128,6 +2160,7 @@ export async function evaluateSeriesScope(
       lastEpisodeAddedAt: Date | null;
       lastEpisodeAiredAt: Date | null;
       watchedByUsers: string[];
+      [USER_LAST_PLAYED_MAP]: Record<string, string>;
       memberIds: string[];
       seasonsBehindLatest?: null;
     }
@@ -2199,6 +2232,11 @@ export async function evaluateSeriesScope(
           ),
         )
       : [];
+    // Each user's latest counted play of any member (User Last Played).
+    const userLastPlayed = needsWatchHistory
+      ? latestPlayByUser(episodes.flatMap((m) =>
+          "watchHistory" in m ? (m.watchHistory as Array<{ serverUsername: string | null; watchedAt: Date | null }>) : []))
+      : {};
 
     aggregated.push({
       ...representative,
@@ -2223,6 +2261,7 @@ export async function evaluateSeriesScope(
       lastEpisodeAddedAt: latestEpisodeAdded,
       lastEpisodeAiredAt: latestEpisodeAired,
       watchedByUsers,
+      [USER_LAST_PLAYED_MAP]: userLastPlayed,
       allStreams,
       memberIds: episodes.map((ep) => ep.id),
     });
@@ -2314,6 +2353,7 @@ export async function evaluateSeriesScope(
           : series.lastEpisodeAiredAt
         : null,
       watchedByUsers: series.watchedByUsers,
+      [USER_LAST_PLAYED_MAP]: series[USER_LAST_PLAYED_MAP],
     };
 
     const extId = series.externalIds?.find(
@@ -2452,7 +2492,7 @@ export async function evaluateMusicScope(
           // `watchedByUser` rule matches a different set depending on
           // whether something else forced in-memory re-evaluation.
           where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
+          select: { serverUsername: true, watchedAt: true },
         } } : {}),
       library: {
         select: {
@@ -2487,7 +2527,7 @@ export async function evaluateMusicScope(
   // Aggregate each artist into a single record for rule evaluation
   type TrackRow = (typeof allTracks)[0];
   const aggregated: Array<
-    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; watchedByUsers: string[]; memberIds: string[] }
+    Omit<TrackRow, "fileSize"> & { trackCount: number; fileSize: string | null; allStreams?: unknown[]; watchedByUsers: string[]; [USER_LAST_PLAYED_MAP]: Record<string, string>; memberIds: string[] }
   > = [];
 
   // The raw track rows per artist (lowest id first): an artist is judged
@@ -2534,6 +2574,11 @@ export async function evaluateMusicScope(
           ),
         )
       : [];
+    // Each user's latest counted play of any member (User Last Played).
+    const userLastPlayed = needsWatchHistory
+      ? latestPlayByUser(tracks.flatMap((m) =>
+          "watchHistory" in m ? (m.watchHistory as Array<{ serverUsername: string | null; watchedAt: Date | null }>) : []))
+      : {};
 
     aggregated.push({
       ...representative,
@@ -2552,6 +2597,7 @@ export async function evaluateMusicScope(
       trackCount: tracks.length,
       allStreams,
       watchedByUsers,
+      [USER_LAST_PLAYED_MAP]: userLastPlayed,
       memberIds: tracks.map((t) => t.id),
     });
   }
@@ -2594,6 +2640,7 @@ export async function evaluateMusicScope(
         : null,
       streams: artist.allStreams ?? [],
       watchedByUsers: artist.watchedByUsers,
+      [USER_LAST_PLAYED_MAP]: artist[USER_LAST_PLAYED_MAP],
     };
 
     const extId = artist.externalIds?.find(
@@ -2656,7 +2703,7 @@ export async function evaluateLifecycleRules(
   // Seasons Behind Latest has no column (`{}` in Phase 1): attached below, then
   // evaluated in memory.
   const needsSeasonsBehindLatest = hasSeasonsBehindLatestRules(rules);
-  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasArrayFieldRules(rules) || hasSeriesAggregateRules(rules) || needsSeasonsBehindLatest;
+  const needsInMemoryEval = hasWildcardRules(rules) || hasStreamCountRules(rules) || hasStreamQueryInMemoryRules(rules) || hasCrossSystem || hasResolutionRules(rules) || hasArrayFieldRules(rules) || hasUserLastPlayedRules(rules) || hasSeriesAggregateRules(rules) || needsSeasonsBehindLatest;
   const needsFullReeval = needsInMemoryEval || !!hasExternal;
 
   let andConditions: Prisma.MediaItemWhereInput[];
@@ -2709,7 +2756,7 @@ export async function evaluateLifecycleRules(
           // `watchedByUser` rule matches a different set depending on
           // whether something else forced in-memory re-evaluation.
           where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
+          select: { serverUsername: true, watchedAt: true },
         } } : {}),
       library: {
         select: {

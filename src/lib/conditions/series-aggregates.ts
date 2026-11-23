@@ -11,6 +11,7 @@ import {
 } from "@/lib/conditions/helpers";
 import { isStreamQueryField, isStreamQueryGroup } from "@/lib/conditions/stream-query";
 import type { ConditionGroup } from "@/lib/conditions/types";
+import { USER_LAST_PLAYED_FIELD, USER_LAST_PLAYED_MAP, latestPlayByUser } from "@/lib/conditions/user-last-played";
 
 /**
  * Shared series-aggregate computation. Both the rule engine and the query
@@ -46,7 +47,7 @@ export interface AggregableEpisode {
   // Optional — only present when the caller `include`d streams
   streams?: unknown[];
   // Optional — only present when the caller `include`d watchHistory
-  watchHistory?: Array<{ serverUsername: string | null }>;
+  watchHistory?: Array<{ serverUsername: string | null; watchedAt?: Date | string | null }>;
 }
 
 /** A series-level aggregate, suitable for in-memory rule evaluation. */
@@ -60,6 +61,8 @@ type SeriesAggregate<E extends AggregableEpisode> = Omit<E, "fileSize"> & {
   lastEpisodeAiredAt: Date | null;
   /** Deduped usernames who played at least one episode (empty when not loaded). */
   watchedByUsers: string[];
+  /** Each user's latest counted play of any episode (User Last Played; empty when not loaded). */
+  [USER_LAST_PLAYED_MAP]: Record<string, string>;
   allStreams?: unknown[];
   memberIds: string[];
 };
@@ -155,6 +158,10 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       ),
     );
 
+    const userLastPlayed = latestPlayByUser(
+      eps.flatMap((ep) => (Array.isArray(ep.watchHistory) ? ep.watchHistory : [])),
+    );
+
     aggregated.push({
       ...representative,
       // Use series name as title so "title" rules match against the series.
@@ -177,6 +184,7 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
       lastEpisodeAddedAt: latestEpisodeAdded,
       lastEpisodeAiredAt: latestEpisodeAired,
       watchedByUsers,
+      [USER_LAST_PLAYED_MAP]: userLastPlayed,
       allStreams,
       memberIds: eps.map((ep) => ep.id),
     } as SeriesAggregate<E>);
@@ -250,7 +258,8 @@ const SERIES_AGGREGATE_FIELDS = CONDITION_FIELDS.filter((f) => f.isSeriesAggrega
  * Fields a group record answers with ONE value for the whole show or artist
  * (series scope, artist scope): its name (`title`, and `parentTitle` through
  * `withGroupParentTitle`), the play total, the latest play, the earliest
- * addition, the summed size, everyone who watched any member, the union of the
+ * addition, the summed size, everyone who watched any member (and each one's
+ * latest play of any member, User Last Played), the union of the
  * members' streams (stream fields and stream queries), the group's own external
  * ids (its Arr identity, which the Arr and Seerr lookups key on), the series
  * aggregates and every Arr or Seerr field (one record per group).
@@ -263,6 +272,7 @@ const GROUP_VALUE_FIELDS = new Set([
   "addedAt",
   "fileSize",
   "watchedByUser",
+  USER_LAST_PLAYED_FIELD,
   "hasExternalId",
 ]);
 
@@ -566,6 +576,7 @@ export function serializeSeriesAggregateForEval(
     lastEpisodeAddedAt: toIsoOrNull(series.lastEpisodeAddedAt),
     lastEpisodeAiredAt: toIsoOrNull(series.lastEpisodeAiredAt),
     watchedByUsers: series.watchedByUsers,
+    [USER_LAST_PLAYED_MAP]: series[USER_LAST_PLAYED_MAP],
   };
 }
 

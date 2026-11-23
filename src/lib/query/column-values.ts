@@ -10,6 +10,7 @@ import {
 } from "@/lib/conditions/series-aggregates";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
+import { USER_LAST_PLAYED_FIELD, USER_LAST_PLAYED_MAP, latestPlayByUser, type UserPlayRow } from "@/lib/conditions/user-last-played";
 import { lookupSeerrMeta } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -114,7 +115,7 @@ const ARRAY_COLUMN: Record<string, string> = { genre: "genres", labels: "labels"
 export function isColumnFieldHandled(field: string): boolean {
   return DIRECT_FIELDS.has(field) || field in ARR_PROPERTY || field in SEERR_PROPERTY ||
     field in ARRAY_COLUMN || field === "foundInArr" || field === "fileSize" ||
-    field === "hasExternalId" || field === "watchedByUser" ||
+    field === "hasExternalId" || field === "watchedByUser" || field === USER_LAST_PLAYED_FIELD ||
     field === "audioLanguage" || field === "subtitleLanguage" || field === "streamAudioCodec" ||
     field === "audioStreamCount" || field === "subtitleStreamCount" ||
     field === "serverCount" || field === "matchedByRuleSet" || field === "hasPendingAction";
@@ -183,6 +184,16 @@ export function columnValueOf(
     return [...new Set(history.map((h) => h.serverUsername).filter((u): u is string => !!u))];
   }
 
+  if (field === USER_LAST_PLAYED_FIELD) {
+    // The column has no user of its own: each user's latest counted play,
+    // latest first ("alice: 2026-11-02").
+    const map = (item[USER_LAST_PLAYED_MAP] as Record<string, string> | undefined)
+      ?? latestPlayByUser((item.watchHistory as UserPlayRow[] | undefined) ?? []);
+    return Object.entries(map)
+      .sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : a[0].localeCompare(b[0])))
+      .map(([user, iso]) => `${user}: ${iso.slice(0, 10)}`);
+  }
+
   const streams = (item.streams as StreamRow[] | undefined) ?? [];
   if (field === "audioLanguage") return streamValues(streams, 2, "language", true);
   if (field === "subtitleLanguage") return streamValues(streams, 3, "language", true);
@@ -214,7 +225,7 @@ const ITEM_SELECT = {
 
 function selectFor(withHistory: boolean) {
   return withHistory
-    ? { ...ITEM_SELECT, watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+    ? { ...ITEM_SELECT, watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true, watchedAt: true } } }
     : ITEM_SELECT;
 }
 
@@ -256,7 +267,7 @@ export async function computeQueryColumnValues(
   if (serverIds.length === 0) return { values, warnings };
   const scope = { library: { mediaServerId: { in: serverIds } } };
 
-  const withHistory = fields.includes("watchedByUser");
+  const withHistory = fields.includes("watchedByUser") || fields.includes(USER_LAST_PLAYED_FIELD);
   const ids = [...new Set(opts.items.map((i) => i.id))];
   const groupedIds = new Set(opts.items.filter((i) => i.grouped).map((i) => i.id));
   const rows = await findInChunks(ids, scope, withHistory);

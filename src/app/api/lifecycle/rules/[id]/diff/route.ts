@@ -301,7 +301,7 @@ export const POST = withSession(async (
         // preview annotate an item as "watched by alice" when the engine that
         // will actually delete it saw no completed play at all.
         ...(hasWatchedByUserRules(typedRules)
-          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true, watchedAt: true } } }
           : {}),
       },
     });

@@ -247,6 +247,15 @@ describe("executeQuerySchema", () => {
     expect(parsed.query.includeEpisodes).toBe(false);
   });
 
+  it("keeps a per-user criterion's user, and bounds it", () => {
+    const userRule = { ...rule, field: "userLastPlayedAt", operator: "inLastDays", value: "30", user: "alice" };
+    const parsed = executeQuerySchema.parse({ query: query([group({ rules: [userRule] })]) });
+    expect((parsed.query.groups[0] as { rules: Array<{ user?: string }> }).rules[0].user).toBe("alice");
+    expect(
+      executeQuerySchema.safeParse({ query: query([group({ rules: [{ ...userRule, user: "x".repeat(201) }] })]) }).success,
+    ).toBe(false);
+  });
+
   it("refuses a malformed nested group", () => {
     expect(
       executeQuerySchema.safeParse({ query: query([group({ groups: [group({ condition: "XOR" })] })]) }).success,

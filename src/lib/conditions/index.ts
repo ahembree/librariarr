@@ -25,6 +25,7 @@
  *        - stream-query fields (sq*)
  *        - `resolution`         → caught by `hasResolutionRules`
  *        - JSON-array fields    → caught by `hasArrayFieldRules`
+ *        - `userLastPlayedAt`   → caught by `hasUserLastPlayedRules`
  *
  *   2. If neither is true, the engine's safety net at the bottom of
  *      `evaluateLifecycleRules` (look for "Safety net: if all rules produced empty
@@ -54,3 +55,4 @@ export * from "./negation";
 export * from "./array-field-eval";
 export * from "./external-id-eval";
 export * from "./name-list-eval";
+export * from "./user-last-played";

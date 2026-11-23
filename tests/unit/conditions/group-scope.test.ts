@@ -64,6 +64,7 @@ const AT_GROUP_SCOPE: Record<string, Row> = {
   // Activity
   playCount: both("allowed", "the group's total over every member"),
   watchedByUser: both("allowed", "everyone who watched any member"),
+  userLastPlayedAt: both("allowed", "the named user's latest play of any member"),
   rating: both("blocked", ITS_OWN_ITEM),
   audienceRating: both("blocked", ITS_OWN_ITEM),
   ratingCount: both("blocked", ITS_OWN_ITEM),
@@ -246,7 +247,7 @@ describe("the classification under an action on the whole show or artist, scope 
       for (const field of GROUP_SCOPE_BLOCKED_FIELDS[type]) expect(isBlockedAtGroupScope(field, type, "member"), field).toBe(true);
     }
     // At group scope these are the show's totals; with the scope off, one episode's.
-    for (const field of ["title", "playCount", "lastPlayedAt", "addedAt", "fileSize", "watchedByUser", "hasPendingAction"]) {
+    for (const field of ["title", "playCount", "lastPlayedAt", "addedAt", "fileSize", "watchedByUser", "userLastPlayedAt", "hasPendingAction"]) {
       expect(isBlockedAtGroupScope(field, "SERIES", "group"), field).toBe(false);
       expect(isBlockedAtGroupScope(field, "SERIES", "member"), field).toBe(true);
     }
