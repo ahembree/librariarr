@@ -61,9 +61,8 @@ export function latestPlayByUser(rows: ReadonlyArray<UserPlayRow>): Record<strin
     const prev = latest.get(name);
     if (prev === undefined || t > prev) latest.set(name, t);
   }
-  const out: Record<string, string> = {};
-  for (const [name, t] of latest) out[name] = new Date(t).toISOString();
-  return out;
+  // fromEntries defines own keys, so even a username "__proto__" is kept.
+  return Object.fromEntries([...latest].map(([name, t]) => [name, new Date(t).toISOString()]));
 }
 
 /**

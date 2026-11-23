@@ -264,10 +264,28 @@ describe("search_media", () => {
     [{ filters: [{ field: "title", operator: "equals", value: "" }] }, /requires a value/],
     [{ filters: [{ field: "title", operator: "equals" }] }, /requires a value/],
     [{ filters: [{}] }, /Field "" is not available/],
+    [{ filters: [{ field: "userLastPlayedAt", operator: "inLastDays", value: 30 }] }, /"userLastPlayedAt" needs a user/],
+    [{ filters: [{ field: "userLastPlayedAt", operator: "inLastDays", value: 30, user: "  " }] }, /needs a user/],
+    [{ filters: [{ field: "userLastPlayedAt", operator: "inLastDays", value: 30, user: "u".repeat(501) }] }, /The user for "userLastPlayedAt" is too long/],
   ])("refuses %o", async (args, error) => {
     const result = await run("search_media", args);
     expect((result.data as { error: string }).error).toMatch(error);
     expect(m.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("passes a per-user field's user, and only a per-user field's", async () => {
+    m.executeQuery.mockResolvedValue({ items: [], pagination: { hasMore: false } });
+    await run("search_media", {
+      filters: [
+        { field: "userLastPlayedAt", operator: "inLastDays", value: 30, user: " alice " },
+        { field: "title", operator: "contains", value: "x", user: "bob" },
+      ],
+    });
+    const [definition] = m.executeQuery.mock.calls[0];
+    expect(definition.groups[0].rules).toEqual([
+      { id: "r0", field: "userLastPlayedAt", operator: "inLastDays", value: 30, condition: "AND", user: "alice" },
+      { id: "r1", field: "title", operator: "contains", value: "x", condition: "AND" },
+    ]);
   });
 
   it("builds a query definition from filters and maps items", async () => {

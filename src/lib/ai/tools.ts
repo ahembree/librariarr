@@ -287,13 +287,14 @@ const searchMedia: AiTool = {
         mediaTypes: { type: "array", items: { type: "string", enum: [...MEDIA_TYPES] }, description: "Restrict to these media types (default all)." },
         filters: {
           type: "array",
-          description: "Conditions. Each is {field, operator, value}. value is omitted for isNull/isNotNull.",
+          description: "Conditions. Each is {field, operator, value}. value is omitted for isNull/isNotNull. A per-user field (userLastPlayedAt) also takes user: the server username whose plays it reads.",
           items: {
             type: "object",
             properties: {
               field: { type: "string" },
               operator: { type: "string" },
               value: {},
+              user: { type: "string", description: "Server username, for a per-user field (userLastPlayedAt)." },
             },
             required: ["field", "operator"],
             additionalProperties: false,
@@ -319,7 +320,7 @@ const searchMedia: AiTool = {
 
     const rules = [] as QueryDefinition["groups"][number]["rules"];
     for (let i = 0; i < rawFilters.length && i < 20; i++) {
-      const f = rawFilters[i] as { field?: unknown; operator?: unknown; value?: unknown };
+      const f = rawFilters[i] as { field?: unknown; operator?: unknown; value?: unknown; user?: unknown };
       const field = String(f.field ?? "");
       const operator = String(f.operator ?? "");
       if (!SEARCH_FIELD_SET.has(field)) {
@@ -344,12 +345,23 @@ const searchMedia: AiTool = {
           data: { error: `The value for "${field}" is too long (at most ${MAX_SEARCH_VALUE_LENGTH} characters).` },
         };
       }
+      // A per-user field (User Last Played) reads one user's plays: without a
+      // user it matches nothing, which would read as "nobody watched it".
+      const requiresUser = SEARCH_FIELDS.find((x) => x.value === field)?.requiresUser === true;
+      const user = typeof f.user === "string" ? f.user.trim() : "";
+      if (requiresUser && !user) {
+        return { data: { error: `"${field}" needs a user: the server username whose plays it reads.` } };
+      }
+      if (user.length > MAX_SEARCH_VALUE_LENGTH) {
+        return { data: { error: `The user for "${field}" is too long (at most ${MAX_SEARCH_VALUE_LENGTH} characters).` } };
+      }
       rules.push({
         id: `r${i}`,
         field,
         operator,
         value: valueless ? "" : (typeof value === "number" ? value : String(value)),
         condition,
+        ...(requiresUser ? { user } : {}),
       });
     }
 

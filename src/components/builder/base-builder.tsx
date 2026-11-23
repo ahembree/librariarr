@@ -368,7 +368,8 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
         </Select>
       )}
 
-      <div className="flex gap-2 w-full sm:w-auto">
+      {/* Wraps at phone widths when a per-user field adds its user picker. */}
+      <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
         {/* Field selector — searchable, grouped by section */}
         <Popover open={fieldOpen} onOpenChange={setFieldOpen}>
           <PopoverTrigger asChild>
@@ -493,7 +494,7 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
               value={ruleUser || undefined}
               onValueChange={(v) => onUpdate(groupId, rule.id, { user: v } as Partial<R>)}
             >
-              <SelectTrigger className="flex-1 sm:flex-none sm:w-36" aria-label="User">
+              <SelectTrigger className="min-w-0 flex-1 sm:flex-none sm:w-36" aria-label="User">
                 <SelectValue placeholder="Select user..." />
               </SelectTrigger>
               <SelectContent>
@@ -508,9 +509,9 @@ function SortableRuleRowImpl<R extends BaseRule, G extends BaseGroup<R>>({
             <Input
               value={ruleUser}
               onChange={(e) => onUpdate(groupId, rule.id, { user: e.target.value } as Partial<R>)}
-              placeholder="Username"
+              placeholder="User"
               aria-label="User"
-              className="flex-1 sm:flex-none sm:w-36"
+              className="min-w-0 flex-1 sm:flex-none sm:w-36"
             />
           )
         )}

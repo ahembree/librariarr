@@ -79,6 +79,12 @@ describe("latestPlayByUser", () => {
       { serverUsername: "dave" },
     ])).toEqual({ alice: "2026-03-01T00:00:00.000Z" });
   });
+
+  it("keeps a username that names an Object prototype key as its own key", () => {
+    const map = latestPlayByUser([{ serverUsername: "__proto__", watchedAt: "2026-01-01T00:00:00.000Z" }]);
+    expect(Object.keys(map)).toEqual(["__proto__"]);
+    expect(userLastPlayedOf({ [USER_LAST_PLAYED_MAP]: map }, "__proto__")).toBe("2026-01-01T00:00:00.000Z");
+  });
 });
 
 describe("userLastPlayedOf", () => {
