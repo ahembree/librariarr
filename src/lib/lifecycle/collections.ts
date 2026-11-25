@@ -279,12 +279,15 @@ export async function syncCollection(
       // keys by (normalized) title. Built once per library and shared by both the
       // membership union and the action-date ordering.
       let seriesKeyByTitle: Map<string, string> | null = null;
+      // A show's sort title as Plex holds it, by rating key: what "Title"
+      // orders a show by, as Plex's own alphabetical sort does.
+      let showTitleSortByKey: Map<string, string> | null = null;
       const needSeries =
         collection.type === "SERIES" && contributions.some((c) => c.seriesScope);
       if (needSeries) {
-        seriesKeyByTitle = seriesKeysByTitle(
-          await cache.libraryShows(library.id, () => client.getLibraryItems(library.key)),
-        );
+        const shows = await cache.libraryShows(library.id, () => client.getLibraryItems(library.key));
+        seriesKeyByTitle = seriesKeysByTitle(shows);
+        showTitleSortByKey = new Map(shows.map((s) => [s.ratingKey, s.titleSort || s.title]));
       }
 
       // Union of desired rating keys for THIS library across all contributions.
@@ -428,7 +431,7 @@ export async function syncCollection(
         const values =
           sortField === "ACTION_DATE"
             ? actionDateValues(pendingActions, seriesScopeByRuleSet, seriesKeyByTitle, copyKeysByItemId)
-            : await mediaFieldValues(library.id, sortField, desiredKeys, seriesKeyByTitle);
+            : await mediaFieldValues(library.id, sortField, desiredKeys, seriesKeyByTitle, showTitleSortByKey);
         await applyCustomOrder(
           client,
           plexCollection.ratingKey,
@@ -579,13 +582,14 @@ const MEDIA_SORT_SQL: Record<MediaSortField, { row: string; show: string; text?:
  * Each collection rating key's value of `field`, read from this library's
  * synced rows. A show (series-scope membership) folds its episodes: the
  * earliest release / added date, the latest play, summed play count, size and
- * duration, averaged ratings, and the show's title.
+ * duration, averaged ratings, and the show's sort title as Plex holds it.
  */
 async function mediaFieldValues(
   libraryId: string,
   field: MediaSortField,
   desiredKeys: string[],
   seriesKeyByTitle: Map<string, string> | null,
+  showTitleSortByKey: Map<string, string> | null = null,
 ): Promise<Map<string, CollectionSortValue>> {
   const sql = MEDIA_SORT_SQL[field];
   const values = new Map<string, CollectionSortValue>();
@@ -606,7 +610,13 @@ async function mediaFieldValues(
     for (const [title, key] of seriesKeyByTitle) {
       if (desired.has(key) && !values.has(key)) showKeyByTitle.set(title, key);
     }
-    if (showKeyByTitle.size > 0) {
+    if (field === "ALPHABETICAL" && showTitleSortByKey) {
+      // Plex's own sort title for the show, as its alphabetical mode reads it.
+      for (const key of showKeyByTitle.values()) {
+        const titleSort = showTitleSortByKey.get(key);
+        if (titleSort) values.set(key, titleSort);
+      }
+    } else if (showKeyByTitle.size > 0) {
       const shows = await prisma.$queryRawUnsafe<Array<{ key: string; value: number | string | null }>>(
         `SELECT LOWER(TRIM("parentTitle")) AS "key", ${sql.show} AS "value"
            FROM "MediaItem"

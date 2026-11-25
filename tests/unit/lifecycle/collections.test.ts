@@ -1305,4 +1305,35 @@ describe("collection sort fields and direction", () => {
     expect(orderAfterMoves(["showA", "showB"])).toEqual(["showB", "showA"]);
     expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledTimes(1);
   });
+
+  it("orders series-scope shows by Plex's sort title, as its own alphabetical mode does", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "TV", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
+    mockPlexClient.getLibraryItems.mockResolvedValue([
+      // "The Office" files under O, so it sorts before "Severance" descending.
+      { title: "The Office", titleSort: "Office, The", ratingKey: "office" },
+      { title: "Severance", ratingKey: "severance" },
+    ]);
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "office" }, { ratingKey: "severance" }]);
+    stubSortAndVisibility();
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+
+    await syncCollection(makeCollection({ type: "SERIES", sort: "ALPHABETICAL", sortDirection: "desc" }), [
+      contribution(
+        [
+          { libraryId: "lib1", ratingKey: "ep1", title: "Pilot", parentTitle: "The Office" },
+          { libraryId: "lib1", ratingKey: "ep2", title: "Good News", parentTitle: "Severance" },
+        ],
+        { seriesScope: true },
+      ),
+    ]);
+
+    // Only the stored-row lookup runs: the show titles come from Plex's listing.
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect(orderAfterMoves(["office", "severance"])).toEqual(["severance", "office"]);
+  });
 });

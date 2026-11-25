@@ -106,6 +106,23 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSets[0].name).toBe("Second Rule");
       expect(body.ruleSets[1].name).toBe("First Rule");
     });
+
+    it("returns the linked collection's sort field and direction", async () => {
+      // The editor loads a collection's settings from here and saves them back:
+      // a direction left out would reset a descending collection to ascending.
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, {
+        name: "Biggest First", type: "MOVIE", sort: "FILE_SIZE", sortDirection: "desc",
+      });
+      await createTestRuleSet(user.id, { name: "With Collection", type: "MOVIE", collectionId: collection.id });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(GET, { url: "/api/lifecycle/rules" });
+      const body = await expectJson<{
+        ruleSets: { collection: { sort: string; sortDirection: string } | null }[];
+      }>(response, 200);
+      expect(body.ruleSets[0].collection).toMatchObject({ sort: "FILE_SIZE", sortDirection: "desc" });
+    });
   });
 
   // ---- POST /api/lifecycle/rules ----

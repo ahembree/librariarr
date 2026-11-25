@@ -17,6 +17,8 @@ export interface PlexCollectionRow {
 export interface PlexShowRow {
   title: string;
   ratingKey: string;
+  /** Plex's sort title ("Office, The"), when it differs from the title. */
+  titleSort?: string;
 }
 
 /**
