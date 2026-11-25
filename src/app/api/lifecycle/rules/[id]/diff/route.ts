@@ -4,7 +4,8 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, hasEpisodeLevelRules, hasSeasonsBehindLatestRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { hasAnyActiveRules, hasWatchedByUserRules, hasSeasonsBehindLatestRules, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateEditorRuleSet } from "@/lib/lifecycle/editor-evaluation";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
 import { attachSeasonsBehindLatest } from "@/lib/conditions/episode-fields";
@@ -160,22 +161,10 @@ export const POST = withSession(async (
   // Evaluate the new rules to get candidate matches
   const { arrData, seerrData } = await loadPreviewMetadata(session.userId, type, typedRules, arrInstanceId);
 
-  let items;
-  // Routed exactly as detection routes it: a series-aggregate field forces the
-  // series path even with series scope off (see the preview route).
-  const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
   // "Has Pending Action" reads other rule sets' actions, as detection reads it.
-  const crossSystemOptions = { excludeRuleSetId: id };
-  if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
-    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData, aggregateForced, crossSystemOptions);
-  } else if (type === "MUSIC" && seriesScope !== false) {
-    items = await evaluateMusicScope(typedRules, serverIds, arrData, crossSystemOptions);
-  } else {
-    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData, crossSystemOptions);
-    items = type === "SERIES"
-      ? groupSeriesResults(rawItems, { summarizeEpisodeFields: hasEpisodeLevelRules(typedRules) })
-      : rawItems;
-  }
+  const items = await evaluateEditorRuleSet({
+    rules: typedRules, type, seriesScope, serverIds, arrData, seerrData, excludeRuleSetId: id,
+  });
 
   // Filter out excluded items — an exception on another server's copy of an
   // item (same dedupKey) excludes it too, exactly as detection does.

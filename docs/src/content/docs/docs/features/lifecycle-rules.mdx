@@ -600,6 +600,19 @@ A collection is scoped to one library type (Movies, Series, or Music), since a P
 
 `Title` and `Release date` ascending use Plex's own collection sort. Every other choice — and either of those two descending — sets the collection to Plex's **Custom** order, and Librariarr arranges the items itself on each sync from the values it has synced, moving only the items that are out of place.
 
+### Previewing the order
+
+**Preview Order**, under the sort settings in the rule editor, shows the order the collection would have after the next sync — before you save. It uses the rule editor's **unsaved** rules, scope, servers and sort, together with the saved matches of every other rule set feeding the collection, and reads the collection's current order from Plex. Nothing is changed in Plex or in Librariarr.
+
+For each Plex library the collection lives in, it lists:
+
+- every item in its new position, with the value it is sorted by;
+- how each item's place changes against Plex's current order — **+ New** for an item the sync adds, an up or down arrow with the number of places it moves;
+- the items **leaving** the collection;
+- how many moves the sync would make, or that Plex keeps the order itself (Title and Release date ascending).
+
+With **Sort by: Action date**, a match that has no action scheduled yet is shown with an **estimated** date: today plus the rule's action delay. Matches excluded by a [lifecycle exception](/docs/features/deletion-safety/#lifecycle-exceptions-are-honored-at-every-step) are left out, as the sync leaves them out. If Plex can't be reached, the preview still shows the new order, without the comparison.
+
 ### Action-date ordering across rules
 
 With **Sort by: Action date**, items are arranged by their scheduled action date (soonest first ascending, latest first descending). When several rules feed the collection, the ordering pools the scheduled action dates of **all** of them, so the shelf is correctly interleaved regardless of which rule scheduled each item. (Items without a pending action are placed last.)

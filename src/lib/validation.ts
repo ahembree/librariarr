@@ -611,6 +611,22 @@ export const rulePreviewSchema = z.object({
   ...editorActionFields,
 });
 
+/**
+ * The rule editor's Collection Order Preview: the unsaved rule set (as
+ * `rulePreviewSchema` takes it) and the collection settings being edited. The
+ * collection is an existing one (`collectionId`) or a new one by name.
+ */
+export const collectionOrderPreviewSchema = rulePreviewSchema.extend({
+  collectionId: z.string().min(1).max(200).nullable().optional(),
+  collectionName: z.string().trim().min(1, "Collection name is required").max(500),
+  sort: collectionSortEnum,
+  sortDirection: collectionSortDirectionEnum,
+  /** The editor's enabled switch: a disabled rule set contributes nothing. */
+  enabled: z.boolean().optional(),
+  /** The editor's action delay, for an Action date sort's estimates. */
+  actionDelayDays: z.number().int().min(0).max(365).optional(),
+});
+
 export const ruleTestItemSchema = z.object({
   rules: rulesSchema,
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),

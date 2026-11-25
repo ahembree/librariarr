@@ -103,3 +103,20 @@ export function compareCollectionSortValues(
   if (cmp === 0) return 0;
   return direction === "desc" ? -cmp : cmp;
 }
+
+/** How a field's sort value reads: what the order preview formats it as. */
+export type CollectionSortValueKind = "text" | "date" | "dateOnly" | "count" | "bytes" | "duration" | "rating";
+
+export const COLLECTION_SORT_VALUE_KIND: Record<CollectionSortField, CollectionSortValueKind> = {
+  ALPHABETICAL: "text",
+  RELEASE_DATE: "dateOnly",
+  DATE_ADDED: "date",
+  ACTION_DATE: "date",
+  LAST_PLAYED: "date",
+  PLAY_COUNT: "count",
+  FILE_SIZE: "bytes",
+  DURATION: "duration",
+  CRITIC_RATING: "rating",
+  AUDIENCE_RATING: "rating",
+  USER_RATING: "rating",
+};
