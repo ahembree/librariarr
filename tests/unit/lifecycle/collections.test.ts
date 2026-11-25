@@ -43,6 +43,7 @@ import {
   removePlexCollection,
   renameCollectionInPlex,
   planCollectionMoves,
+  orderCollectionKeys,
   type CollectionContribution,
 } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
@@ -1335,5 +1336,14 @@ describe("collection sort fields and direction", () => {
     // Only the stored-row lookup runs: the show titles come from Plex's listing.
     expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
     expect(orderAfterMoves(["office", "severance"])).toEqual(["severance", "office"]);
+  });
+});
+
+describe("orderCollectionKeys", () => {
+  it("sorts by value in the direction, missing values last, ties in Plex's order", () => {
+    const values = new Map<string, number | null>([["a", 2], ["b", null], ["c", 5], ["d", 2]]);
+    // Plex holds d before a: the tie keeps it so.
+    expect(orderCollectionKeys(["a", "b", "c", "d"], values, "desc", ["d", "a"])).toEqual(["c", "d", "a", "b"]);
+    expect(orderCollectionKeys(["a", "b", "c", "d"], values, "asc", [])).toEqual(["a", "d", "c", "b"]);
   });
 });

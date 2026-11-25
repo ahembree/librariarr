@@ -37,6 +37,7 @@ import {
 import { responseErrorMessage } from "@/lib/api/error-message";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
@@ -68,7 +69,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, FileText, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, FileText, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -115,6 +116,8 @@ function RulePreviewSkeleton() {
 import { ExportRuleSetDialog, ImportRuleSetDialog, TestMediaDialog } from "@/components/lifecycle-rule-dialogs";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
 import { COLLECTION_SORT_DIRECTION_OPTIONS, COLLECTION_SORT_OPTIONS } from "@/lib/lifecycle/collection-sort";
+import type { CollectionOrderPreview } from "@/lib/lifecycle/collection-order-preview";
+import { CollectionOrderPreviewDialog } from "@/components/collection-order-preview-dialog";
 import type {
   CollectionDefinition,
   RuleEditorData,
@@ -483,6 +486,16 @@ export function LifecycleRulePage({
   const [collectionSort, setCollectionSort] = useState("ALPHABETICAL");
   const [collectionSortDirection, setCollectionSortDirection] = useState("asc");
   const [showDeleteCollectionDialog, setShowDeleteCollectionDialog] = useState(false);
+  // Collection Order Preview: the order the collection would have after the
+  // next sync, with the editor's unsaved rules and sort.
+  const [showOrderPreview, setShowOrderPreview] = useState(false);
+  const [orderPreviewLoading, setOrderPreviewLoading] = useState(false);
+  const [orderPreviewError, setOrderPreviewError] = useState<string | null>(null);
+  const [orderPreview, setOrderPreview] = useState<CollectionOrderPreview | null>(null);
+  const { state: orderPreviewProgress, handleUpdate: onOrderPreviewProgress, reset: resetOrderPreviewProgress } = useStreamProgress();
+  const orderPreviewRequest = useLatestRequest();
+  const orderPreviewAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => orderPreviewAbortRef.current?.abort(), []);
   const [deletingCollection, setDeletingCollection] = useState(false);
   const isExistingCollectionSelected =
     !!selectedCollectionId && selectedCollectionId !== NEW_COLLECTION;
@@ -1007,6 +1020,66 @@ export function LifecycleRulePage({
       toast.error("Failed to save rule set");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const closeOrderPreview = (open: boolean) => {
+    setShowOrderPreview(open);
+    if (!open) {
+      // Closing stops a run still under way; its answer is no longer wanted.
+      orderPreviewRequest.cancel();
+      orderPreviewAbortRef.current?.abort();
+      orderPreviewAbortRef.current = null;
+      setOrderPreviewLoading(false);
+    }
+  };
+
+  const handleOrderPreview = async () => {
+    if (countAllRules(groups) === 0 || !collectionName.trim()) return;
+    const token = orderPreviewRequest.begin();
+    orderPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    orderPreviewAbortRef.current = controller;
+    setShowOrderPreview(true);
+    setOrderPreviewLoading(true);
+    setOrderPreviewError(null);
+    setOrderPreview(null);
+    resetOrderPreviewProgress();
+    try {
+      // The rule preview's body (unsaved rules, scope, servers, Arr instance,
+      // the action as a save would send it) plus the collection being edited.
+      const body: Record<string, unknown> = {
+        rules: groups,
+        type: mediaType,
+        serverIds,
+        arrInstanceId: arrInstanceId || null,
+        ...savedAction,
+        ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
+        ...(scopeConfig ? { seriesScope } : {}),
+        collectionId: isExistingCollectionSelected ? selectedCollectionId : null,
+        collectionName: collectionName.trim(),
+        sort: collectionSort,
+        sortDirection: collectionSortDirection,
+        enabled,
+        actionDelayDays,
+        targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
+        addImportExclusion: deletesArrRecord(actionType) && addImportExclusion,
+        stickyMatches,
+      };
+      const response = await fetch("/api/lifecycle/collections/order-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const result = await consumeProgressStream<CollectionOrderPreview>(response, onOrderPreviewProgress);
+      if (!orderPreviewRequest.isCurrent(token)) return;
+      setOrderPreview(result);
+    } catch (error) {
+      if (!orderPreviewRequest.isCurrent(token) || controller.signal.aborted) return;
+      setOrderPreviewError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (orderPreviewRequest.isCurrent(token)) setOrderPreviewLoading(false);
     }
   };
 
@@ -2151,6 +2224,32 @@ export function LifecycleRulePage({
                       </div>
                     </div>
 
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                      <BlockedReason reason={scopeBlockedReason}>
+                        <LoadingButton
+                          type="button"
+                          variant="secondary"
+                          icon={ArrowDownUp}
+                          loading={orderPreviewLoading}
+                          onClick={handleOrderPreview}
+                          disabled={
+                            !!scopeBlockedReason ||
+                            !collectionName.trim() ||
+                            groups.length === 0 ||
+                            !validateAllRules(groups) ||
+                            serverIds.length === 0 ||
+                            (ruleUsesArr && !arrInstanceId) ||
+                            (ruleUsesSeerr && !seerrConnected)
+                          }
+                        >
+                          Preview Order
+                        </LoadingButton>
+                      </BlockedReason>
+                      <p className="text-xs text-muted-foreground">
+                        The order after the next sync, with these unsaved rules, against Plex&apos;s current order.
+                      </p>
+                    </div>
+
                     <div className="flex flex-wrap gap-x-6 gap-y-3">
                       <div className="flex items-center gap-3">
                         <Switch
@@ -2364,6 +2463,15 @@ export function LifecycleRulePage({
       </div>
 
       <ExportRuleSetDialog open={showExportDialog} onOpenChange={setShowExportDialog} json={exportJson} />
+      <CollectionOrderPreviewDialog
+        open={showOrderPreview}
+        onOpenChange={closeOrderPreview}
+        collectionName={collectionName.trim()}
+        loading={orderPreviewLoading}
+        progress={orderPreviewProgress}
+        error={orderPreviewError}
+        result={orderPreview}
+      />
 
       <ImportRuleSetDialog open={showImportDialog} onOpenChange={setShowImportDialog} onImport={handleImportJson} />
 

@@ -17,7 +17,7 @@ import {
 } from "@/lib/lifecycle/collection-sort";
 
 /** A saved, reusable Plex collection definition. */
-interface CollectionSettings {
+export interface CollectionSettings {
   id: string;
   userId: string;
   name: string;
@@ -30,7 +30,7 @@ interface CollectionSettings {
   sortDirection?: string | null;
 }
 
-interface MatchedItem {
+export interface MatchedItem {
   libraryId: string;
   ratingKey: string;
   title: string;
@@ -70,11 +70,13 @@ function seriesKeysByTitle(plexSeries: Array<{ title: string; ratingKey: string 
   return byTitle;
 }
 
-interface PendingActionForOrder {
+export interface PendingActionForOrder {
   scheduledFor: Date;
   ruleSetId: string | null;
   mediaItemId: string | null;
   mediaItem: { ratingKey: string; parentTitle: string | null; title: string } | null;
+  /** Set by the order preview on a date it estimated for a match with no action yet. */
+  estimated?: boolean;
 }
 
 /**
@@ -87,15 +89,31 @@ interface PendingActionForOrder {
  * Only the snapshot fields the sync reads are taken out of `itemData` (in
  * SQL), not each match's whole stored row.
  */
-async function buildContributionsFromMatches(
-  collectionId: string
+export async function buildContributionsFromMatches(
+  collectionId: string,
+  /** A rule set to leave out (the order preview puts the editor's unsaved one in its place). */
+  excludeRuleSetId?: string,
 ): Promise<CollectionContribution[]> {
   const ruleSets = await prisma.ruleSet.findMany({
-    where: { collectionId, enabled: true },
+    where: { collectionId, enabled: true, ...(excludeRuleSetId ? { id: { not: excludeRuleSetId } } : {}) },
     select: { id: true, seriesScope: true },
   });
   if (ruleSets.length === 0) return [];
+  const byRuleSet = await loadMatchedItems(ruleSets.map((rs) => rs.id));
+  return ruleSets.map((rs) => ({
+    ruleSetId: rs.id,
+    seriesScope: rs.seriesScope,
+    items: byRuleSet.get(rs.id) ?? [],
+  }));
+}
 
+/**
+ * The collection members each rule set's persisted matches stand for, by rule
+ * set id: every match and every other server's copy it carries.
+ */
+export async function loadMatchedItems(ruleSetIds: string[]): Promise<Map<string, MatchedItem[]>> {
+  const byRuleSet = new Map<string, MatchedItem[]>();
+  if (ruleSetIds.length === 0) return byRuleSet;
   const rows = await prisma.$queryRawUnsafe<
     Array<{
       ruleSetId: string;
@@ -115,7 +133,7 @@ async function buildContributionsFromMatches(
             "itemData"->'copies' AS "copies"
        FROM "RuleMatch"
       WHERE "ruleSetId" = ANY($1)`,
-    ruleSets.map((rs) => rs.id),
+    ruleSetIds,
   );
 
   const toItem = (d: Record<string, unknown>, copyOf?: string): MatchedItem => ({
@@ -126,27 +144,19 @@ async function buildContributionsFromMatches(
     ...(copyOf ? { copyOf } : {}),
   });
 
-  const byRuleSet = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const list = byRuleSet.get(row.ruleSetId) ?? [];
-    list.push(row);
-    byRuleSet.set(row.ruleSetId, list);
-  }
-
-  return ruleSets.map((rs) => ({
-    ruleSetId: rs.id,
-    seriesScope: rs.seriesScope,
-    items: (byRuleSet.get(rs.id) ?? [])
-      .flatMap((m) => {
-        // Detection stores a multi-server title once, on one copy; the other
-        // servers' copies ride along in `copies` and belong in THEIR servers'
-        // collections just the same.
-        const copies = Array.isArray(m.copies) ? (m.copies as Record<string, unknown>[]) : [];
-        return [toItem(m), ...copies.map((c) => toItem(c, m.mediaItemId))];
-      })
+  for (const m of rows) {
+    // Detection stores a multi-server title once, on one copy; the other
+    // servers' copies ride along in `copies` and belong in THEIR servers'
+    // collections just the same.
+    const copies = Array.isArray(m.copies) ? (m.copies as Record<string, unknown>[]) : [];
+    const items = [toItem(m), ...copies.map((c) => toItem(c, m.mediaItemId))]
       // Defensive: legacy match rows could lack a ratingKey/libraryId.
-      .filter((i) => i.libraryId && i.ratingKey),
-  }));
+      .filter((i) => i.libraryId && i.ratingKey);
+    const list = byRuleSet.get(m.ruleSetId);
+    if (list) list.push(...items);
+    else byRuleSet.set(m.ruleSetId, items);
+  }
+  return byRuleSet;
 }
 
 /**
@@ -234,18 +244,8 @@ export async function syncCollection(
   // Preload pending actions across ALL contributing rule sets once, for
   // action-date ordering. Querying here (rather than per library) keeps the
   // cross-rule ordering consistent.
-  let pendingActions: PendingActionForOrder[] = [];
-  if (sortField === "ACTION_DATE" && contributingRuleSetIds.length > 0) {
-    pendingActions = await prisma.lifecycleAction.findMany({
-      where: { ruleSetId: { in: contributingRuleSetIds }, status: "PENDING" },
-      select: {
-        scheduledFor: true,
-        ruleSetId: true,
-        mediaItemId: true,
-        mediaItem: { select: { ratingKey: true, parentTitle: true, title: true } },
-      },
-    });
-  }
+  const pendingActions: PendingActionForOrder[] =
+    sortField === "ACTION_DATE" ? await loadPendingActionsForOrder(contributingRuleSetIds) : [];
 
   for (const library of userLibraries) {
     // Every ratingKey this pass writes on this server. Marked BEFORE the first
@@ -274,48 +274,8 @@ export async function syncCollection(
         skipTlsVerify: server.tlsSkipVerify,
       });
 
-      // For series-scope SERIES contributions the matched items are episodes, but
-      // a Plex collection in a TV library holds shows. Resolve series-level rating
-      // keys by (normalized) title. Built once per library and shared by both the
-      // membership union and the action-date ordering.
-      let seriesKeyByTitle: Map<string, string> | null = null;
-      // A show's sort title as Plex holds it, by rating key: what "Title"
-      // orders a show by, as Plex's own alphabetical sort does.
-      let showTitleSortByKey: Map<string, string> | null = null;
-      const needSeries =
-        collection.type === "SERIES" && contributions.some((c) => c.seriesScope);
-      if (needSeries) {
-        const shows = await cache.libraryShows(library.id, () => client.getLibraryItems(library.key));
-        seriesKeyByTitle = seriesKeysByTitle(shows);
-        showTitleSortByKey = new Map(shows.map((s) => [s.ratingKey, s.titleSort || s.title]));
-      }
-
-      // Union of desired rating keys for THIS library across all contributions.
-      const desiredSet = new Set<string>();
-      // A collapsed copy's rating key in this library, by the matched item
-      // whose pending action it shares (for action-date ordering).
-      const copyKeysByItemId = new Map<string, string[]>();
-      let libItemCount = 0;
-      for (const contrib of contributions) {
-        const libItems = contrib.items.filter((i) => i.libraryId === library.id);
-        if (libItems.length === 0) continue;
-        libItemCount += libItems.length;
-        for (const it of libItems) {
-          if (!it.copyOf) continue;
-          const keys = copyKeysByItemId.get(it.copyOf) ?? [];
-          keys.push(it.ratingKey);
-          copyKeysByItemId.set(it.copyOf, keys);
-        }
-        if (collection.type === "SERIES" && contrib.seriesScope && seriesKeyByTitle) {
-          for (const it of libItems) {
-            const key = seriesKeyByTitle.get(normTitle(it.parentTitle ?? it.title));
-            if (key) desiredSet.add(key);
-          }
-        } else {
-          for (const it of libItems) desiredSet.add(it.ratingKey);
-        }
-      }
-      const desiredKeys = [...desiredSet];
+      const plan = await planLibraryMembership(collection, contributions, library, client, cache);
+      const { desiredSet, desiredKeys, libItemCount } = plan;
 
       // Resolution-failure guard: if rule sets matched items but NONE resolved
       // to a rating key in THIS library, leave the Plex collection alone —
@@ -428,10 +388,7 @@ export async function syncCollection(
         await client.editCollectionSort(plexCollection.ratingKey, sortMode);
       }
       if (customOrder && desiredKeys.length > 1) {
-        const values =
-          sortField === "ACTION_DATE"
-            ? actionDateValues(pendingActions, seriesScopeByRuleSet, seriesKeyByTitle, copyKeysByItemId)
-            : await mediaFieldValues(library.id, sortField, desiredKeys, seriesKeyByTitle, showTitleSortByKey);
+        const values = await collectionSortValues(sortField, library.id, plan, pendingActions, seriesScopeByRuleSet);
         await applyCustomOrder(
           client,
           plexCollection.ratingKey,
@@ -476,6 +433,143 @@ export async function syncCollection(
       if (serverId && touched.size > 0) markSelfWrites(serverId, touched);
     }
   }
+}
+
+/**
+ * What one Plex library's copy of a collection should hold: the union of
+ * every contribution's items in that library, a series-scope match resolved to
+ * its show. Shared by the sync and the order preview, so both read the same
+ * membership.
+ */
+export interface LibraryCollectionPlan {
+  desiredSet: Set<string>;
+  desiredKeys: string[];
+  /** A collapsed copy's rating key in this library, by the matched item whose pending action it shares. */
+  copyKeysByItemId: Map<string, string[]>;
+  /** The library's shows by normalized title (series-scope contributions only). */
+  seriesKeyByTitle: Map<string, string> | null;
+  /** A show's sort title as Plex holds it, by rating key. */
+  showTitleSortByKey: Map<string, string> | null;
+  /** A show's title as Plex holds it, by rating key. */
+  showTitleByKey: Map<string, string> | null;
+  /** How many contributed items belong to this library. */
+  libItemCount: number;
+}
+
+export async function planLibraryMembership(
+  collection: Pick<CollectionSettings, "type">,
+  contributions: CollectionContribution[],
+  library: { id: string; key: string },
+  client: Pick<PlexClient, "getLibraryItems">,
+  cache: CollectionSyncCache,
+): Promise<LibraryCollectionPlan> {
+  // For series-scope SERIES contributions the matched items are episodes, but
+  // a Plex collection in a TV library holds shows. Resolve series-level rating
+  // keys by (normalized) title. Built once per library and shared by both the
+  // membership union and the ordering.
+  let seriesKeyByTitle: Map<string, string> | null = null;
+  // A show's sort title as Plex holds it, by rating key: what "Title"
+  // orders a show by, as Plex's own alphabetical sort does.
+  let showTitleSortByKey: Map<string, string> | null = null;
+  let showTitleByKey: Map<string, string> | null = null;
+  const needSeries = collection.type === "SERIES" && contributions.some((c) => c.seriesScope);
+  if (needSeries) {
+    const shows = await cache.libraryShows(library.id, () => client.getLibraryItems(library.key));
+    seriesKeyByTitle = seriesKeysByTitle(shows);
+    showTitleSortByKey = new Map(shows.map((s) => [s.ratingKey, s.titleSort || s.title]));
+    showTitleByKey = new Map(shows.map((s) => [s.ratingKey, s.title]));
+  }
+
+  const desiredSet = new Set<string>();
+  const copyKeysByItemId = new Map<string, string[]>();
+  let libItemCount = 0;
+  for (const contrib of contributions) {
+    const libItems = contrib.items.filter((i) => i.libraryId === library.id);
+    if (libItems.length === 0) continue;
+    libItemCount += libItems.length;
+    for (const it of libItems) {
+      if (!it.copyOf) continue;
+      const keys = copyKeysByItemId.get(it.copyOf) ?? [];
+      keys.push(it.ratingKey);
+      copyKeysByItemId.set(it.copyOf, keys);
+    }
+    if (collection.type === "SERIES" && contrib.seriesScope && seriesKeyByTitle) {
+      for (const it of libItems) {
+        const key = seriesKeyByTitle.get(normTitle(it.parentTitle ?? it.title));
+        if (key) desiredSet.add(key);
+      }
+    } else {
+      for (const it of libItems) desiredSet.add(it.ratingKey);
+    }
+  }
+  return {
+    desiredSet,
+    desiredKeys: [...desiredSet],
+    copyKeysByItemId,
+    seriesKeyByTitle,
+    showTitleSortByKey,
+    showTitleByKey,
+    libItemCount,
+  };
+}
+
+/**
+ * The PENDING actions of every contributing rule set, for action-date
+ * ordering. Queried once per collection (rather than per library) so the
+ * cross-rule ordering is consistent.
+ */
+export async function loadPendingActionsForOrder(ruleSetIds: string[]): Promise<PendingActionForOrder[]> {
+  if (ruleSetIds.length === 0) return [];
+  return prisma.lifecycleAction.findMany({
+    where: { ruleSetId: { in: ruleSetIds }, status: "PENDING" },
+    select: {
+      scheduledFor: true,
+      ruleSetId: true,
+      mediaItemId: true,
+      mediaItem: { select: { ratingKey: true, parentTitle: true, title: true } },
+    },
+  });
+}
+
+/**
+ * Each of the library's desired rating keys' value of `field`. `estimatedKeys`,
+ * when passed, collects the keys whose action date is an estimate.
+ */
+export async function collectionSortValues(
+  field: CollectionSortField,
+  libraryId: string,
+  plan: LibraryCollectionPlan,
+  pendingActions: PendingActionForOrder[],
+  seriesScopeByRuleSet: Map<string, boolean>,
+  estimatedKeys?: Set<string>,
+): Promise<Map<string, CollectionSortValue>> {
+  if (field === "ACTION_DATE") {
+    return actionDateValues(pendingActions, seriesScopeByRuleSet, plan.seriesKeyByTitle, plan.copyKeysByItemId, estimatedKeys);
+  }
+  return mediaFieldValues(libraryId, field, plan.desiredKeys, plan.seriesKeyByTitle, plan.showTitleSortByKey);
+}
+
+/**
+ * The target order of a collection's members: by `values` in `direction`, an
+ * item without a value last in either direction, and a tie keeping Plex's
+ * `current` order (then the desired order), so it needs no move.
+ */
+export function orderCollectionKeys(
+  desiredKeys: string[],
+  values: Map<string, CollectionSortValue>,
+  direction: CollectionSortDirection,
+  current: string[],
+): string[] {
+  const currentIndex = new Map(current.map((k, i) => [k, i]));
+  const desiredIndex = new Map(desiredKeys.map((k, i) => [k, i]));
+  return [...desiredKeys].sort((a, b) => {
+    const cmp = compareCollectionSortValues(values.get(a), values.get(b), direction);
+    if (cmp !== 0) return cmp;
+    const posA = currentIndex.get(a) ?? Number.POSITIVE_INFINITY;
+    const posB = currentIndex.get(b) ?? Number.POSITIVE_INFINITY;
+    if (posA !== posB) return posA < posB ? -1 : 1;
+    return desiredIndex.get(a)! - desiredIndex.get(b)!;
+  });
 }
 
 /**
@@ -529,6 +623,7 @@ function actionDateValues(
   seriesScopeByRuleSet: Map<string, boolean>,
   seriesKeyByTitle: Map<string, string> | null,
   copyKeysByItemId: Map<string, string[]>,
+  estimatedKeys?: Set<string>,
 ): Map<string, CollectionSortValue> {
   const scheduledByKey = new Map<string, CollectionSortValue>();
   for (const action of pendingActions) {
@@ -550,7 +645,11 @@ function actionDateValues(
     const at = action.scheduledFor.getTime();
     for (const key of keys) {
       const existing = scheduledByKey.get(key);
-      if (typeof existing !== "number" || at < existing) scheduledByKey.set(key, at);
+      if (typeof existing !== "number" || at < existing) {
+        scheduledByKey.set(key, at);
+        if (action.estimated) estimatedKeys?.add(key);
+        else estimatedKeys?.delete(key);
+      }
     }
   }
   return scheduledByKey;
@@ -558,7 +657,8 @@ function actionDateValues(
 
 type MediaSortField = Exclude<CollectionSortField, "ACTION_DATE">;
 
-const epoch = (column: string) => `EXTRACT(EPOCH FROM ${column})::float8`;
+// Epoch milliseconds, as an action date is held.
+const epoch = (column: string) => `(EXTRACT(EPOCH FROM ${column}) * 1000)::float8`;
 
 /**
  * The SQL for each field's value: `row` for one item (a movie, an episode, a
@@ -667,18 +767,7 @@ async function applyCustomOrder(
   // unless the caller had it — is what the moves are planned from.
   const current =
     orderAsListed ?? ((await client.getCollectionItems(collectionRatingKey)) ?? []).map((i) => i.ratingKey);
-  const currentIndex = new Map(current.map((k, i) => [k, i]));
-
-  // A tie keeps Plex's current order (then the desired order), so it needs no move.
-  const desiredIndex = new Map(desiredKeys.map((k, i) => [k, i]));
-  const sorted = [...desiredKeys].sort((a, b) => {
-    const cmp = compareCollectionSortValues(values.get(a), values.get(b), direction);
-    if (cmp !== 0) return cmp;
-    const posA = currentIndex.get(a) ?? Number.POSITIVE_INFINITY;
-    const posB = currentIndex.get(b) ?? Number.POSITIVE_INFINITY;
-    if (posA !== posB) return posA < posB ? -1 : 1;
-    return desiredIndex.get(a)! - desiredIndex.get(b)!;
-  });
+  const sorted = orderCollectionKeys(desiredKeys, values, direction, current);
 
   const moves = planCollectionMoves(current, sorted);
   for (const [item, after] of moves) {
