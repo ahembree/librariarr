@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { tagListsDisjoint } from "@/lib/lifecycle/arr-tag-lists";
+import { COLLECTION_SORT_DIRECTIONS, COLLECTION_SORT_FIELDS } from "@/lib/lifecycle/collection-sort";
 import { NextResponse } from "next/server";
 import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
 import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
@@ -456,8 +457,9 @@ const actionTypeEnum = z.enum([
   "SEARCH_RADARR", "SEARCH_SONARR", "SEARCH_LIDARR",
 ]).nullable().optional();
 
-// Shared sort modes for a Plex collection's item ordering.
-const collectionSortEnum = z.enum(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
+// Shared sort fields and directions for a Plex collection's item ordering.
+const collectionSortEnum = z.enum(COLLECTION_SORT_FIELDS);
+const collectionSortDirectionEnum = z.enum(COLLECTION_SORT_DIRECTIONS);
 
 // One action may add some Arr tags and remove others, but never the same tag.
 const TAG_LISTS_OVERLAP = {
@@ -567,6 +569,7 @@ export const collectionCreateSchema = z.object({
   homeScreen: z.boolean().optional(),
   recommended: z.boolean().optional(),
   sort: collectionSortEnum.optional(),
+  sortDirection: collectionSortDirectionEnum.optional(),
 });
 
 export const collectionUpdateSchema = z.object({
@@ -575,6 +578,7 @@ export const collectionUpdateSchema = z.object({
   homeScreen: z.boolean().optional(),
   recommended: z.boolean().optional(),
   sort: collectionSortEnum.optional(),
+  sortDirection: collectionSortDirectionEnum.optional(),
 });
 
 /**

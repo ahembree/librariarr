@@ -5,6 +5,16 @@ import { logger } from "@/lib/logger";
 import { markSelfWrites } from "@/lib/media-server/realtime/self-writes";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { CollectionSyncCache, type PlexCollectionRow } from "@/lib/lifecycle/collection-sync-cache";
+import {
+  collectionSortDirectionOf,
+  collectionSortFieldOf,
+  compareCollectionSortValues,
+  needsCustomOrder,
+  plexCollectionSortMode,
+  type CollectionSortDirection,
+  type CollectionSortField,
+  type CollectionSortValue,
+} from "@/lib/lifecycle/collection-sort";
 
 /** A saved, reusable Plex collection definition. */
 interface CollectionSettings {
@@ -16,6 +26,8 @@ interface CollectionSettings {
   homeScreen: boolean;
   recommended: boolean;
   sort: string;
+  /** "asc" (default) or "desc". */
+  sortDirection?: string | null;
 }
 
 interface MatchedItem {
@@ -215,11 +227,15 @@ export async function syncCollection(
     contributions.map((c) => [c.ruleSetId, c.seriesScope])
   );
 
+  const sortField = collectionSortFieldOf(collection.sort);
+  const sortDirection = collectionSortDirectionOf(collection.sortDirection);
+  const customOrder = needsCustomOrder(sortField, sortDirection);
+
   // Preload pending actions across ALL contributing rule sets once, for
   // action-date ordering. Querying here (rather than per library) keeps the
   // cross-rule ordering consistent.
   let pendingActions: PendingActionForOrder[] = [];
-  if (collection.sort === "ACTION_DATE" && contributingRuleSetIds.length > 0) {
+  if (sortField === "ACTION_DATE" && contributingRuleSetIds.length > 0) {
     pendingActions = await prisma.lifecycleAction.findMany({
       where: { ruleSetId: { in: contributingRuleSetIds }, status: "PENDING" },
       select: {
@@ -334,7 +350,7 @@ export async function syncCollection(
       }
 
       // The members in Plex's current order, when that order can be reused for
-      // the action-date ordering below: an existing custom-sorted collection
+      // the custom ordering below: an existing custom-sorted collection
       // whose membership this pass leaves as it is. Otherwise null, and the
       // ordering reads the order back after the writes.
       let orderAsListed: string[] | null = null;
@@ -401,22 +417,25 @@ export async function syncCollection(
         await client.editCollectionSortTitle(library.key, plexCollection.ratingKey, sortTitle);
       }
 
-      // Collection item sort order
-      const sortMap: Record<string, number> = { RELEASE_DATE: 0, ALPHABETICAL: 1, ACTION_DATE: 2 };
-      // Custom sort mode (2) for ACTION_DATE, so the manual ordering is kept.
-      const sortMode = sortMap[collection.sort] ?? 1;
+      // Collection item sort order: Plex's own mode for title / release date
+      // ascending, its custom mode (2) for everything else, which keeps the
+      // order applied below.
+      const sortMode = plexCollectionSortMode(sortField, sortDirection);
       if (plexCollection.collectionSort == null || String(plexCollection.collectionSort) !== String(sortMode)) {
         await client.editCollectionSort(plexCollection.ratingKey, sortMode);
       }
-      if (collection.sort === "ACTION_DATE") {
-        await applyActionDateOrder(
+      if (customOrder && desiredKeys.length > 1) {
+        const values =
+          sortField === "ACTION_DATE"
+            ? actionDateValues(pendingActions, seriesScopeByRuleSet, seriesKeyByTitle, copyKeysByItemId)
+            : await mediaFieldValues(library.id, sortField, desiredKeys, seriesKeyByTitle);
+        await applyCustomOrder(
           client,
           plexCollection.ratingKey,
           desiredKeys,
-          pendingActions,
-          seriesScopeByRuleSet,
-          seriesKeyByTitle,
-          copyKeysByItemId,
+          values,
+          sortField,
+          sortDirection,
           orderAsListed,
         );
       }
@@ -448,7 +467,7 @@ export async function syncCollection(
         { error: describePlexError(error) }
       );
     } finally {
-      // Refresh the window from the LAST write: action-date ordering is one
+      // Refresh the window from the LAST write: custom ordering is one
       // `move` per item, and a big collection can outlast a mark placed before
       // the first write.
       if (serverId && touched.size > 0) markSelfWrites(serverId, touched);
@@ -497,30 +516,18 @@ export function planCollectionMoves(current: string[], target: string[]): Array<
 }
 
 /**
- * Reorder collection items by their scheduled action date (soonest first),
+ * Each collection rating key's earliest scheduled action date (epoch ms),
  * pooling the pending actions of every contributing rule set so items are
- * interleaved by action date across rules. Items without a pending action are
- * placed at the end; items that tie keep the order Plex already has them in.
- *
- * Only the items out of place are moved (`planCollectionMoves`), so a run
- * that changes no date sends no write — where every member used to be moved
- * one after another on every run.
+ * interleaved by action date across rules. A key without a pending action has
+ * no value (it sorts last).
  */
-async function applyActionDateOrder(
-  client: PlexClient,
-  collectionRatingKey: string,
-  desiredKeys: string[],
+function actionDateValues(
   pendingActions: PendingActionForOrder[],
   seriesScopeByRuleSet: Map<string, boolean>,
   seriesKeyByTitle: Map<string, string> | null,
-  copyKeysByItemId: Map<string, string[]> = new Map(),
-  /** The members in Plex's current order, if the caller already has it. */
-  orderAsListed: string[] | null = null,
-): Promise<void> {
-  if (desiredKeys.length <= 1) return;
-
-  // Map each collection rating key -> earliest scheduled deletion across rules.
-  const scheduledByKey = new Map<string, Date>();
+  copyKeysByItemId: Map<string, string[]>,
+): Map<string, CollectionSortValue> {
+  const scheduledByKey = new Map<string, CollectionSortValue>();
   for (const action of pendingActions) {
     if (!action.mediaItem || !action.ruleSetId) continue;
     const seriesScope = seriesScopeByRuleSet.get(action.ruleSetId) ?? false;
@@ -537,13 +544,114 @@ async function applyActionDateOrder(
       if (action.mediaItemId) keys.push(...(copyKeysByItemId.get(action.mediaItemId) ?? []));
     }
 
+    const at = action.scheduledFor.getTime();
     for (const key of keys) {
       const existing = scheduledByKey.get(key);
-      if (!existing || action.scheduledFor < existing) {
-        scheduledByKey.set(key, action.scheduledFor);
+      if (typeof existing !== "number" || at < existing) scheduledByKey.set(key, at);
+    }
+  }
+  return scheduledByKey;
+}
+
+type MediaSortField = Exclude<CollectionSortField, "ACTION_DATE">;
+
+const epoch = (column: string) => `EXTRACT(EPOCH FROM ${column})::float8`;
+
+/**
+ * The SQL for each field's value: `row` for one item (a movie, an episode, a
+ * track — collection members that are stored rows), `show` for a show in a TV
+ * collection, folded over its episodes in the library. Fixed strings only.
+ */
+const MEDIA_SORT_SQL: Record<MediaSortField, { row: string; show: string; text?: true }> = {
+  ALPHABETICAL: { row: `COALESCE(NULLIF("titleSort", ''), "title")`, show: `MIN("parentTitle")`, text: true },
+  RELEASE_DATE: { row: epoch(`"originallyAvailableAt"`), show: epoch(`MIN("originallyAvailableAt")`) },
+  DATE_ADDED: { row: epoch(`"addedAt"`), show: epoch(`MIN("addedAt")`) },
+  LAST_PLAYED: { row: epoch(`"lastPlayedAt"`), show: epoch(`MAX("lastPlayedAt")`) },
+  PLAY_COUNT: { row: `"playCount"::float8`, show: `SUM("playCount")::float8` },
+  FILE_SIZE: { row: `"fileSize"::float8`, show: `SUM("fileSize")::float8` },
+  DURATION: { row: `"duration"::float8`, show: `SUM("duration")::float8` },
+  CRITIC_RATING: { row: `"rating"::float8`, show: `AVG("rating")::float8` },
+  AUDIENCE_RATING: { row: `"audienceRating"::float8`, show: `AVG("audienceRating")::float8` },
+  USER_RATING: { row: `"userRating"::float8`, show: `AVG("userRating")::float8` },
+};
+
+/**
+ * Each collection rating key's value of `field`, read from this library's
+ * synced rows. A show (series-scope membership) folds its episodes: the
+ * earliest release / added date, the latest play, summed play count, size and
+ * duration, averaged ratings, and the show's title.
+ */
+async function mediaFieldValues(
+  libraryId: string,
+  field: MediaSortField,
+  desiredKeys: string[],
+  seriesKeyByTitle: Map<string, string> | null,
+): Promise<Map<string, CollectionSortValue>> {
+  const sql = MEDIA_SORT_SQL[field];
+  const values = new Map<string, CollectionSortValue>();
+
+  const rows = await prisma.$queryRawUnsafe<Array<{ key: string; value: number | string | null }>>(
+    `SELECT "ratingKey" AS "key", ${sql.row} AS "value"
+       FROM "MediaItem"
+      WHERE "libraryId" = $1 AND "ratingKey" = ANY($2::text[])`,
+    libraryId,
+    desiredKeys,
+  );
+  for (const r of rows ?? []) values.set(r.key, r.value);
+
+  if (seriesKeyByTitle) {
+    // The desired keys that are shows, by the normalized title they resolved from.
+    const desired = new Set(desiredKeys);
+    const showKeyByTitle = new Map<string, string>();
+    for (const [title, key] of seriesKeyByTitle) {
+      if (desired.has(key) && !values.has(key)) showKeyByTitle.set(title, key);
+    }
+    if (showKeyByTitle.size > 0) {
+      const shows = await prisma.$queryRawUnsafe<Array<{ key: string; value: number | string | null }>>(
+        `SELECT LOWER(TRIM("parentTitle")) AS "key", ${sql.show} AS "value"
+           FROM "MediaItem"
+          WHERE "libraryId" = $1 AND "type" = 'SERIES' AND "parentTitle" IS NOT NULL
+            AND LOWER(TRIM("parentTitle")) = ANY($2::text[])
+          GROUP BY 1`,
+        libraryId,
+        [...showKeyByTitle.keys()],
+      );
+      for (const r of shows ?? []) {
+        const key = showKeyByTitle.get(normTitle(r.key));
+        if (key) values.set(key, r.value);
       }
     }
   }
+
+  // Normalise what the driver hands back (a numeric string, a Decimal).
+  for (const [key, value] of values) {
+    if (value == null) values.set(key, null);
+    else if (sql.text) values.set(key, String(value));
+    else values.set(key, typeof value === "number" ? value : Number(value));
+  }
+  return values;
+}
+
+/**
+ * Reorder collection items by `values` in `direction`. Items without a value
+ * are placed at the end in either direction; items that tie keep the order
+ * Plex already has them in.
+ *
+ * Only the items out of place are moved (`planCollectionMoves`), so a run
+ * that changes no value sends no write — where every member used to be moved
+ * one after another on every run.
+ */
+async function applyCustomOrder(
+  client: PlexClient,
+  collectionRatingKey: string,
+  desiredKeys: string[],
+  values: Map<string, CollectionSortValue>,
+  field: CollectionSortField,
+  direction: CollectionSortDirection,
+  /** The members in Plex's current order, if the caller already has it. */
+  orderAsListed: string[] | null = null,
+): Promise<void> {
+  if (desiredKeys.length <= 1) return;
 
   // Plex's order as it stands — read back after this pass's membership writes
   // unless the caller had it — is what the moves are planned from.
@@ -551,15 +659,11 @@ async function applyActionDateOrder(
     orderAsListed ?? ((await client.getCollectionItems(collectionRatingKey)) ?? []).map((i) => i.ratingKey);
   const currentIndex = new Map(current.map((k, i) => [k, i]));
 
-  // Soonest deletion first; items without a pending action go last; a tie
-  // keeps Plex's current order (then the desired order), so it needs no move.
+  // A tie keeps Plex's current order (then the desired order), so it needs no move.
   const desiredIndex = new Map(desiredKeys.map((k, i) => [k, i]));
   const sorted = [...desiredKeys].sort((a, b) => {
-    const dateA = scheduledByKey.get(a);
-    const dateB = scheduledByKey.get(b);
-    if (dateA && dateB && dateA.getTime() !== dateB.getTime()) return dateA.getTime() - dateB.getTime();
-    if (dateA && !dateB) return -1;
-    if (!dateA && dateB) return 1;
+    const cmp = compareCollectionSortValues(values.get(a), values.get(b), direction);
+    if (cmp !== 0) return cmp;
     const posA = currentIndex.get(a) ?? Number.POSITIVE_INFINITY;
     const posB = currentIndex.get(b) ?? Number.POSITIVE_INFINITY;
     if (posA !== posB) return posA < posB ? -1 : 1;
@@ -573,7 +677,7 @@ async function applyActionDateOrder(
 
   logger.debug(
     "Lifecycle",
-    `Ordered ${sorted.length} items in collection by action date (${moves.length} moved)`
+    `Ordered ${sorted.length} items in collection by ${field} ${direction} (${moves.length} moved)`
   );
 }
 

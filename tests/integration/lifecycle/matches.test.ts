@@ -171,7 +171,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
       type: "MOVIE",
     });
 
-    const collection = await createTestCollection(user.id, { name: "Test Col", type: "MOVIE", sort: "ACTION_DATE" });
+    const collection = await createTestCollection(user.id, { name: "Test Col", type: "MOVIE", sort: "ACTION_DATE", sortDirection: "desc" });
     const rs = await createTestRuleSet(user.id, {
       name: "Metadata Test",
       type: "MOVIE",
@@ -200,6 +200,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
           actionType: string;
           collectionName: string | null;
           collectionSort: string | null;
+          collectionSortDirection: string | null;
           rules: { id: string; rules: { id: string }[] }[];
         };
       }[];
@@ -213,6 +214,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(rsMeta.actionType).toBe("DELETE_RADARR");
     expect(rsMeta.collectionName).toBe("Test Col");
     expect(rsMeta.collectionSort).toBe("ACTION_DATE");
+    expect(rsMeta.collectionSortDirection).toBe("desc");
     // The detail panel's Logic Preview reads the rule set's rules.
     expect(rsMeta.rules[0].rules[0].id).toBe("r1");
   });

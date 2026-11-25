@@ -25,6 +25,7 @@ export interface CollectionDefinition {
   homeScreen: boolean;
   recommended: boolean;
   sort: string;
+  sortDirection?: string;
   _count?: { ruleSets: number };
 }
 
