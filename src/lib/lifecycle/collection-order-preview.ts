@@ -17,6 +17,10 @@ import { describePlexError } from "@/lib/plex/errors";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
+import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { ACTION_SIGNATURE_SELECT, actionConfigSignature, type ActionConfig } from "@/lib/lifecycle/action-signature";
+import { coverageOf, uncoveredEpisodes } from "@/lib/lifecycle/episode-coverage";
+import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import {
   collectionSortValues,
   orderCollectionKeys,
@@ -88,7 +92,18 @@ export interface CollectionOrderPreview {
 
 export interface CollectionOrderPreviewInput {
   userId: string;
-  collection: { name: string; type: "MOVIE" | "SERIES" | "MUSIC"; sort: string; sortDirection?: string | null };
+  collection: {
+    name: string;
+    /**
+     * The name Plex holds the collection by now, when it differs from `name`:
+     * an existing collection renamed in the editor is renamed on Plex by the
+     * save, so its current order is read under the stored name.
+     */
+    plexName?: string;
+    type: "MOVIE" | "SERIES" | "MUSIC";
+    sort: string;
+    sortDirection?: string | null;
+  };
   contributions: CollectionContribution[];
   /** PENDING actions of the contributing rule sets (estimates marked `estimated`); read for an Action date sort only. */
   pendingActions: PendingActionForOrder[];
@@ -102,6 +117,8 @@ export interface EditorCandidate {
   ratingKey: string;
   title: string | null;
   parentTitle: string | null;
+  /** A show's or artist's matched episodes or tracks (a group match). */
+  memberIds?: string[];
 }
 
 /**
@@ -113,6 +130,11 @@ export async function buildEditorContribution(
   ruleSetId: string | undefined,
   seriesScope: boolean,
   candidates: EditorCandidate[],
+  /**
+   * Stored matches the save keeps though the rules no longer select them —
+   * sticky matches, while the save leaves what the rule set matches alone.
+   */
+  keptItems: MatchedItem[] = [],
 ): Promise<CollectionContribution> {
   const copyOf = new Map<string, string>();
   if (ruleSetId) {
@@ -137,19 +159,41 @@ export async function buildEditorContribution(
         ...(of && of !== c.id ? { copyOf: of } : {}),
       };
     });
+  const seen = new Set(items.map((i) => `${i.libraryId}\u0000${i.ratingKey}`));
+  for (const item of keptItems) {
+    const key = `${item.libraryId}\u0000${item.ratingKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
   return { ruleSetId: ruleSetId ?? "__editor__", seriesScope, items };
 }
 
+/** The edited rule set's action as a save would store it. */
+export interface EditorActionPlan {
+  armed: boolean;
+  delayDays: number;
+  /** The rule set's library type: a show's or artist's action waits out the grouped-action hold. */
+  type: "MOVIE" | "SERIES" | "MUSIC";
+  /** Decides which settled actions keep a new one from being scheduled (`actionConfigSignature`). */
+  config: ActionConfig;
+}
+
 /**
- * The edited rule set's pending actions as the preview orders by them: a
- * candidate keeps its PENDING action's date; one without gets an estimate,
- * now + the action delay, when the editor's action is on. An action on an item
- * that no longer matches is left out — scheduling cancels it.
+ * The edited rule set's pending actions as the preview orders by them,
+ * mirroring `scheduleActionsForRuleSet`: a candidate keeps its PENDING
+ * action's date; one without gets an estimate — now + the action delay, a
+ * group's held to the grouped-action hold — when the editor's action is on
+ * and scheduling would create one: never for a non-destructive action a
+ * settled action of the same signature already ran on the item (a show:
+ * on every matched episode). An action on an item that no longer matches is
+ * left out — scheduling cancels it.
  */
 export async function editorPendingActions(
+  userId: string,
   ruleSetId: string | undefined,
   candidates: EditorCandidate[],
-  action: { armed: boolean; delayDays: number },
+  action: EditorActionPlan,
   now: Date = new Date(),
 ): Promise<PendingActionForOrder[]> {
   const candidateIds = new Set(candidates.map((c) => c.id));
@@ -165,18 +209,37 @@ export async function editorPendingActions(
         },
       })).filter((a) => a.mediaItemId != null && candidateIds.has(a.mediaItemId))
     : [];
-  if (!action.armed) return existing;
+  const actionType = action.config.actionType;
+  if (!action.armed || !actionType) return existing;
+
   const scheduled = new Set(existing.map((a) => a.mediaItemId));
+  let toSchedule = candidates.filter((c) => !scheduled.has(c.id));
+
+  if (ruleSetId && !isDestructiveActionType(actionType) && toSchedule.length > 0) {
+    const signature = actionConfigSignature(action.config);
+    const settled = (await prisma.lifecycleAction.findMany({
+      where: { ruleSetId, status: { in: ["COMPLETED", "FAILED"] }, actionType, releasedAt: null },
+      select: ACTION_SIGNATURE_SELECT,
+    })).filter((a) => actionConfigSignature(a) === signature);
+    if (action.type === "SERIES") {
+      const coverage = coverageOf(settled);
+      toSchedule = toSchedule.filter((c) => uncoveredEpisodes(c.id, c.memberIds ?? [], coverage).length > 0);
+    } else {
+      const ran = new Set(settled.map((a) => a.mediaItemId));
+      toSchedule = toSchedule.filter((c) => !ran.has(c.id));
+    }
+  }
+  if (toSchedule.length === 0) return existing;
+
+  const hold = await loadGroupedActionHold(userId, now);
   const estimate = new Date(now.getTime() + action.delayDays * DAY_MS);
-  const estimated: PendingActionForOrder[] = candidates
-    .filter((c) => !scheduled.has(c.id))
-    .map((c) => ({
-      scheduledFor: estimate,
-      ruleSetId: contributionId,
-      mediaItemId: c.id,
-      mediaItem: { ratingKey: c.ratingKey, parentTitle: c.parentTitle, title: c.title ?? "" },
-      estimated: true,
-    }));
+  const estimated: PendingActionForOrder[] = toSchedule.map((c) => ({
+    scheduledFor: heldScheduledFor(estimate, hold, { type: action.type, title: c.title, parentTitle: c.parentTitle }),
+    ruleSetId: contributionId,
+    mediaItemId: c.id,
+    mediaItem: { ratingKey: c.ratingKey, parentTitle: c.parentTitle, title: c.title ?? "" },
+    estimated: true,
+  }));
   return [...existing, ...estimated];
 }
 
@@ -197,7 +260,11 @@ async function storedTitles(libraryId: string, keys: string[]): Promise<Map<stri
     libraryId,
     keys,
   );
-  return new Map((rows ?? []).map((r) => [r.ratingKey, formatMediaItemTitle(r)]));
+  return new Map((rows ?? []).map((r) => [
+    r.ratingKey,
+    // A track names its artist too: an artist match is held as one of its tracks.
+    r.type === "MUSIC" && r.parentTitle ? `${r.parentTitle} — ${r.title}` : formatMediaItemTitle(r),
+  ]));
 }
 
 function plexItemTitle(item: { title?: string; grandparentTitle?: string }): string {
@@ -274,7 +341,8 @@ export async function previewCollectionOrder(input: CollectionOrderPreviewInput)
     let currentError: string | null = null;
     try {
       const listing = await cache.collections(library.id, () => client.getCollections(library.key));
-      const plexCollection = listing.find((c) => c.title === collection.name);
+      const plexName = collection.plexName ?? collection.name;
+      const plexCollection = listing.find((c) => c.title === plexName);
       collectionExists = !!plexCollection;
       current = plexCollection ? ((await client.getCollectionItems(plexCollection.ratingKey)) ?? []) : [];
     } catch (error) {

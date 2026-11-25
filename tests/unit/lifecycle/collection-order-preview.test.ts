@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const mockPrisma = vi.hoisted(() => ({
   library: { findMany: vi.fn() },
   lifecycleAction: { findMany: vi.fn() },
+  appSettings: { findUnique: vi.fn() },
   $queryRawUnsafe: vi.fn(),
 }));
 const plex = vi.hoisted(() => ({
@@ -57,6 +58,17 @@ describe("buildEditorContribution", () => {
     });
   });
 
+  it("adds the stored matches a sticky save keeps, once", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+    const contribution = await buildEditorContribution("rs1", false, [
+      { id: "m1", libraryId: "lib1", ratingKey: "a", title: "A", parentTitle: null },
+    ], [
+      { libraryId: "lib1", ratingKey: "a", title: "A", parentTitle: null },
+      { libraryId: "lib1", ratingKey: "kept", title: "Kept", parentTitle: null },
+    ]);
+    expect(contribution.items.map((i) => i.ratingKey)).toEqual(["a", "kept"]);
+  });
+
   it("stands in for a rule set not saved yet", async () => {
     const contribution = await buildEditorContribution(undefined, true, []);
     expect(contribution.ruleSetId).toBe("__editor__");
@@ -73,19 +85,62 @@ describe("editorPendingActions", () => {
     scheduledFor: new Date("2030-01-01"), ruleSetId: "rs1", mediaItemId,
     mediaItem: { ratingKey: mediaItemId, parentTitle: null, title: mediaItemId },
   });
+  const config = (actionType: string) => ({
+    actionType, arrInstanceId: "arr1", targetQualityProfileId: null, addImportExclusion: false,
+    searchAfterAction: false, addArrTags: [], removeArrTags: [],
+  });
+  const settled = (mediaItemId: string, overrides: Record<string, unknown> = {}) => ({
+    mediaItemId, status: "COMPLETED", ...config("UNMONITOR_RADARR"), matchedMediaItemIds: [], ...overrides,
+  });
+  const now = new Date("2029-12-01T00:00:00Z");
+
+  /** The PENDING read, then the settled read (non-destructive actions only). */
+  function stubActions(pending: unknown[], settledRows: unknown[] = []) {
+    mockPrisma.lifecycleAction.findMany.mockImplementation(async ({ where }: { where: { status: unknown } }) =>
+      where.status === "PENDING" ? pending : settledRows,
+    );
+  }
 
   it("keeps a candidate's pending action, estimates the rest and drops one no longer matched", async () => {
-    mockPrisma.lifecycleAction.findMany.mockResolvedValue([scheduled("m1"), scheduled("gone")]);
-    const now = new Date("2029-12-01T00:00:00Z");
-    const actions = await editorPendingActions("rs1", candidates, { armed: true, delayDays: 7 }, now);
+    stubActions([scheduled("m1"), scheduled("gone")]);
+    const actions = await editorPendingActions("u1", "rs1", candidates, { armed: true, delayDays: 7, type: "MOVIE", config: config("DELETE_RADARR") }, now);
     expect(actions.map((a) => [a.mediaItemId, a.estimated ?? false])).toEqual([["m1", false], ["m2", true]]);
     expect(actions[1].scheduledFor).toEqual(new Date("2029-12-08T00:00:00Z"));
     expect(actions[1].mediaItem).toEqual({ ratingKey: "b", parentTitle: null, title: "B" });
   });
 
   it("estimates nothing while the action is off", async () => {
-    mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
-    expect(await editorPendingActions("rs1", candidates, { armed: false, delayDays: 7 })).toEqual([]);
+    stubActions([]);
+    expect(await editorPendingActions("u1", "rs1", candidates, { armed: false, delayDays: 7, type: "MOVIE", config: config("DELETE_RADARR") })).toEqual([]);
+  });
+
+  it("estimates no non-destructive action a settled one of the same config already ran", async () => {
+    // m1's settled action has the config being saved; m2's ran with other tags.
+    stubActions([], [settled("m1"), settled("m2", { addArrTags: ["old"] })]);
+    const actions = await editorPendingActions("u1", "rs1", candidates, { armed: true, delayDays: 0, type: "MOVIE", config: config("UNMONITOR_RADARR") }, now);
+    expect(actions.map((a) => a.mediaItemId)).toEqual(["m2"]);
+  });
+
+  it("estimates a show only while a matched episode is uncovered", async () => {
+    const shows = [
+      { id: "s1", libraryId: "lib1", ratingKey: "s1", title: "Covered", parentTitle: null, memberIds: ["e1", "e2"] },
+      { id: "s2", libraryId: "lib1", ratingKey: "s2", title: "Half", parentTitle: null, memberIds: ["e3", "e4"] },
+    ];
+    const series = { ...config("UNMONITOR_SONARR") };
+    stubActions([], [
+      settled("s1", { ...series, matchedMediaItemIds: ["e1", "e2"] }),
+      settled("s2", { ...series, matchedMediaItemIds: ["e3"] }),
+    ]);
+    const actions = await editorPendingActions("u1", "rs1", shows, { armed: true, delayDays: 0, type: "SERIES", config: series }, now);
+    expect(actions.map((a) => a.mediaItemId)).toEqual(["s2"]);
+  });
+
+  it("holds a show's estimate to the grouped-action hold", async () => {
+    stubActions([]);
+    mockPrisma.appSettings.findUnique.mockResolvedValue({ groupedActionsHeldUntil: new Date("2030-06-01T00:00:00Z") });
+    const show = [{ id: "s1", libraryId: "lib1", ratingKey: "s1", title: "Show", parentTitle: null }];
+    const actions = await editorPendingActions("u1", "rs1", show, { armed: true, delayDays: 1, type: "SERIES", config: config("DELETE_SONARR") }, now);
+    expect(actions[0].scheduledFor).toEqual(new Date("2030-06-01T00:00:00Z"));
   });
 });
 
@@ -162,6 +217,31 @@ describe("previewCollectionOrder", () => {
       removed: [{ ratingKey: "x", title: "Show — Old", previousPosition: 0 }],
       moves: 0,
     });
+  });
+
+  it("reads Plex's current order under the stored name of a collection renamed in the editor", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([movieLibrary]);
+    plex.getCollections.mockResolvedValue([{ ratingKey: "col", title: "Old Name" }]);
+    plex.getCollectionItems.mockResolvedValue([{ ratingKey: "b" }, { ratingKey: "a" }]);
+    stubQueries([{ key: "a", value: 2 }, { key: "b", value: 1 }]);
+    const result = await previewCollectionOrder(input({
+      collection: { name: "New Name", plexName: "Old Name", type: "MOVIE", sort: "PLAY_COUNT", sortDirection: "desc" },
+    }));
+    expect(result.libraries[0]).toMatchObject({ collectionExists: true, moves: 1 });
+    expect(result.libraries[0].items.map((i) => [i.ratingKey, i.previousPosition])).toEqual([["a", 1], ["b", 0]]);
+  });
+
+  it("names a track by its artist too", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([{ ...movieLibrary, title: "Music" }]);
+    plex.getCollections.mockResolvedValue([]);
+    stubQueries([{ key: "a", value: 1 }], [
+      { ratingKey: "a", title: "Intro", parentTitle: "The Band", type: "MUSIC", seasonNumber: null, episodeNumber: null },
+    ]);
+    const result = await previewCollectionOrder(input({
+      collection: { name: "C", type: "MUSIC", sort: "PLAY_COUNT", sortDirection: "desc" },
+      contributions: [movies(["a"])],
+    }));
+    expect(result.libraries[0].items[0].title).toBe("The Band — Intro");
   });
 
   it("leaves out a library that neither holds the collection nor gets a member", async () => {

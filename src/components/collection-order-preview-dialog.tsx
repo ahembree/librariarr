@@ -94,6 +94,11 @@ function librarySummary(library: CollectionOrderPreviewLibrary): string {
       if (moved > 0) parts.push(`${moved} change position`);
     }
   }
+  // Nothing left to hold: the sync deletes the collection from Plex.
+  if (library.items.length === 0) {
+    if (library.collectionExists) parts.push("collection removed from Plex on the next sync");
+    return parts.join(" · ");
+  }
   if (library.plexSorted) parts.push("Plex keeps this order itself");
   else if (library.moves === 0) parts.push("already in order");
   else if (library.moves !== null) parts.push(`${library.moves} move${library.moves === 1 ? "" : "s"} on the next sync`);

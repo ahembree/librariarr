@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
-import { hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
+import { hasAnyActiveRules, hasArrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { loadPreviewMetadata, previewMetadataPhase } from "@/lib/lifecycle/preview-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { loadEditorScopeAction } from "@/lib/lifecycle/editor-action";
 import { evaluateEditorRuleSet } from "@/lib/lifecycle/editor-evaluation";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
-import { buildContributionsFromMatches, loadPendingActionsForOrder } from "@/lib/lifecycle/collections";
+import { buildContributionsFromMatches, loadMatchedItems, loadPendingActionsForOrder } from "@/lib/lifecycle/collections";
+import { rulesChanged, serverIdsChanged } from "@/lib/lifecycle/rule-set-matching";
 import {
   buildEditorContribution,
   editorPendingActions,
@@ -38,20 +39,33 @@ export const POST = withSession(async (session, request: NextRequest) => {
   const { rules, type, seriesScope, serverIds, arrInstanceId, ruleSetId, collectionId } = data;
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
+  // The name Plex holds an existing collection by: a rename in the editor is
+  // made on Plex by the save, so the current order is read under this one.
+  let plexName: string | undefined;
   if (collectionId) {
     const collection = await prisma.collection.findFirst({
       where: { id: collectionId, userId: session.userId },
-      select: { type: true },
+      select: { type: true, name: true },
     });
     if (!collection) return NextResponse.json({ error: "Collection not found" }, { status: 404 });
     if (collection.type !== type) {
       return NextResponse.json({ error: "The collection is for another library type" }, { status: 400 });
     }
+    plexName = collection.name;
   }
   const storedRuleSet = ruleSetId
     ? await prisma.ruleSet.findFirst({
         where: { id: ruleSetId, userId: session.userId },
-        select: { actionDelayDays: true },
+        select: {
+          actionDelayDays: true,
+          rules: true,
+          serverIds: true,
+          seriesScope: true,
+          arrInstanceId: true,
+          stickyMatches: true,
+          targetQualityProfileId: true,
+          addImportExclusion: true,
+        },
       })
     : null;
   if (ruleSetId && !storedRuleSet) return NextResponse.json({ error: "Rule set not found" }, { status: 404 });
@@ -109,6 +123,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
           ratingKey: i.ratingKey as string,
           title: (i.title as string | null) ?? null,
           parentTitle: (i.parentTitle as string | null) ?? null,
+          memberIds: Array.isArray(i.memberIds) ? (i.memberIds as string[]) : undefined,
         }));
     }
 
@@ -116,17 +131,41 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // `seriesScope` as the detection of a saved rule set would store it.
     const editorScope = seriesScope !== false;
     const others = collectionId ? await buildContributionsFromMatches(collectionId, ruleSetId) : [];
+    // Sticky matches the save keeps: with sticky matches on and what the rule
+    // set matches unchanged (rules, servers, scope, the Arr instance its Arr
+    // criteria are read from), the save clears nothing and detection keeps
+    // stored matches the rules no longer select.
+    const keepsStored =
+      !!storedRuleSet &&
+      (data.stickyMatches ?? storedRuleSet.stickyMatches) &&
+      !rulesChanged(storedRuleSet.rules, rules) &&
+      !serverIdsChanged(storedRuleSet.serverIds, serverIds) &&
+      (type === "MOVIE" || storedRuleSet.seriesScope === editorScope) &&
+      !(hasArrRules(typedRules) && (arrInstanceId ?? null) !== (storedRuleSet.arrInstanceId ?? null));
+    const keptItems = keepsStored && ruleSetId ? ((await loadMatchedItems([ruleSetId])).get(ruleSetId) ?? []) : [];
     const contributions = enabled
-      ? [...others, await buildEditorContribution(ruleSetId, editorScope, candidates)]
+      ? [...others, await buildEditorContribution(ruleSetId, editorScope, candidates, keptItems)]
       : others;
 
     const pendingActions = data.sort === "ACTION_DATE"
       ? [
           ...(await loadPendingActionsForOrder(others.map((c) => c.ruleSetId))),
           ...(enabled
-            ? await editorPendingActions(ruleSetId, candidates, {
+            ? await editorPendingActions(session.userId, ruleSetId, candidates, {
                 armed: !!action.actionEnabled && !!action.actionType,
                 delayDays: data.actionDelayDays ?? storedRuleSet?.actionDelayDays ?? 0,
+                type,
+                config: {
+                  actionType: action.actionType ?? null,
+                  arrInstanceId: arrInstanceId ?? storedRuleSet?.arrInstanceId ?? null,
+                  targetQualityProfileId: data.targetQualityProfileId !== undefined
+                    ? data.targetQualityProfileId
+                    : (storedRuleSet?.targetQualityProfileId ?? null),
+                  addImportExclusion: data.addImportExclusion ?? storedRuleSet?.addImportExclusion ?? false,
+                  searchAfterAction: !!action.searchAfterAction,
+                  addArrTags: [...(action.addArrTags ?? [])],
+                  removeArrTags: [...(action.removeArrTags ?? [])],
+                },
               })
             : []),
         ]
@@ -134,7 +173,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
 
     return previewCollectionOrder({
       userId: session.userId,
-      collection: { name: data.collectionName, type, sort: data.sort, sortDirection: data.sortDirection },
+      collection: { name: data.collectionName, plexName, type, sort: data.sort, sortDirection: data.sortDirection },
       contributions,
       pendingActions,
     });

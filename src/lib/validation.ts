@@ -625,6 +625,11 @@ export const collectionOrderPreviewSchema = rulePreviewSchema.extend({
   enabled: z.boolean().optional(),
   /** The editor's action delay, for an Action date sort's estimates. */
   actionDelayDays: z.number().int().min(0).max(365).optional(),
+  /** The rest of the editor's action config, which decides whether scheduling would create an action. */
+  targetQualityProfileId: z.number().int().nullable().optional(),
+  addImportExclusion: z.boolean().optional(),
+  /** The editor's sticky-matches switch: a save that keeps the rule logic keeps the stored matches too. */
+  stickyMatches: z.boolean().optional(),
 });
 
 export const ruleTestItemSchema = z.object({

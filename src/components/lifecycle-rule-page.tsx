@@ -1062,6 +1062,9 @@ export function LifecycleRulePage({
         sortDirection: collectionSortDirection,
         enabled,
         actionDelayDays,
+        targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
+        addImportExclusion: deletesArrRecord(actionType) && addImportExclusion,
+        stickyMatches,
       };
       const response = await fetch("/api/lifecycle/collections/order-preview", {
         method: "POST",

@@ -273,6 +273,52 @@ describe("POST /api/lifecycle/collections/order-preview", () => {
     expect(items[3]).toMatchObject({ title: "Delta", value: null });
   });
 
+  it("reads Plex's current order under the stored name when the editor renames the collection", async () => {
+    const seeded = await seed();
+    setMockSession({ isLoggedIn: true, userId: seeded.user.id });
+
+    const result = await preview(body(seeded, { collectionName: "Biggest" }));
+
+    // Plex still holds it as "Big": the diff is against that collection.
+    const library = result.libraries[0];
+    expect(library.collectionExists).toBe(true);
+    expect(library.items.find((i) => i.title === "Delta")?.previousPosition).toBe(1);
+    expect(library.removed.map((i) => i.ratingKey)).toEqual(["gone"]);
+  });
+
+  describe("sticky matches", () => {
+    /** The edited rule set saved with the rules the editor holds, plus a stored match they no longer select. */
+    async function seedSticky() {
+      const seeded = await seed();
+      const echo = await createTestMediaItem(seeded.library.id, {
+        ratingKey: "e", title: "Echo", type: "MOVIE", year: 2030, fileSize: BigInt(4) * GB,
+      });
+      await getTestPrisma().ruleSet.update({
+        where: { id: seeded.edited.id },
+        data: { rules: OLD_MOVIES, serverIds: [seeded.server.id], stickyMatches: true },
+      });
+      await createTestRuleMatch(seeded.edited.id, echo.id, { id: echo.id, libraryId: seeded.library.id, ratingKey: "e", title: "Echo", parentTitle: null });
+      setMockSession({ isLoggedIn: true, userId: seeded.user.id });
+      return seeded;
+    }
+
+    it("keeps a stored match the save keeps, when the rule logic is unchanged", async () => {
+      const seeded = await seedSticky();
+      const result = await preview(body(seeded, { stickyMatches: true }));
+      expect(result.libraries[0].items.map((i) => i.title)).toEqual(["Alpha", "Echo", "Charlie", "Delta", "Bravo"]);
+    });
+
+    it("drops it when the rules change, or sticky matches are turned off", async () => {
+      const seeded = await seedSticky();
+      const changed = await preview(body(seeded, {
+        stickyMatches: true, rules: [{ ...OLD_MOVIES[0], value: 2005 }],
+      }));
+      expect(changed.libraries[0].items.map((i) => i.title)).not.toContain("Echo");
+      const notSticky = await preview(body(seeded, { stickyMatches: false }));
+      expect(notSticky.libraries[0].items.map((i) => i.title)).not.toContain("Echo");
+    });
+  });
+
   it("previews a new collection Plex does not hold yet", async () => {
     const seeded = await seed();
     plex.getCollections.mockResolvedValue([]);

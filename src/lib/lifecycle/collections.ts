@@ -99,7 +99,21 @@ export async function buildContributionsFromMatches(
     select: { id: true, seriesScope: true },
   });
   if (ruleSets.length === 0) return [];
+  const byRuleSet = await loadMatchedItems(ruleSets.map((rs) => rs.id));
+  return ruleSets.map((rs) => ({
+    ruleSetId: rs.id,
+    seriesScope: rs.seriesScope,
+    items: byRuleSet.get(rs.id) ?? [],
+  }));
+}
 
+/**
+ * The collection members each rule set's persisted matches stand for, by rule
+ * set id: every match and every other server's copy it carries.
+ */
+export async function loadMatchedItems(ruleSetIds: string[]): Promise<Map<string, MatchedItem[]>> {
+  const byRuleSet = new Map<string, MatchedItem[]>();
+  if (ruleSetIds.length === 0) return byRuleSet;
   const rows = await prisma.$queryRawUnsafe<
     Array<{
       ruleSetId: string;
@@ -119,7 +133,7 @@ export async function buildContributionsFromMatches(
             "itemData"->'copies' AS "copies"
        FROM "RuleMatch"
       WHERE "ruleSetId" = ANY($1)`,
-    ruleSets.map((rs) => rs.id),
+    ruleSetIds,
   );
 
   const toItem = (d: Record<string, unknown>, copyOf?: string): MatchedItem => ({
@@ -130,27 +144,19 @@ export async function buildContributionsFromMatches(
     ...(copyOf ? { copyOf } : {}),
   });
 
-  const byRuleSet = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const list = byRuleSet.get(row.ruleSetId) ?? [];
-    list.push(row);
-    byRuleSet.set(row.ruleSetId, list);
-  }
-
-  return ruleSets.map((rs) => ({
-    ruleSetId: rs.id,
-    seriesScope: rs.seriesScope,
-    items: (byRuleSet.get(rs.id) ?? [])
-      .flatMap((m) => {
-        // Detection stores a multi-server title once, on one copy; the other
-        // servers' copies ride along in `copies` and belong in THEIR servers'
-        // collections just the same.
-        const copies = Array.isArray(m.copies) ? (m.copies as Record<string, unknown>[]) : [];
-        return [toItem(m), ...copies.map((c) => toItem(c, m.mediaItemId))];
-      })
+  for (const m of rows) {
+    // Detection stores a multi-server title once, on one copy; the other
+    // servers' copies ride along in `copies` and belong in THEIR servers'
+    // collections just the same.
+    const copies = Array.isArray(m.copies) ? (m.copies as Record<string, unknown>[]) : [];
+    const items = [toItem(m), ...copies.map((c) => toItem(c, m.mediaItemId))]
       // Defensive: legacy match rows could lack a ratingKey/libraryId.
-      .filter((i) => i.libraryId && i.ratingKey),
-  }));
+      .filter((i) => i.libraryId && i.ratingKey);
+    const list = byRuleSet.get(m.ruleSetId);
+    if (list) list.push(...items);
+    else byRuleSet.set(m.ruleSetId, items);
+  }
+  return byRuleSet;
 }
 
 /**

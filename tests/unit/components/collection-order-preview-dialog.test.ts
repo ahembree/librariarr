@@ -76,6 +76,20 @@ describe("CollectionOrderPreviewDialog", () => {
     expect(dialog.textContent).toContain("Gone Movie");
   });
 
+  it("says a collection with nothing left is removed, not that it is in order", () => {
+    const emptied: CollectionOrderPreview = {
+      ...result,
+      libraries: [{ ...result.libraries[0], items: [], moves: 0 }],
+    };
+    const { getByRole } = render(createElement(CollectionOrderPreviewDialog, {
+      open: true, onOpenChange: () => {}, collectionName: "Big",
+      loading: false, progress: EMPTY_PROGRESS, error: null, result: emptied,
+    }));
+    const text = getByRole("dialog").textContent ?? "";
+    expect(text).toContain("collection removed from Plex on the next sync");
+    expect(text).not.toContain("already in order");
+  });
+
   it("shows the error a refused preview gives", () => {
     const { getByRole } = render(createElement(CollectionOrderPreviewDialog, {
       open: true, onOpenChange: () => {}, collectionName: "Big",

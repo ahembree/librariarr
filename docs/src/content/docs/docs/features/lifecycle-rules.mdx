@@ -611,7 +611,7 @@ For each Plex library the collection lives in, it lists:
 - the items **leaving** the collection;
 - how many moves the sync would make, or that Plex keeps the order itself (Title and Release date ascending).
 
-With **Sort by: Action date**, a match that has no action scheduled yet is shown with an **estimated** date: today plus the rule's action delay. Matches excluded by a [lifecycle exception](/docs/features/deletion-safety/#lifecycle-exceptions-are-honored-at-every-step) are left out, as the sync leaves them out. If Plex can't be reached, the preview still shows the new order, without the comparison.
+With **Sort by: Action date**, a match that has no action scheduled yet is shown with an **estimated** date: today plus the rule's action delay — only where saving would schedule one (a non-destructive action that already ran on the item with the same settings is not scheduled again). With **Sticky matches** on and the rules, servers and scope unchanged, the preview keeps the stored matches the save keeps. Renaming the collection in the editor compares against the collection under its current name. Matches excluded by a [lifecycle exception](/docs/features/deletion-safety/#lifecycle-exceptions-are-honored-at-every-step) are left out, as the sync leaves them out. If Plex can't be reached, the preview still shows the new order, without the comparison.
 
 ### Action-date ordering across rules
 
