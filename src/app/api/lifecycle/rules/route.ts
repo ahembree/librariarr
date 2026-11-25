@@ -20,6 +20,7 @@ export const GET = withSession(async (session) => {
           homeScreen: true,
           recommended: true,
           sort: true,
+          sortDirection: true,
         },
       },
     },

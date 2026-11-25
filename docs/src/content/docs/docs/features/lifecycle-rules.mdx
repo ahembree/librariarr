@@ -568,7 +568,8 @@ Collections are reusable, saved definitions (Plex only). Each one owns its prese
 
 - **Collection name** — the title shown in Plex.
 - **Sort name** *(optional)* — a sort title prefix (e.g., `!001`) to pin the collection to the top of a library.
-- **Sort order** — `Alphabetical`, `Release date`, or `Action date`.
+- **Sort by** — the field the collection's items are ordered by (see [Collection ordering](#collection-ordering)).
+- **Sort direction** — `Ascending` or `Descending`.
 - **Display on home screens** / **Display in library recommended** — Plex visibility toggles.
 
 Because the settings live on the collection (not the rule), editing them from any rule applies to **every** rule synced to that collection.
@@ -579,9 +580,29 @@ Multiple rule sets can target the **same** collection. When they do, the collect
 
 A collection is scoped to one library type (Movies, Series, or Music), since a Plex collection lives inside a single library. To use the same name for both movies and series, create two collections.
 
+### Collection ordering
+
+| Sort by | Orders items by | For a show (series-scope rule) |
+|---------|-----------------|--------------------------------|
+| Title | Sort title, else title | The show's sort title in Plex |
+| Release date | Original release date | Earliest episode air date |
+| Date added | When the item was added to the server | When its first episode was added |
+| Action date | Scheduled date of its pending lifecycle action | Its pending action's date |
+| Last played | Most recent play | Most recent play of any episode |
+| Play count | Number of plays | Plays summed over its episodes |
+| File size | File size | Size summed over its episodes |
+| Duration | Runtime | Runtime summed over its episodes |
+| Critic rating | Critic rating | Average over its episodes |
+| Audience rating | Audience rating | Average over its episodes |
+| User rating | Your own star rating | Average over its episodes |
+
+**Ascending** puts the smallest, oldest, soonest or A-first item at the start; **Descending** reverses it. An item with no value for the field (never played, no rating, no pending action) is always placed last, in either direction. Items with the same value keep their current place in the collection.
+
+`Title` and `Release date` ascending use Plex's own collection sort. Every other choice — and either of those two descending — sets the collection to Plex's **Custom** order, and Librariarr arranges the items itself on each sync from the values it has synced, moving only the items that are out of place.
+
 ### Action-date ordering across rules
 
-With **Sort order: Action date**, items are arranged soonest-scheduled-action first. When several rules feed the collection, the ordering pools the scheduled action dates of **all** of them, so the shelf is correctly interleaved regardless of which rule scheduled each item. (Items without a pending action are placed last.)
+With **Sort by: Action date**, items are arranged by their scheduled action date (soonest first ascending, latest first descending). When several rules feed the collection, the ordering pools the scheduled action dates of **all** of them, so the shelf is correctly interleaved regardless of which rule scheduled each item. (Items without a pending action are placed last.)
 
 ### Lifecycle of a collection
 

@@ -114,6 +114,7 @@ function RulePreviewSkeleton() {
 }
 import { ExportRuleSetDialog, ImportRuleSetDialog, TestMediaDialog } from "@/components/lifecycle-rule-dialogs";
 import { stripTrailingSlashes } from "@/lib/url-normalize";
+import { COLLECTION_SORT_DIRECTION_OPTIONS, COLLECTION_SORT_OPTIONS } from "@/lib/lifecycle/collection-sort";
 import type {
   CollectionDefinition,
   RuleEditorData,
@@ -157,6 +158,7 @@ interface RuleSetSnapshot {
   collectionHomeScreen: boolean;
   collectionRecommended: boolean;
   collectionSort: string;
+  collectionSortDirection: string;
   discordNotifyOnAction: boolean;
   discordNotifyOnMatch: boolean;
   stickyMatches: boolean;
@@ -201,6 +203,7 @@ interface RuleSetExport {
   collectionHomeScreen: boolean;
   collectionRecommended: boolean;
   collectionSort?: string;
+  collectionSortDirection?: string;
   discordNotifyOnAction?: boolean;
   discordNotifyOnMatch?: boolean;
   stickyMatches?: boolean;
@@ -478,6 +481,7 @@ export function LifecycleRulePage({
   const [collectionHomeScreen, setCollectionHomeScreen] = useState(false);
   const [collectionRecommended, setCollectionRecommended] = useState(false);
   const [collectionSort, setCollectionSort] = useState("ALPHABETICAL");
+  const [collectionSortDirection, setCollectionSortDirection] = useState("asc");
   const [showDeleteCollectionDialog, setShowDeleteCollectionDialog] = useState(false);
   const [deletingCollection, setDeletingCollection] = useState(false);
   const isExistingCollectionSelected =
@@ -542,6 +546,7 @@ export function LifecycleRulePage({
       snapshot.collectionHomeScreen !== collectionHomeScreen ||
       snapshot.collectionRecommended !== collectionRecommended ||
       snapshot.collectionSort !== collectionSort ||
+      snapshot.collectionSortDirection !== collectionSortDirection ||
       snapshot.discordNotifyOnAction !== discordNotifyOnAction ||
       snapshot.discordNotifyOnMatch !== discordNotifyOnMatch ||
       snapshot.stickyMatches !== stickyMatches ||
@@ -552,7 +557,7 @@ export function LifecycleRulePage({
     name, groups, enabled, seriesScope, actionEnabled, actionType, actionDelayDays,
     arrInstanceId, targetQualityProfileId, addImportExclusion, searchAfterAction, addArrTags, removeArrTags,
     collectionEnabled, selectedCollectionId, collectionName, collectionSortName, collectionHomeScreen,
-    collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
+    collectionRecommended, collectionSort, collectionSortDirection, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
 
   // Whether rule logic (rules/scope/servers) changed vs only config fields.
@@ -786,6 +791,7 @@ export function LifecycleRulePage({
       setCollectionHomeScreen(false);
       setCollectionRecommended(false);
       setCollectionSort("ALPHABETICAL");
+      setCollectionSortDirection("asc");
       setPrevCollectionId(null);
       if (detachedFromCurrent) {
         // The current (saved) rule was detached server-side. Turn the toggle off
@@ -803,6 +809,7 @@ export function LifecycleRulePage({
                 collectionHomeScreen: false,
                 collectionRecommended: false,
                 collectionSort: "ALPHABETICAL",
+                collectionSortDirection: "asc",
               }
             : s,
         );
@@ -840,6 +847,7 @@ export function LifecycleRulePage({
           homeScreen: collectionHomeScreen,
           recommended: collectionRecommended,
           sort: collectionSort,
+          sortDirection: collectionSortDirection,
         };
         if (selectedCollectionId && selectedCollectionId !== NEW_COLLECTION) {
           const res = await fetch(`/api/lifecycle/collections/${selectedCollectionId}`, {
@@ -1146,6 +1154,7 @@ export function LifecycleRulePage({
     collectionHomeScreen,
     collectionRecommended,
     collectionSort,
+    collectionSortDirection,
     discordNotifyOnAction,
     discordNotifyOnMatch,
     stickyMatches,
@@ -1190,6 +1199,7 @@ export function LifecycleRulePage({
     const homeScreen = col?.homeScreen ?? false;
     const recommended = col?.recommended ?? false;
     const sortVal = col?.sort ?? "ALPHABETICAL";
+    const sortDirectionVal = col?.sortDirection ?? "asc";
 
     setCollectionEnabled(collectionEnabledVal);
     setSelectedCollectionId(selectedIdVal);
@@ -1198,6 +1208,7 @@ export function LifecycleRulePage({
     setCollectionHomeScreen(homeScreen);
     setCollectionRecommended(recommended);
     setCollectionSort(sortVal);
+    setCollectionSortDirection(sortDirectionVal);
     setPrevCollectionId(ruleSet.collectionId ?? null);
 
     setDiscordNotifyOnAction(ruleSet.discordNotifyOnAction ?? false);
@@ -1230,6 +1241,7 @@ export function LifecycleRulePage({
       collectionHomeScreen: homeScreen,
       collectionRecommended: recommended,
       collectionSort: sortVal,
+      collectionSortDirection: sortDirectionVal,
       discordNotifyOnAction: ruleSet.discordNotifyOnAction ?? false,
       discordNotifyOnMatch: ruleSet.discordNotifyOnMatch ?? false,
       stickyMatches: ruleSet.stickyMatches ?? false,
@@ -1360,6 +1372,7 @@ export function LifecycleRulePage({
     setCollectionHomeScreen(false);
     setCollectionRecommended(false);
     setCollectionSort("ALPHABETICAL");
+    setCollectionSortDirection("asc");
     setDiscordNotifyOnAction(false);
     setDiscordNotifyOnMatch(false);
     setServerIds([]);
@@ -1392,6 +1405,7 @@ export function LifecycleRulePage({
       collectionHomeScreen,
       collectionRecommended,
       collectionSort,
+      collectionSortDirection,
       discordNotifyOnAction,
       discordNotifyOnMatch,
       stickyMatches,
@@ -1447,6 +1461,7 @@ export function LifecycleRulePage({
       setCollectionHomeScreen(data.collectionHomeScreen ?? false);
       setCollectionRecommended(data.collectionRecommended ?? false);
       setCollectionSort(data.collectionSort ?? "ALPHABETICAL");
+      setCollectionSortDirection(data.collectionSortDirection ?? "asc");
       setPrevCollectionId(null);
       setDiscordNotifyOnAction(data.discordNotifyOnAction ?? false);
       setDiscordNotifyOnMatch(data.discordNotifyOnMatch ?? false);
@@ -2027,6 +2042,7 @@ export function LifecycleRulePage({
                           setCollectionHomeScreen(false);
                           setCollectionRecommended(false);
                           setCollectionSort("ALPHABETICAL");
+                          setCollectionSortDirection("asc");
                         } else {
                           const c = collections.find((x) => x.id === val);
                           if (c) {
@@ -2035,6 +2051,7 @@ export function LifecycleRulePage({
                             setCollectionHomeScreen(c.homeScreen);
                             setCollectionRecommended(c.recommended);
                             setCollectionSort(c.sort);
+                            setCollectionSortDirection(c.sortDirection ?? "asc");
                           }
                         }
                       }}
@@ -2085,7 +2102,7 @@ export function LifecycleRulePage({
 
                 {selectedCollectionId && (
                   <>
-                    <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <div>
                         <Label htmlFor="collection-name">Collection name</Label>
                         <Input
@@ -2107,15 +2124,28 @@ export function LifecycleRulePage({
                         />
                       </div>
                       <div>
-                        <Label>Sort order</Label>
+                        <Label>Sort by</Label>
                         <Select value={collectionSort} onValueChange={setCollectionSort}>
                           <SelectTrigger className="mt-1.5">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="ALPHABETICAL">Alphabetical</SelectItem>
-                            <SelectItem value="RELEASE_DATE">Release date</SelectItem>
-                            <SelectItem value="ACTION_DATE">Action date</SelectItem>
+                            {COLLECTION_SORT_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>Sort direction</Label>
+                        <Select value={collectionSortDirection} onValueChange={setCollectionSortDirection}>
+                          <SelectTrigger className="mt-1.5">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {COLLECTION_SORT_DIRECTION_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>

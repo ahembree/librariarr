@@ -130,6 +130,40 @@ describe("Lifecycle Collections CRUD", () => {
 
       const inDb = await getTestPrisma().collection.findFirst({ where: { userId: user.id } });
       expect(inDb?.name).toBe("Leaving Soon");
+      // No direction given: ascending.
+      expect(inDb?.sortDirection).toBe("asc");
+    });
+
+    it("creates a collection with a new sort field and descending direction", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRoute(createPost, {
+        url: "/api/lifecycle/collections",
+        method: "POST",
+        body: { name: "Biggest", type: "MOVIE", sort: "FILE_SIZE", sortDirection: "desc" },
+      });
+      const body = await expectJson<{ collection: { sort: string; sortDirection: string } }>(response, 201);
+      expect(body.collection).toMatchObject({ sort: "FILE_SIZE", sortDirection: "desc" });
+      const inDb = await getTestPrisma().collection.findFirstOrThrow({ where: { userId: user.id } });
+      expect(inDb).toMatchObject({ sort: "FILE_SIZE", sortDirection: "desc" });
+    });
+
+    it("rejects an unknown sort field or direction", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      for (const body of [
+        { name: "Bad Sort", type: "MOVIE", sort: "COLOUR" },
+        { name: "Bad Direction", type: "MOVIE", sortDirection: "sideways" },
+      ]) {
+        const response = await callRoute(createPost, {
+          url: "/api/lifecycle/collections",
+          method: "POST",
+          body,
+        });
+        const json = await expectJson<{ error: string }>(response, 400);
+        expect(json.error).toBe("Validation failed");
+      }
+      expect(await getTestPrisma().collection.count({ where: { userId: user.id } })).toBe(0);
     });
 
     it("returns 409 on duplicate name for the same type", async () => {
@@ -199,6 +233,39 @@ describe("Lifecycle Collections CRUD", () => {
       expect(inDb).toMatchObject({ sort: "ACTION_DATE", recommended: true, name: collection.name });
       expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
       expect(mockRenameCollectionInPlex).not.toHaveBeenCalled();
+    });
+
+    it("updates the sort direction alone and re-syncs", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { type: "MOVIE", sort: "LAST_PLAYED" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(updatePut, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "PUT",
+        body: { sortDirection: "desc" },
+      });
+      const body = await expectJson<{ collection: { sort: string; sortDirection: string } }>(response, 200);
+      expect(body.collection).toMatchObject({ sort: "LAST_PLAYED", sortDirection: "desc" });
+      const inDb = await getTestPrisma().collection.findUniqueOrThrow({ where: { id: collection.id } });
+      expect(inDb).toMatchObject({ sort: "LAST_PLAYED", sortDirection: "desc" });
+      expect(mockSyncCollectionById).toHaveBeenCalledWith(collection.id);
+    });
+
+    it("rejects an unknown sort direction", async () => {
+      const user = await createTestUser();
+      const collection = await createTestCollection(user.id, { type: "MOVIE" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRouteWithParams(updatePut, { id: collection.id }, {
+        url: `/api/lifecycle/collections/${collection.id}`,
+        method: "PUT",
+        body: { sortDirection: "up" },
+      });
+      await expectJson(response, 400);
+      const inDb = await getTestPrisma().collection.findUniqueOrThrow({ where: { id: collection.id } });
+      expect(inDb.sortDirection).toBe("asc");
+      expect(mockSyncCollectionById).not.toHaveBeenCalled();
     });
 
     it("renames on Plex when the name changes", async () => {

@@ -24,7 +24,7 @@ export const GET = withSession(async (session, request: NextRequest) => {
       removeArrTags: true,
       // The detail panel's Logic Preview, as the rule editor's preview shows it.
       rules: true,
-      collection: { select: { name: true, sort: true } },
+      collection: { select: { name: true, sort: true, sortDirection: true } },
     },
   });
 
@@ -67,6 +67,7 @@ export const GET = withSession(async (session, request: NextRequest) => {
       rules: rs.rules,
       collectionName: rs.collection?.name ?? null,
       collectionSort: rs.collection?.sort ?? null,
+      collectionSortDirection: rs.collection?.sortDirection ?? null,
     };
     const items = itemsByRuleSet.get(rs.id) ?? [];
     return `{"ruleSet":${JSON.stringify(ruleSet)},"items":[${items.join(",")}],"count":${items.length}}`;

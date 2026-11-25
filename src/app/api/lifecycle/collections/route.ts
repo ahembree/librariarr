@@ -30,7 +30,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, collectionCreateSchema);
   if (error) return error;
 
-  const { name, type, sortName, homeScreen, recommended, sort } = data;
+  const { name, type, sortName, homeScreen, recommended, sort, sortDirection } = data;
 
   const existing = await prisma.collection.findFirst({
     where: { userId: session.userId, type, name },
@@ -51,6 +51,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
       homeScreen: homeScreen ?? false,
       recommended: recommended ?? false,
       sort: sort ?? "ALPHABETICAL",
+      sortDirection: sortDirection ?? "asc",
     },
   });
 

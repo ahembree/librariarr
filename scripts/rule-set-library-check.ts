@@ -17,6 +17,7 @@ import { getConditionField } from "../src/lib/conditions/fields";
 import { CONDITION_OPERATORS } from "../src/lib/conditions/operators";
 import { groupScopeSaveError, groupScopeViolation } from "../src/lib/conditions/group-scope";
 import type { ConditionGroup, LibraryType } from "../src/lib/conditions/types";
+import { COLLECTION_SORT_DIRECTIONS, COLLECTION_SORT_FIELDS } from "../src/lib/lifecycle/collection-sort";
 import {
   MOVIE_ACTION_TYPES,
   SERIES_ACTION_TYPES,
@@ -44,6 +45,7 @@ export interface RuleSetExport {
   collectionHomeScreen: boolean;
   collectionRecommended: boolean;
   collectionSort?: string;
+  collectionSortDirection?: string;
   discordNotifyOnAction?: boolean;
   discordNotifyOnMatch?: boolean;
   stickyMatches?: boolean;
@@ -55,13 +57,14 @@ const EXPORT_KEYS = new Set<string>([
   "actionType", "actionDelayDays", "addImportExclusion", "searchAfterAction",
   "addArrTags", "removeArrTags", "collectionEnabled", "collectionName",
   "collectionSortName", "collectionHomeScreen", "collectionRecommended",
-  "collectionSort", "discordNotifyOnAction", "discordNotifyOnMatch",
+  "collectionSort", "collectionSortDirection", "discordNotifyOnAction", "discordNotifyOnMatch",
   "stickyMatches", "serverIds",
 ]);
 
 const LIBRARY_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
 const SCOPED_TYPES = new Set<string>(["SERIES", "MUSIC"]);
-const COLLECTION_SORTS = new Set<string>(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
+const COLLECTION_SORTS = new Set<string>(COLLECTION_SORT_FIELDS);
+const COLLECTION_SORT_DIRECTIONS_SET = new Set<string>(COLLECTION_SORT_DIRECTIONS);
 const DAY_OPERATORS = new Set(["inLastDays", "notInLastDays"]);
 const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
 const EXACT_OPERATORS = new Set(["equals", "notEquals"]);
@@ -137,6 +140,9 @@ export function ruleSetProblems(ruleSet: RuleSetExport): string[] {
   }
   if (ruleSet.collectionSort !== undefined && !COLLECTION_SORTS.has(ruleSet.collectionSort)) {
     fail(`unknown collectionSort ${JSON.stringify(ruleSet.collectionSort)}`);
+  }
+  if (ruleSet.collectionSortDirection !== undefined && !COLLECTION_SORT_DIRECTIONS_SET.has(ruleSet.collectionSortDirection)) {
+    fail(`unknown collectionSortDirection ${JSON.stringify(ruleSet.collectionSortDirection)}`);
   }
   if (ruleSet.collectionEnabled && !ruleSet.collectionName) fail("an enabled collection needs a collectionName");
   for (const key of ["addArrTags", "removeArrTags"] as const) {

@@ -351,6 +351,7 @@ export async function createTestCollection(
     homeScreen: boolean;
     recommended: boolean;
     sort: string;
+    sortDirection: string;
   }>
 ) {
   const prisma = getTestPrisma();
@@ -363,6 +364,7 @@ export async function createTestCollection(
       homeScreen: overrides?.homeScreen ?? false,
       recommended: overrides?.recommended ?? false,
       sort: overrides?.sort ?? "ALPHABETICAL",
+      sortDirection: overrides?.sortDirection ?? "asc",
     },
   });
 }

@@ -17,7 +17,7 @@ export const PUT = withSession(async (
   const { data, error } = await validateRequest(request, collectionUpdateSchema);
   if (error) return error;
 
-  const { name, sortName, homeScreen, recommended, sort } = data;
+  const { name, sortName, homeScreen, recommended, sort, sortDirection } = data;
 
   const collection = await prisma.collection.findFirst({
     where: { id, userId: session.userId },
@@ -55,6 +55,7 @@ export const PUT = withSession(async (
       ...(homeScreen !== undefined ? { homeScreen } : {}),
       ...(recommended !== undefined ? { recommended } : {}),
       ...(sort !== undefined ? { sort } : {}),
+      ...(sortDirection !== undefined ? { sortDirection } : {}),
     },
   });
 

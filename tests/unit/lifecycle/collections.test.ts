@@ -1159,3 +1159,181 @@ describe("removeItemsFromCollections", () => {
     expect(mockPlexClient.removeCollectionItem).toHaveBeenCalledExactlyOnceWith("col2", "rk1");
   });
 });
+
+describe("collection sort fields and direction", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  function stubNewCollection() {
+    mockPrisma.library.findMany.mockResolvedValue(oneMovieLibrary);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
+    stubSortAndVisibility();
+  }
+
+  /** The order Plex ends up in after the recorded `move` calls. */
+  function orderAfterMoves(start: string[]): string[] {
+    const order = [...start];
+    for (const [, item, after] of mockPlexClient.moveCollectionItem.mock.calls as Array<[string, string, string | undefined]>) {
+      order.splice(order.indexOf(item), 1);
+      order.splice(after === undefined ? 0 : order.indexOf(after) + 1, 0, item);
+    }
+    return order;
+  }
+
+  const threeMovies = () =>
+    contribution([
+      { libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null },
+      { libraryId: "lib1", ratingKey: "rk2", title: "Movie 2", parentTitle: null },
+      { libraryId: "lib1", ratingKey: "rk3", title: "Movie 3", parentTitle: null },
+    ]);
+
+  it("keeps Plex's own mode for title and release date ascending, with no moves or reads", async () => {
+    for (const [sort, mode] of [["ALPHABETICAL", 1], ["RELEASE_DATE", 0]] as const) {
+      vi.resetAllMocks();
+      stubNewCollection();
+      await syncCollection(makeCollection({ sort, sortDirection: "asc" }), [threeMovies()]);
+      expect(mockPlexClient.editCollectionSort).toHaveBeenCalledWith("col1", mode);
+      expect(mockPlexClient.moveCollectionItem).not.toHaveBeenCalled();
+      expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    }
+  });
+
+  it("orders title descending as a custom order", async () => {
+    stubNewCollection();
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "rk1" }, { ratingKey: "rk2" }, { ratingKey: "rk3" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([
+      { key: "rk1", value: "Alpha" },
+      { key: "rk2", value: "charlie" },
+      { key: "rk3", value: "Bravo" },
+    ]);
+
+    await syncCollection(makeCollection({ sort: "ALPHABETICAL", sortDirection: "desc" }), [threeMovies()]);
+
+    expect(mockPlexClient.editCollectionSort).toHaveBeenCalledWith("col1", 2);
+    const [sql, libraryId, keys] = mockPrisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain(`COALESCE(NULLIF("titleSort", ''), "title")`);
+    expect(libraryId).toBe("lib1");
+    expect(keys).toEqual(["rk1", "rk2", "rk3"]);
+    // charlie, Bravo, Alpha.
+    expect(orderAfterMoves(["rk1", "rk2", "rk3"])).toEqual(["rk2", "rk3", "rk1"]);
+  });
+
+  it("orders by file size descending, items without a value last", async () => {
+    stubNewCollection();
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "rk1" }, { ratingKey: "rk2" }, { ratingKey: "rk3" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([
+      { key: "rk1", value: null },
+      { key: "rk2", value: 100 },
+      { key: "rk3", value: "5000" },
+    ]);
+
+    await syncCollection(makeCollection({ sort: "FILE_SIZE", sortDirection: "desc" }), [threeMovies()]);
+
+    expect(mockPrisma.$queryRawUnsafe.mock.calls[0][0]).toContain(`"fileSize"::float8`);
+    // 5000, 100, none.
+    expect(orderAfterMoves(["rk1", "rk2", "rk3"])).toEqual(["rk3", "rk2", "rk1"]);
+  });
+
+  it("orders by play count ascending, items without a value still last", async () => {
+    stubNewCollection();
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "rk1" }, { ratingKey: "rk2" }, { ratingKey: "rk3" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([
+      { key: "rk2", value: 4 },
+      { key: "rk3", value: 1 },
+    ]);
+
+    await syncCollection(makeCollection({ sort: "PLAY_COUNT", sortDirection: "asc" }), [threeMovies()]);
+
+    // 1, 4, no row.
+    expect(orderAfterMoves(["rk1", "rk2", "rk3"])).toEqual(["rk3", "rk2", "rk1"]);
+  });
+
+  it("orders by action date descending, items without a pending action last", async () => {
+    stubNewCollection();
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "rk1" }, { ratingKey: "rk2" }, { ratingKey: "rk3" }]);
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      { scheduledFor: new Date("2025-01-05"), ruleSetId: "rs1", mediaItemId: "m2", mediaItem: { ratingKey: "rk2", parentTitle: null, title: "Movie 2" } },
+      { scheduledFor: new Date("2025-01-10"), ruleSetId: "rs1", mediaItemId: "m3", mediaItem: { ratingKey: "rk3", parentTitle: null, title: "Movie 3" } },
+    ]);
+
+    await syncCollection(makeCollection({ sort: "ACTION_DATE", sortDirection: "desc" }), [threeMovies()]);
+
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    // Jan 10, Jan 5, none.
+    expect(orderAfterMoves(["rk1", "rk2", "rk3"])).toEqual(["rk3", "rk2", "rk1"]);
+  });
+
+  it("folds a series-scope show's episodes for its value", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "TV", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
+    mockPlexClient.getLibraryItems.mockResolvedValue([
+      { title: "Show A", ratingKey: "showA" },
+      { title: "Show B", ratingKey: "showB" },
+    ]);
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "showA" }, { ratingKey: "showB" }]);
+    stubSortAndVisibility();
+    mockPrisma.$queryRawUnsafe
+      // No stored row carries a show's rating key.
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { key: "show a", value: 1_000 },
+        { key: "show b", value: 2_000 },
+      ]);
+
+    await syncCollection(makeCollection({ type: "SERIES", sort: "LAST_PLAYED", sortDirection: "desc" }), [
+      contribution(
+        [
+          { libraryId: "lib1", ratingKey: "ep1", title: "Pilot", parentTitle: "Show A" },
+          { libraryId: "lib1", ratingKey: "ep2", title: "Pilot", parentTitle: "Show B" },
+        ],
+        { seriesScope: true },
+      ),
+    ]);
+
+    const [showSql, libraryId, titles] = mockPrisma.$queryRawUnsafe.mock.calls[1];
+    expect(showSql).toContain(`MAX("lastPlayedAt")`);
+    expect(showSql).toContain("GROUP BY 1");
+    expect(libraryId).toBe("lib1");
+    expect([...titles].sort()).toEqual(["show a", "show b"]);
+    expect(orderAfterMoves(["showA", "showB"])).toEqual(["showB", "showA"]);
+    expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("orders series-scope shows by Plex's sort title, as its own alphabetical mode does", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([
+      { id: "lib1", key: "1", title: "TV", mediaServer: defaultServer, mediaServerId: "s1" },
+    ]);
+    mockPlexClient.getCollections.mockResolvedValue([]);
+    mockPlexClient.createCollection.mockResolvedValue({ ratingKey: "col1", title: "Test Collection" });
+    mockPlexClient.moveCollectionItem.mockResolvedValue(undefined);
+    mockPlexClient.getLibraryItems.mockResolvedValue([
+      // "The Office" files under O, so it sorts before "Severance" descending.
+      { title: "The Office", titleSort: "Office, The", ratingKey: "office" },
+      { title: "Severance", ratingKey: "severance" },
+    ]);
+    mockPlexClient.getCollectionItems.mockResolvedValue([{ ratingKey: "office" }, { ratingKey: "severance" }]);
+    stubSortAndVisibility();
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
+
+    await syncCollection(makeCollection({ type: "SERIES", sort: "ALPHABETICAL", sortDirection: "desc" }), [
+      contribution(
+        [
+          { libraryId: "lib1", ratingKey: "ep1", title: "Pilot", parentTitle: "The Office" },
+          { libraryId: "lib1", ratingKey: "ep2", title: "Good News", parentTitle: "Severance" },
+        ],
+        { seriesScope: true },
+      ),
+    ]);
+
+    // Only the stored-row lookup runs: the show titles come from Plex's listing.
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect(orderAfterMoves(["office", "severance"])).toEqual(["severance", "office"]);
+  });
+});

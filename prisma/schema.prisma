@@ -622,18 +622,20 @@ model RuleSet {
 // the same collection shares one source of truth. Scoped by LibraryType because
 // a Plex collection lives inside a single library type (Movies/Series/Music).
 model Collection {
-  id          String      @id @default(cuid())
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name        String
-  type        LibraryType
-  sortName    String?
-  homeScreen  Boolean     @default(false)
-  recommended Boolean     @default(false)
-  sort        String      @default("ALPHABETICAL")
-  ruleSets    RuleSet[]
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  type          LibraryType
+  sortName      String?
+  homeScreen    Boolean     @default(false)
+  recommended   Boolean     @default(false)
+  // Sort field and direction ("asc" | "desc"): src/lib/lifecycle/collection-sort.ts.
+  sort          String      @default("ALPHABETICAL")
+  sortDirection String      @default("asc")
+  ruleSets      RuleSet[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
   @@unique([userId, type, name])
   @@index([userId])
