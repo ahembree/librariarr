@@ -117,6 +117,7 @@ Over 30 filters are available, grouped into Video, Audio, Streams, Content, File
 | Studio | Multi-select (contains) | |
 | Genre | Multi-select (case-insensitive) | Must match all selected genres |
 | Rating / Audience Rating | Conditions | ≥ 7.0 |
+| IMDb Rating / TMDB Rating / RT Critic Score / RT Audience Score | Conditions (0–10; Rotten Tomatoes 90% is 9.0) | RT Critic Score ≥ 9.0 |
 | Watchlisted | Yes / No | |
 
 ### Activity Filters
@@ -132,6 +133,7 @@ Over 30 filters are available, grouped into Video, Audio, Streams, Content, File
 ### Where Each Filter Applies
 
 - **Audio Tracks** and **Subtitle Tracks** (track-count filters) appear on **Movies** only.
+- **IMDb Rating**, **TMDB Rating**, **RT Critic Score** and **RT Audience Score** are each provider's score as Plex lists it, whatever the library's ratings source in Plex. They appear on the movie and series pages, not on music, and are empty for items from Jellyfin and Emby. The same four are optional table columns (**IMDb**, **TMDB**, **RT Critics**, **RT Audience**; hidden by default) and sort like any other column.
 - **Episode Count**, **Watched Episodes**, **Watched %** and **Last Episode Aired** (show-level filters) appear on the **Series** tab only.
 - On the **Series** and **All Seasons** tabs, a filter on an episode's own property (resolution, codec, genre, year and so on) keeps a show or season when **any** of its episodes matches. The totals shown stay those of the whole show or season. Last Played, Added Date and Watchlisted judge the show or season as a whole — its most recent play and newest episode — even when combined with other filters.
 - **Resolution** matches the label on the quality chip on every library page, so a film or show stored at 576 lines counts as 480P. A file with no resolution recorded shows no chip on a movie, episode or track card and is not **Other** there; on the **Series** and **All Seasons** tabs, where it counts toward a show's **Other** chip, it is.

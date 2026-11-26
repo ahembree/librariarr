@@ -31,6 +31,10 @@ const SORT_COLUMNS = new Set([
   "addedAt",
   "rating",
   "audienceRating",
+  "imdbRating",
+  "tmdbRating",
+  "rtCriticRating",
+  "rtAudienceRating",
   "contentRating",
   // Every column the library table (src/components/media-table.tsx) offers a
   // sort header for. A field missing here silently sorted by title while the
@@ -156,6 +160,10 @@ const listGet = withSession(async (session, request: NextRequest) => {
     ratingImage: true,
     audienceRating: true,
     audienceRatingImage: true,
+    imdbRating: true,
+    tmdbRating: true,
+    rtCriticRating: true,
+    rtAudienceRating: true,
     genres: true,
     studio: true,
     dedupKey: true,

@@ -18,6 +18,19 @@
  * `audienceRating`/`audienceRatingImage`.
  */
 
+/**
+ * The per-provider rating columns, in display order, with the labels the
+ * library filters show (client-safe).
+ */
+export const PROVIDER_RATING_FIELDS = ["imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating"] as const;
+export type ProviderRatingField = (typeof PROVIDER_RATING_FIELDS)[number];
+export const PROVIDER_RATING_LABELS: Record<ProviderRatingField, string> = {
+  imdbRating: "IMDb Rating",
+  tmdbRating: "TMDB Rating",
+  rtCriticRating: "RT Critic Score",
+  rtAudienceRating: "RT Audience Score",
+};
+
 export interface ExternalRatings {
   imdbRating: number | null;
   tmdbRating: number | null;
