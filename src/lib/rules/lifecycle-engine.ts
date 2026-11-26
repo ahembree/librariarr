@@ -41,6 +41,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   pushDownGroupNegation,
   nullValueResult,
+  failsClosedOnEmpty,
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
@@ -1351,6 +1352,7 @@ function evaluateRuleAgainstItem(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
     "seasonNumber", "episodeNumber", "seasonsBehindLatest",
   ]);
@@ -1361,6 +1363,9 @@ function evaluateRuleAgainstItem(
       return negate ? !r : r;
     }
     if (itemValue == null) {
+      // A missing Plex rating matches no comparison, and negate does not flip
+      // that (`failsClosedOnEmpty`; Phase 1 ANDs "has a score").
+      if (failsClosedOnEmpty(field, operator)) return false;
       // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
       const r = nullValueResult(operator);
       return negate ? !r : r;
@@ -1752,12 +1757,16 @@ function getActualValueForField(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {
     const val = item[field];
     if (field === "watchedEpisodePercentage") return `${Number(val ?? 0).toFixed(1)}%`;
-    return String(val ?? 0);
+    // No value (an item without a Rotten Tomatoes score, a Jellyfin item with
+    // no Plex copy) reads "N/A", as the Arr numbers do — never a made-up 0
+    // that looks like a real score.
+    return val == null ? "N/A" : String(val);
   }
 
   // Text fields (fallback)

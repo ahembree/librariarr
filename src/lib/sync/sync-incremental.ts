@@ -527,6 +527,7 @@ export async function syncMediaServerItems(
       isSeries ? showGuidsMap : undefined,
       undefined,
       isSeries ? showSummaryMap : undefined,
+      { keepProviderRatings: server.type !== "PLEX" },
     );
     for (const key of dedupKeys) touchedDedupKeys.add(key);
     touchedTypes.add(lib.type);

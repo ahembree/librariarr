@@ -40,7 +40,7 @@ import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where
 import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
-import { nullValueResult } from "@/lib/conditions/helpers";
+import { nullValueResult, failsClosedOnEmpty } from "@/lib/conditions/helpers";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 // Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
@@ -94,6 +94,10 @@ const ITEM_SELECT = {
   ratingImage: true,
   audienceRating: true,
   audienceRatingImage: true,
+  imdbRating: true,
+  tmdbRating: true,
+  rtCriticRating: true,
+  rtAudienceRating: true,
   isWatchlisted: true,
   genres: true,
   studio: true,
@@ -371,6 +375,11 @@ async function groupSeriesEpisodes(
     ratingImage: r.ratingImage,
     audienceRating: r.audienceRating,
     audienceRatingImage: r.audienceRatingImage,
+    // A show's per-provider scores would be one episode's.
+    imdbRating: null,
+    tmdbRating: null,
+    rtCriticRating: null,
+    rtAudienceRating: null,
     summary: r.summary,
     genres: r.genres as string[] | null,
     studio: r.studio,
@@ -1396,6 +1405,7 @@ function evaluateQueryRuleInMemory(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     // Series-aggregate numeric fields (attached by serializeSeriesAggregateForEval).
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
     // Per-episode fields: NULL on anything but an episode (episodeLevelValue);
@@ -1406,6 +1416,9 @@ function evaluateQueryRuleInMemory(
     const raw = isEpisodeLevelField(field) ? episodeLevelValue(item, field) : item[field];
     const itemVal = raw != null ? Number(raw) : null;
     const numVal = Number(value);
+    // A missing Plex rating matches no comparison, and negate does not flip
+    // that (`failsClosedOnEmpty`; Phase 1 ANDs "has a score").
+    if (itemVal === null && failsClosedOnEmpty(field, operator)) return false;
     let result: boolean;
     if (operator === "isNull") { result = itemVal === null; }
     else if (operator === "isNotNull") { result = itemVal !== null; }

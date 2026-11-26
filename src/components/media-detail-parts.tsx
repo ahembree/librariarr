@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { RatingChip } from "@/components/rating-chip";
 import { ColorChip } from "@/components/color-chip";
-import { getRatingLabel } from "@/lib/rating-labels";
+import { ratingChipsOf, type RatedValues } from "@/lib/media/rating-chips";
 
 /**
  * A detail page before it has an item to show: the skeleton while its record
@@ -27,33 +27,35 @@ export function DetailPageStates({ loading, notFoundLabel }: { loading: boolean;
   );
 }
 
-interface RatedItem {
-  rating?: number | null;
-  ratingImage?: string | null;
-  audienceRating?: number | null;
-  audienceRatingImage?: string | null;
-  userRating?: number | null;
+interface RatedItem extends RatedValues {
   library?: { mediaServer?: { type?: string | null } | null } | null;
 }
 
 /**
- * An item's critic, audience and own ratings, each labelled by the source its
- * server reports (Rotten Tomatoes, IMDb, …) — the hero's `ratings` slot.
+ * An item's ratings — the hero's `ratings` slot, the chips `ratingChipsOf`
+ * lists (src/lib/media/rating-chips.ts, shared with the hover popover and the
+ * Stream Manager). `serverType` defaults to the item's library's server.
+ *
+ * `providers={false}` leaves the per-provider scores out: the show page's
+ * record is one of its episodes, whose scores are that episode's, not the show's.
  */
-export function RatingChips({ item }: { item: RatedItem }) {
-  const serverType = item.library?.mediaServer?.type ?? undefined;
+export function RatingChips({
+  item,
+  providers = true,
+  serverType,
+  className,
+}: {
+  item: RatedItem;
+  providers?: boolean;
+  serverType?: string | null;
+  className?: string;
+}) {
+  const chips = ratingChipsOf(item, serverType ?? item.library?.mediaServer?.type, { providers });
   return (
     <>
-      {item.rating != null && (
-        <RatingChip label={getRatingLabel(item.ratingImage, serverType, "rating", "Critic")} value={item.rating} />
-      )}
-      {item.audienceRating != null && (
-        <RatingChip
-          label={getRatingLabel(item.audienceRatingImage, serverType, "audienceRating", "Audience")}
-          value={item.audienceRating}
-        />
-      )}
-      {item.userRating != null && <RatingChip label="You" value={item.userRating} />}
+      {chips.map((chip) => (
+        <RatingChip key={chip.key} label={chip.label} value={chip.value} className={className} />
+      ))}
     </>
   );
 }

@@ -263,7 +263,14 @@ export interface MediaSession {
   contentRating?: string;
   studio?: string;
   rating?: number;
+  ratingImage?: string;
   audienceRating?: number;
+  audienceRatingImage?: string;
+  /** Plex's per-provider scores (src/lib/media/external-ratings.ts), 0–10. */
+  imdbRating?: number;
+  tmdbRating?: number;
+  rtCriticRating?: number;
+  rtAudienceRating?: number;
   tagline?: string;
   genres?: string[];
   // Media dimensions

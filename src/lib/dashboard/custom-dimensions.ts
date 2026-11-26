@@ -149,6 +149,58 @@ export const DIMENSION_REGISTRY: DimensionMeta[] = [
       ],
     },
   },
+  // Plex's per-provider score (external-ratings.ts); Plex lists none for music.
+  {
+    id: "imdbRating", label: "IMDb Rating", group: "Engagement", dbField: "imdbRating", category: "numeric_bucket", nullLabel: "Unrated", excludeTypes: ["MUSIC"],
+    bucketConfig: {
+      ranges: [
+        [null, 2, "0 – 2"],
+        [2, 4, "2 – 4"],
+        [4, 6, "4 – 6"],
+        [6, 8, "6 – 8"],
+        [8, null, "8 – 10"],
+      ],
+    },
+  },
+  // Plex's per-provider score (external-ratings.ts); Plex lists none for music.
+  {
+    id: "tmdbRating", label: "TMDB Rating", group: "Engagement", dbField: "tmdbRating", category: "numeric_bucket", nullLabel: "Unrated", excludeTypes: ["MUSIC"],
+    bucketConfig: {
+      ranges: [
+        [null, 2, "0 – 2"],
+        [2, 4, "2 – 4"],
+        [4, 6, "4 – 6"],
+        [6, 8, "6 – 8"],
+        [8, null, "8 – 10"],
+      ],
+    },
+  },
+  // Plex's per-provider score (external-ratings.ts); Plex lists none for music.
+  {
+    id: "rtCriticRating", label: "RT Critic Score", group: "Engagement", dbField: "rtCriticRating", category: "numeric_bucket", nullLabel: "Unrated", excludeTypes: ["MUSIC"],
+    bucketConfig: {
+      ranges: [
+        [null, 2, "0 – 2"],
+        [2, 4, "2 – 4"],
+        [4, 6, "4 – 6"],
+        [6, 8, "6 – 8"],
+        [8, null, "8 – 10"],
+      ],
+    },
+  },
+  // Plex's per-provider score (external-ratings.ts); Plex lists none for music.
+  {
+    id: "rtAudienceRating", label: "RT Audience Score", group: "Engagement", dbField: "rtAudienceRating", category: "numeric_bucket", nullLabel: "Unrated", excludeTypes: ["MUSIC"],
+    bucketConfig: {
+      ranges: [
+        [null, 2, "0 – 2"],
+        [2, 4, "2 – 4"],
+        [4, 6, "4 – 6"],
+        [6, 8, "6 – 8"],
+        [8, null, "8 – 10"],
+      ],
+    },
+  },
   {
     id: "playCount", label: "Play Count", group: "Engagement", dbField: "playCount", category: "numeric_bucket", nullLabel: "Unplayed",
     bucketConfig: {

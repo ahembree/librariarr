@@ -226,6 +226,40 @@ describe("GET /api/media/movies", () => {
     ]);
   });
 
+  it("filters, sorts and returns Plex's per-provider ratings", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id);
+
+    await createTestMediaItem(lib.id, { title: "Fresh", type: "MOVIE", imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2 });
+    await createTestMediaItem(lib.id, { title: "Rotten", type: "MOVIE", imdbRating: 5.1, tmdbRating: 5.5, rtCriticRating: 3.1, rtAudienceRating: 4 });
+    await createTestMediaItem(lib.id, { title: "Unrated", type: "MOVIE" });
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const filtered = await expectJson<{
+      items: { title: string; imdbRating: number | null; tmdbRating: number | null; rtCriticRating: number | null; rtAudienceRating: number | null }[];
+    }>(await callRoute(GET, { url: "/api/media/movies", searchParams: { rtCriticRatingConditions: "gte:9" } }), 200);
+    expect(filtered.items).toEqual([
+      expect.objectContaining({ title: "Fresh", imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2 }),
+    ]);
+
+    const either = await expectJson<{ items: { title: string }[] }>(
+      await callRoute(GET, { url: "/api/media/movies", searchParams: { imdbRatingConditions: "lt:6|gt:7", imdbRatingLogic: "or", sortBy: "title" } }),
+      200,
+    );
+    expect(either.items.map((i) => i.title)).toEqual(["Fresh", "Rotten"]);
+
+    // An unrated item sorts last in both directions.
+    for (const [sortOrder, expected] of [["asc", ["Rotten", "Fresh", "Unrated"]], ["desc", ["Fresh", "Rotten", "Unrated"]]] as const) {
+      const sorted = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams: { sortBy: "tmdbRating", sortOrder } }),
+        200,
+      );
+      expect(sorted.items.map((i) => i.title)).toEqual(expected);
+    }
+  });
+
   it("caps limit at 100", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

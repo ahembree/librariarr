@@ -248,6 +248,10 @@ export async function createTestMediaItem(
     contentRating: string;
     studio: string;
     filePath: string;
+    imdbRating: number;
+    tmdbRating: number;
+    rtCriticRating: number;
+    rtAudienceRating: number;
   }>
 ) {
   const prisma = getTestPrisma();
@@ -294,6 +298,10 @@ export async function createTestMediaItem(
       contentRating: overrides?.contentRating,
       studio: overrides?.studio,
       filePath: overrides?.filePath,
+      imdbRating: overrides?.imdbRating,
+      tmdbRating: overrides?.tmdbRating,
+      rtCriticRating: overrides?.rtCriticRating,
+      rtAudienceRating: overrides?.rtAudienceRating,
     },
   });
 }

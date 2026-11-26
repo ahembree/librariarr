@@ -2,6 +2,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
 import { QUALITY_ORDER } from "@/lib/resolution";
 import { escapeLike } from "./escape-like";
+import { PROVIDER_RATING_FIELDS } from "@/lib/media/external-ratings";
 
 /**
  * Parse a multi-select filter value. Values are pipe-separated, e.g. "4K|1080P".
@@ -264,6 +265,11 @@ export function applyCommonFilters(
 
   // Audience Rating — multi-condition with AND/OR logic
   applyConditionFilter(where, andClauses, params, "audienceRatingConditions", "audienceRatingLogic", "audienceRating", parseFloat, FLOAT_RANGE);
+
+  // Each provider's score from Plex (IMDb, TMDB, Rotten Tomatoes), 0–10
+  for (const field of PROVIDER_RATING_FIELDS) {
+    applyConditionFilter(where, andClauses, params, `${field}Conditions`, `${field}Logic`, field, parseFloat, FLOAT_RANGE);
+  }
 
   // Video Bitrate — multi-condition with AND/OR logic
   applyConditionFilter(where, andClauses, params, "videoBitrateConditions", "videoBitrateLogic", "videoBitrate", parseInt, INT_RANGE);

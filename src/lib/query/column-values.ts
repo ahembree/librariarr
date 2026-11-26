@@ -98,6 +98,7 @@ const SEERR_PROPERTY: Record<string, keyof SeerrMetadata> = {
 const DIRECT_FIELDS = new Set([
   "title", "parentTitle", "albumTitle", "year", "contentRating", "studio",
   "playCount", "rating", "audienceRating", "ratingCount", "isWatchlisted",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
   "lastPlayedAt", "addedAt", "originallyAvailableAt",
   "resolution", "videoCodec", "videoProfile", "dynamicRange", "videoBitDepth",
   "videoBitrate", "videoFrameRate", "aspectRatio", "scanType",
@@ -213,6 +214,7 @@ const ITEM_SELECT = {
   id: true, type: true, title: true, parentTitle: true, albumTitle: true, seriesKey: true,
   year: true, contentRating: true, studio: true, genres: true, labels: true, countries: true,
   playCount: true, rating: true, audienceRating: true, ratingCount: true, isWatchlisted: true,
+  imdbRating: true, tmdbRating: true, rtCriticRating: true, rtAudienceRating: true,
   lastPlayedAt: true, addedAt: true, originallyAvailableAt: true,
   resolution: true, videoCodec: true, videoProfile: true, dynamicRange: true, videoBitDepth: true,
   videoBitrate: true, videoFrameRate: true, aspectRatio: true, scanType: true,
