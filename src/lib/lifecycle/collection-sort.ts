@@ -21,6 +21,10 @@ export const COLLECTION_SORT_FIELDS = [
   "DURATION",
   "CRITIC_RATING",
   "AUDIENCE_RATING",
+  "IMDB_RATING",
+  "TMDB_RATING",
+  "RT_CRITIC_RATING",
+  "RT_AUDIENCE_RATING",
   "USER_RATING",
 ] as const;
 
@@ -44,6 +48,10 @@ export const COLLECTION_SORT_OPTIONS: ReadonlyArray<{ value: CollectionSortField
   { value: "DURATION", label: "Duration" },
   { value: "CRITIC_RATING", label: "Critic rating" },
   { value: "AUDIENCE_RATING", label: "Audience rating" },
+  { value: "IMDB_RATING", label: "IMDb rating" },
+  { value: "TMDB_RATING", label: "TMDB rating" },
+  { value: "RT_CRITIC_RATING", label: "RT critic score" },
+  { value: "RT_AUDIENCE_RATING", label: "RT audience score" },
   { value: "USER_RATING", label: "User rating" },
 ];
 
@@ -118,5 +126,9 @@ export const COLLECTION_SORT_VALUE_KIND: Record<CollectionSortField, CollectionS
   DURATION: "duration",
   CRITIC_RATING: "rating",
   AUDIENCE_RATING: "rating",
+  IMDB_RATING: "rating",
+  TMDB_RATING: "rating",
+  RT_CRITIC_RATING: "rating",
+  RT_AUDIENCE_RATING: "rating",
   USER_RATING: "rating",
 };

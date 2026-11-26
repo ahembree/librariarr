@@ -15,6 +15,7 @@ const ALLOWED_MEDIA_ITEM_COLUMNS = new Set([
   "contentRating", "genres", "year", "studio", "countries", "container",
   "fileSize", "duration", "addedAt", "lastPlayedAt", "originallyAvailableAt",
   "rating", "audienceRating", "playCount",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
 ]);
 const ALLOWED_STREAM_COLUMNS = new Set(["language"]);
 

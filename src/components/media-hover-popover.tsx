@@ -5,7 +5,7 @@ import {
   formatRelativeDate,
 } from "@/lib/format";
 import { qualityChips } from "@/lib/media/quality-chips";
-import { getRatingLabel } from "@/lib/rating-labels";
+import { ratingChipsOf } from "@/lib/media/rating-chips";
 import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/fade-image";
@@ -117,7 +117,8 @@ export function MediaHoverPopover({
   const hasFileSize = data.fileSize != null && formatFileSize(data.fileSize) !== "-";
   const hasPlays = data.playCount != null && data.playCount > 0;
   const hasGenres = data.genres && data.genres.length > 0;
-  const hasRatings = data.rating != null || data.audienceRating != null;
+  const ratingChips = ratingChipsOf(data, data.servers?.[0]?.serverType);
+  const hasRatings = ratingChips.length > 0;
   const hasServers = data.servers && data.servers.length > 0;
   const hasData =
     hasDuration || hasFileSize || hasPlays || data.addedAt || data.lastPlayedAt;
@@ -231,12 +232,9 @@ export function MediaHoverPopover({
         {/* Ratings */}
         {hasRatings && (
           <div className="flex flex-wrap items-center gap-1.5">
-            {data.rating != null && (
-              <RatingChip label={getRatingLabel(data.ratingImage, data.servers?.[0]?.serverType, "rating", "Critic")} value={data.rating} className="text-[10px] px-2 py-px" />
-            )}
-            {data.audienceRating != null && (
-              <RatingChip label={getRatingLabel(data.audienceRatingImage, data.servers?.[0]?.serverType, "audienceRating", "Audience")} value={data.audienceRating} className="text-[10px] px-2 py-px" />
-            )}
+            {ratingChips.map((chip) => (
+              <RatingChip key={chip.key} label={chip.label} value={chip.value} className="text-[10px] px-2 py-px" />
+            ))}
           </div>
         )}
 

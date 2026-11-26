@@ -32,6 +32,7 @@ import { checkLifecycleRuleEvaluability, checkProviderRatingsCompleteness } from
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { ruleToWhere } from "@/lib/conditions/where-builder";
+import { collectionSortValues, orderCollectionKeys } from "@/lib/lifecycle/collections";
 
 const prisma = getTestPrisma();
 const READ = new Date("2025-06-01T00:00:00.000Z");
@@ -237,5 +238,27 @@ describe("Phase 1 against the database", () => {
     expect(await ids(ruleToWhere({ id: "r", field: "imdbRating", operator: "isNotNull", value: "", negate: true, condition: "AND" })))
       .toEqual([unrated.id]);
     expect(high.id).toBeDefined();
+  });
+});
+
+describe("Plex collection order by a per-provider rating", () => {
+  it("orders by each provider's score, an unrated item last", async () => {
+    const user = await createTestUser();
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const a = await item(lib.id, "MOVIE", { ratingKey: "a", imdbRating: 6, tmdbRating: 9, rtCriticRating: 5, rtAudienceRating: 8 });
+    const b = await item(lib.id, "MOVIE", { ratingKey: "b", imdbRating: 8, tmdbRating: 5, rtCriticRating: 9, rtAudienceRating: 4 });
+    const c = await item(lib.id, "MOVIE", { ratingKey: "c" });
+    const keys = [a.ratingKey, b.ratingKey, c.ratingKey];
+    const plan = {
+      desiredSet: new Set(keys), desiredKeys: keys, copyKeysByItemId: new Map(),
+      seriesKeyByTitle: null, showTitleSortByKey: null, showTitleByKey: null, libItemCount: 3,
+    };
+    const order = async (field: Parameters<typeof collectionSortValues>[0]) =>
+      orderCollectionKeys(keys, await collectionSortValues(field, lib.id, plan, [], new Map()), "desc", keys);
+
+    expect(await order("IMDB_RATING")).toEqual(["b", "a", "c"]);
+    expect(await order("TMDB_RATING")).toEqual(["a", "b", "c"]);
+    expect(await order("RT_CRITIC_RATING")).toEqual(["b", "a", "c"]);
+    expect(await order("RT_AUDIENCE_RATING")).toEqual(["a", "b", "c"]);
   });
 });

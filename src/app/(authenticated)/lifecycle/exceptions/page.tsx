@@ -61,6 +61,10 @@ interface ExceptionItem {
     ratingImage: string | null;
     audienceRating: number | null;
     audienceRatingImage: string | null;
+    imdbRating: number | null;
+    tmdbRating: number | null;
+    rtCriticRating: number | null;
+    rtAudienceRating: number | null;
     duration: number | null;
     resolution: string | null;
     dynamicRange: string | null;
@@ -704,6 +708,10 @@ export default function LifecycleExceptionsPage() {
             audienceRating: row.mediaItem.audienceRating,
             ratingImage: row.mediaItem.ratingImage,
             audienceRatingImage: row.mediaItem.audienceRatingImage,
+            imdbRating: row.mediaItem.imdbRating,
+            tmdbRating: row.mediaItem.tmdbRating,
+            rtCriticRating: row.mediaItem.rtCriticRating,
+            rtAudienceRating: row.mediaItem.rtAudienceRating,
             duration: row.mediaItem.duration,
             resolution: row.mediaItem.resolution,
             dynamicRange: row.mediaItem.dynamicRange,
@@ -733,6 +741,13 @@ export default function LifecycleExceptionsPage() {
             ratingImage: row.mediaItem.ratingImage,
             audienceRating: row.mediaItem.audienceRating,
             audienceRatingImage: row.mediaItem.audienceRatingImage,
+            // One excepted episode's own scores; a show's would be one episode's.
+            ...(row.itemCount === 1 ? {
+              imdbRating: row.mediaItem.imdbRating,
+              tmdbRating: row.mediaItem.tmdbRating,
+              rtCriticRating: row.mediaItem.rtCriticRating,
+              rtAudienceRating: row.mediaItem.rtAudienceRating,
+            } : {}),
             genres: row.mediaItem.genres,
             studio: row.mediaItem.studio,
             seasonCount: row.seasonCount,

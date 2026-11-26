@@ -32,6 +32,7 @@ const UNIVERSAL: (keyof MediaHoverData)[] = [
   "duration", "resolution", "dynamicRange", "audioProfile", "audioCodec", "fileSize", "genres", "studio",
   "playCount", "lastPlayedAt", "addedAt", "servers", "seasonCount", "episodeCount", "albumCount", "trackCount",
   "qualityCounts", "audioCodecCounts",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
 ];
 
 const defined = (data: MediaHoverData) =>
@@ -147,5 +148,24 @@ describe("hoverDataFromRecord and hoverSummaryUrl", () => {
 
   it("points the summary at the record URL the detail views fetch", () => {
     expect(hoverSummaryUrl("abc")).toBe(mediaRecordUrl("abc"));
+  });
+});
+
+describe("Plex's per-provider ratings", () => {
+  const scores = { imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2 };
+
+  it("pass on one item's popover — a film, an episode, a record", () => {
+    expect(hoverDataFromListItem({ ...metadata, ...scores, title: "Film", type: "MOVIE" })).toMatchObject(scores);
+    expect(hoverDataFromListItem({ ...metadata, ...scores, title: "Ep", type: "SERIES" })).toMatchObject(scores);
+    expect(hoverDataFromRecord({ ...scores, title: "Film", type: "MOVIE" })).toMatchObject(scores);
+  });
+
+  it("are left off every group's popover: its record is one member's", () => {
+    const none = { imdbRating: undefined, tmdbRating: undefined, rtCriticRating: undefined, rtAudienceRating: undefined };
+    expect(hoverDataFromListItem({ ...metadata, ...scores, title: "Show", type: "SERIES", matchedEpisodes: 3 })).toMatchObject(none);
+    expect(hoverDataFromSeriesGroup({ ...metadata, ...scores, parentTitle: "Show" })).toMatchObject(none);
+    expect(hoverDataFromSeason({ ...metadata, ...scores, parentTitle: "Show", seasonNumber: 1 })).toMatchObject(none);
+    expect(hoverDataFromArtistGroup({ ...metadata, ...scores, parentTitle: "Artist" })).toMatchObject(none);
+    expect(hoverDataFromAlbum({ ...metadata, ...scores, albumTitle: "Album" })).toMatchObject(none);
   });
 });
