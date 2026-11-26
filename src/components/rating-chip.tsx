@@ -9,8 +9,6 @@ interface RatingChipProps {
   min?: number;
   /** Max rating value — anything at or above is fully green (default 8) */
   max?: number;
-  /** The shown value (default: one decimal place) */
-  format?: (value: number) => string;
   className?: string;
 }
 
@@ -18,7 +16,7 @@ interface RatingChipProps {
  * Displays a rating value inside a colored chip.
  * Color interpolates from red (low) through amber (mid) to green (high).
  */
-export function RatingChip({ label, value, min = 3, max = 8, format, className }: RatingChipProps) {
+export function RatingChip({ label, value, min = 3, max = 8, className }: RatingChipProps) {
   const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));
 
   // Interpolate hue: 0 (red) → 85 (green) in OKLCH
@@ -48,7 +46,7 @@ export function RatingChip({ label, value, min = 3, max = 8, format, className }
       }}
     >
       <span className="text-white/60">{label}</span>
-      <span className="font-semibold">{format ? format(value) : value.toFixed(1)}</span>
+      <span className="font-semibold">{value.toFixed(1)}</span>
     </span>
   );
 }

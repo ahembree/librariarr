@@ -144,8 +144,8 @@ Each table gives the **Label** the rule editor shows and the **Field** name it s
 | Audience Rating | `audienceRating` | Audience rating from the library's ratings source | greaterThan, lessThan, etc. |
 | IMDb Rating (Plex) | `imdbRating` | **IMDb Rating (Plex)** — the IMDb score Plex lists for the item, 0–10, whatever the library's ratings source. Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
 | TMDB Rating (Plex) | `tmdbRating` | **TMDB Rating (Plex)** — the TMDB score Plex lists for the item, 0–10. Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
-| RT Critic Score (Plex) | `rtCriticRating` | **RT Critic Score (Plex)** — the Rotten Tomatoes critic score (Tomatometer) Plex lists for the item, as a percentage 0–100 (enter `90` for 90%). Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
-| RT Audience Score (Plex) | `rtAudienceRating` | **RT Audience Score (Plex)** — the Rotten Tomatoes audience score (Popcornmeter) Plex lists for the item, as a percentage 0–100. Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
+| RT Critic Score (Plex) | `rtCriticRating` | **RT Critic Score (Plex)** — the Rotten Tomatoes critic score (Tomatometer) Plex lists for the item, on the same 0–10 scale as every other rating (enter `9` for 90%). Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
+| RT Audience Score (Plex) | `rtAudienceRating` | **RT Audience Score (Plex)** — the Rotten Tomatoes audience score (Popcornmeter) Plex lists for the item, 0–10 (92% is 9.2). Empty for Jellyfin and Emby items | greaterThan, lessThan, etc. |
 | Rating Count | `ratingCount` | **Rating Count** — Plex's `ratingCount`, the number of ratings behind the item's rating in Plex's online metadata. Plex sets it mostly on music tracks (a popularity count); it is empty for Jellyfin and Emby items and for most movies and episodes, so pair it with **Is Empty** or a media-type check | greaterThan, lessThan, etc. |
 | Studio | `studio` | Production studio | equals, contains |
 | Genre | `genre` | Genre(s) | equals, contains |

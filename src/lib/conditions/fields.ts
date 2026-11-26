@@ -28,7 +28,7 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "audienceRating", label: "Audience Rating", type: "number", section: "activity" },
   { value: "ratingCount", label: "Rating Count", type: "number", section: "activity" },
   // Each provider's own score from Plex's `Rating` array (external-ratings.ts):
-  // IMDb/TMDB 0–10, Rotten Tomatoes 0–100. Empty for Jellyfin/Emby items.
+  // all 0–10 (Rotten Tomatoes 94% → 9.4). Empty for Jellyfin/Emby items.
   { value: "imdbRating", label: "IMDb Rating (Plex)", type: "number", section: "activity" },
   { value: "tmdbRating", label: "TMDB Rating (Plex)", type: "number", section: "activity" },
   { value: "rtCriticRating", label: "RT Critic Score (Plex)", type: "number", section: "activity" },

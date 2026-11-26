@@ -1,5 +1,5 @@
--- Each provider's score from Plex's `Rating` array: IMDb and TMDB (0–10) and
--- Rotten Tomatoes critic and audience (0–100).
+-- Each provider's score from Plex's `Rating` array: IMDb, TMDB and Rotten
+-- Tomatoes critic and audience, all on Plex's 0–10 scale.
 ALTER TABLE "MediaItem" ADD COLUMN "imdbRating" DOUBLE PRECISION;
 ALTER TABLE "MediaItem" ADD COLUMN "tmdbRating" DOUBLE PRECISION;
 ALTER TABLE "MediaItem" ADD COLUMN "rtCriticRating" DOUBLE PRECISION;

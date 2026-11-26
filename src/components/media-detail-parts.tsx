@@ -40,8 +40,6 @@ interface RatedItem {
   library?: { mediaServer?: { type?: string | null } | null } | null;
 }
 
-const percent = (value: number) => `${Math.round(value)}%`;
-
 /** A Plex rating image naming a provider stored in its own column. */
 const PROVIDER_IMAGE = /^(imdb|themoviedb|rottentomatoes):\/\//;
 
@@ -62,10 +60,10 @@ export function RatingChips({ item }: { item: RatedItem }) {
     <>
       {item.imdbRating != null && <RatingChip label="IMDb" value={item.imdbRating} />}
       {item.rtCriticRating != null && (
-        <RatingChip label="RT Critics" value={item.rtCriticRating} min={30} max={80} format={percent} />
+        <RatingChip label="RT Critics" value={item.rtCriticRating} />
       )}
       {item.rtAudienceRating != null && (
-        <RatingChip label="RT Audience" value={item.rtAudienceRating} min={30} max={80} format={percent} />
+        <RatingChip label="RT Audience" value={item.rtAudienceRating} />
       )}
       {item.tmdbRating != null && <RatingChip label="TMDB" value={item.tmdbRating} />}
       {item.rating != null && showServerRating(item.ratingImage) && (

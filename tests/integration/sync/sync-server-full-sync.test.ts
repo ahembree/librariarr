@@ -480,13 +480,13 @@ describe("movie metadata", () => {
       audienceRating: 7.5,
       imdbRating: 7.4,
       tmdbRating: 7.5,
-      rtCriticRating: 94,
-      rtAudienceRating: 92,
+      rtCriticRating: 9.4,
+      rtAudienceRating: 9.2,
     });
 
     fake.catalog["1"] = [movie("m1", ratings(3.1))];
     await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
-    expect((await prisma.mediaItem.findFirstOrThrow()).rtCriticRating).toBe(31);
+    expect((await prisma.mediaItem.findFirstOrThrow()).rtCriticRating).toBe(3.1);
   });
 
   it("invalidates the cached artwork an item no longer uses, scoped to its library", async () => {

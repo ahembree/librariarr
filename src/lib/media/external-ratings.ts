@@ -10,8 +10,8 @@
  *   { image: "rottentomatoes://image.rating.upright", value: 9.2, type: "audience" }
  *   { image: "themoviedb://image.rating",           value: 7.5, type: "audience" }
  *
- * IMDb and TMDB are stored on their own 0–10 scale. Rotten Tomatoes is stored
- * as the percentage Plex and Rotten Tomatoes show (Plex sends 9.4 for 94%).
+ * Every score is stored on the 0–10 scale Plex sends, like `rating` and
+ * `audienceRating`: Rotten Tomatoes' 94% is 9.4.
  *
  * The array is read first; a provider it lacks (a bulk-listing item, which
  * carries no array) is filled from `rating`/`ratingImage` and
@@ -58,13 +58,6 @@ function classify(image: string | null | undefined, slot: Slot | null): keyof Ex
   return null;
 }
 
-function scaled(column: keyof ExternalRatings, value: number): number {
-  // Rotten Tomatoes is a whole percentage; Plex sends it on a 0–10 scale.
-  return column === "rtCriticRating" || column === "rtAudienceRating"
-    ? Math.round(value * 10)
-    : value;
-}
-
 export function extractExternalRatings(item: ExternalRatingsSource): ExternalRatings {
   const out: ExternalRatings = {
     imdbRating: null,
@@ -80,7 +73,7 @@ export function extractExternalRatings(item: ExternalRatingsSource): ExternalRat
       if (value == null) continue;
       const type = entry.type === "critic" || entry.type === "audience" ? entry.type : null;
       const column = classify(entry.image, type);
-      if (column && out[column] == null) out[column] = scaled(column, value);
+      if (column && out[column] == null) out[column] = value;
     }
   }
 
@@ -92,7 +85,7 @@ export function extractExternalRatings(item: ExternalRatingsSource): ExternalRat
     const value = toScore(raw);
     if (value == null) continue;
     const column = classify(image, slot);
-    if (column && out[column] == null) out[column] = scaled(column, value);
+    if (column && out[column] == null) out[column] = value;
   }
 
   return out;

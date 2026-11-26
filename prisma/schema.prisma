@@ -404,7 +404,7 @@ model MediaItem {
   audienceRating         Float?
   userRating             Float?
   // Each provider's score from Plex's `Rating` array (src/lib/media/external-ratings.ts):
-  // IMDb and TMDB on their 0–10 scale, Rotten Tomatoes as a 0–100 percentage.
+  // All on Plex's 0–10 scale, like `rating`/`audienceRating` (Rotten Tomatoes 94% → 9.4).
   imdbRating             Float?
   tmdbRating             Float?
   rtCriticRating         Float?

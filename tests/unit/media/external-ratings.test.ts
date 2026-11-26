@@ -4,7 +4,7 @@ import { extractExternalRatings } from "@/lib/media/external-ratings";
 const EMPTY = { imdbRating: null, tmdbRating: null, rtCriticRating: null, rtAudienceRating: null };
 
 describe("extractExternalRatings", () => {
-  it("reads every provider from Plex's Rating array, Rotten Tomatoes as a percentage", () => {
+  it("reads every provider from Plex's Rating array, all on Plex's 0–10 scale", () => {
     expect(extractExternalRatings({
       audienceRating: 7.5,
       audienceRatingImage: "themoviedb://image.rating",
@@ -14,7 +14,7 @@ describe("extractExternalRatings", () => {
         { image: "rottentomatoes://image.rating.upright", value: 9.2, type: "audience" },
         { image: "themoviedb://image.rating", value: 7.5, type: "audience" },
       ],
-    })).toEqual({ imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 94, rtAudienceRating: 92 });
+    })).toEqual({ imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2 });
   });
 
   it("tells the Rotten Tomatoes scores apart by icon, then by type", () => {
@@ -23,13 +23,13 @@ describe("extractExternalRatings", () => {
         { image: "rottentomatoes://image.rating.rotten", value: 3.1, type: "audience" },
         { image: "rottentomatoes://image.rating.spilled", value: 4.4, type: "critic" },
       ],
-    })).toMatchObject({ rtCriticRating: 31, rtAudienceRating: 44 });
+    })).toMatchObject({ rtCriticRating: 3.1, rtAudienceRating: 4.4 });
     expect(extractExternalRatings({
       Rating: [
         { image: "rottentomatoes://image.rating.other", value: 8, type: "critic" },
         { image: "rottentomatoes://image.rating.other", value: 7, type: "audience" },
       ],
-    })).toMatchObject({ rtCriticRating: 80, rtAudienceRating: 70 });
+    })).toMatchObject({ rtCriticRating: 8, rtAudienceRating: 7 });
   });
 
   it("falls back to rating/audienceRating by their images when the array lacks a provider", () => {
@@ -38,7 +38,7 @@ describe("extractExternalRatings", () => {
       ratingImage: "rottentomatoes://image.rating.ripe",
       audienceRating: 9.2,
       audienceRatingImage: "rottentomatoes://image.rating.upright",
-    })).toEqual({ ...EMPTY, rtCriticRating: 94, rtAudienceRating: 92 });
+    })).toEqual({ ...EMPTY, rtCriticRating: 9.4, rtAudienceRating: 9.2 });
     expect(extractExternalRatings({
       audienceRating: 7.4,
       audienceRatingImage: "imdb://image.rating",
