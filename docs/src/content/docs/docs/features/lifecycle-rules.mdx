@@ -167,6 +167,7 @@ TMDB id specifically", use `notEquals TMDB`.
 
 - **Movies and Series only.** Plex lists no such scores for music, so a Music rule set can't use them.
 - **Jellyfin and Emby** don't list them. A Jellyfin or Emby copy of an item that is also on a Plex server (matched as in [multi-server deduplication](/docs/features/library/#multi-server-deduplication)) carries its Plex copy's scores; an item on Jellyfin or Emby alone has none.
+- **A missing score** matches no comparison, negated or not; use **Is Empty** for unrated items (see [below](#what-is-empty-means-per-field)).
 - **Waiting for a full sync.** Plex sends these scores only in an item's details, which a full sync reads once after upgrading (and after restoring a backup taken before they existed). Until every Plex movie (or episode, for a Series rule set) has been read, a rule set or Query action using one is skipped, with a reason naming the server and how many items are left. Otherwise an unread item would look unrated, and *NOT IMDb Rating (Plex) ≥ 6* would match a well-rated film.
 
 ### Video Fields
@@ -372,6 +373,15 @@ audio track, rather than sweeping them in.
 
 Track **codec** fields have no such placeholder, so they read plainly: an item
 with no audio track does match `Stream Audio Codec Is Not AAC`.
+:::
+
+:::note[Plex ratings are fail-closed too]
+An item with no score for a [Plex rating](#plex-ratings) matches **no**
+comparison on it, positive or negative: `NOT IMDb Rating (Plex) ≥ 6` and
+`RT Critic Score (Plex) Not Equals 9` both leave unrated items out, as the
+*arr ratings do. To find items without a score, use **Is Empty**. The other
+ratings (**Rating**, **Audience Rating**) read plainly: an item without one
+does match `NOT Rating ≥ 6`.
 :::
 
 ## Building Rules

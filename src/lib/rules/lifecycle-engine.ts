@@ -41,6 +41,7 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import {
   pushDownGroupNegation,
   nullValueResult,
+  failsClosedOnEmpty,
   MB_IN_BYTES,
   DURATION_MS_PER_MIN,
   wildcardToRegex,
@@ -1362,6 +1363,9 @@ function evaluateRuleAgainstItem(
       return negate ? !r : r;
     }
     if (itemValue == null) {
+      // A missing Plex rating matches no comparison, and negate does not flip
+      // that (`failsClosedOnEmpty`; Phase 1 ANDs "has a score").
+      if (failsClosedOnEmpty(field, operator)) return false;
       // NULL semantics mirror the Phase 1 clause shapes — see nullValueResult
       const r = nullValueResult(operator);
       return negate ? !r : r;

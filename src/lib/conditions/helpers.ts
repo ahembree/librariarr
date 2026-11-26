@@ -450,6 +450,17 @@ export const PROVIDER_RATING_CONDITION_FIELDS: ReadonlySet<string> = new Set([
   "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
 ]);
 
+/**
+ * Whether a rule compares a field whose empty value is NO comparison at all:
+ * Plex's per-provider ratings. A missing score matches no comparison operator,
+ * positive or negative, and `negate` does not flip that — `NOT IMDb Rating
+ * >= 6` and `RT Critic Score != 9` leave unrated items out, as the Arr ratings
+ * do. Is Empty / Is Not Empty still ask about the score's presence.
+ */
+export function failsClosedOnEmpty(field: string, operator: string): boolean {
+  return PROVIDER_RATING_CONDITION_FIELDS.has(field) && operator !== "isNull" && operator !== "isNotNull";
+}
+
 /** Whether a rule set reads any of Plex's per-provider ratings. */
 export function hasProviderRatingRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => PROVIDER_RATING_CONDITION_FIELDS.has(f));

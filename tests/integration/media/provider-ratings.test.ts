@@ -31,6 +31,7 @@ import {
 import { checkLifecycleRuleEvaluability, checkProviderRatingsCompleteness } from "@/lib/lifecycle/evaluability";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import { ruleToWhere } from "@/lib/conditions/where-builder";
 
 const prisma = getTestPrisma();
 const READ = new Date("2025-06-01T00:00:00.000Z");
@@ -214,5 +215,27 @@ describe("recomputeCanonical copies Plex's scores onto Jellyfin/Emby copies", ()
     await recomputeCanonical(user.id);
 
     expect((await ratings(jellyMovie)).imdbRating).toBe(7.4);
+  });
+});
+
+describe("Phase 1 against the database", () => {
+  it("leaves an unrated item out of a negated comparison and a not-equals", async () => {
+    const user = await createTestUser();
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const low = await item(lib.id, "MOVIE", { imdbRating: 5 });
+    const high = await item(lib.id, "MOVIE", { imdbRating: 8 });
+    const unrated = await item(lib.id, "MOVIE");
+    const ids = async (where: ReturnType<typeof ruleToWhere>) =>
+      (await prisma.mediaItem.findMany({ where, select: { id: true } })).map((r) => r.id).sort();
+
+    expect(await ids(ruleToWhere({ id: "r", field: "imdbRating", operator: "greaterThanOrEqual", value: "6", negate: true, condition: "AND" })))
+      .toEqual([low.id]);
+    expect(await ids(ruleToWhere({ id: "r", field: "imdbRating", operator: "notEquals", value: "8", condition: "AND" })))
+      .toEqual([low.id]);
+    expect(await ids(ruleToWhere({ id: "r", field: "imdbRating", operator: "isNull", value: "", condition: "AND" })))
+      .toEqual([unrated.id]);
+    expect(await ids(ruleToWhere({ id: "r", field: "imdbRating", operator: "isNotNull", value: "", negate: true, condition: "AND" })))
+      .toEqual([unrated.id]);
+    expect(high.id).toBeDefined();
   });
 });
