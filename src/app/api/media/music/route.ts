@@ -14,6 +14,7 @@ import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 import { wantsListIndex } from "@/lib/media/list-index";
 import { ARTIST_KEY_SQL, UNKNOWN_ARTIST, albumArtistKeySql, albumTitleKeySql } from "@/lib/media/music-sql";
+import { listSortTerm } from "@/lib/api/sort-term";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -204,7 +205,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
       // merge). The tie block straddling a page boundary then permutes between
       // the requests, so the paged list shows some rows twice and drops others
       // entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
-      orderBy: [{ [sortBy]: sortOrder }, { id: "asc" as const }],
+      orderBy: [listSortTerm(sortBy, sortOrder), { id: "asc" as const }],
       select: selectBase,
     }),
     withIndex ? prisma.mediaItem.count({ where }) : null,

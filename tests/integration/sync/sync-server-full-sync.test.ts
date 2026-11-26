@@ -489,6 +489,21 @@ describe("movie metadata", () => {
     expect((await prisma.mediaItem.findFirstOrThrow()).rtCriticRating).toBe(3.1);
   });
 
+  it("keeps a Jellyfin item's scores, which come from its Plex copy, when it syncs", async () => {
+    const { server } = await newServer("JELLYFIN");
+    setLibraries({ key: "1", title: "Movies", type: "movie" });
+    fake.catalog["1"] = [movie("j1", { updatedAt: 1_700_000_000 })];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    const stored = await prisma.mediaItem.findFirstOrThrow();
+    // What recomputeCanonical wrote from the item's Plex copy.
+    await prisma.mediaItem.update({ where: { id: stored.id }, data: { imdbRating: 7.4, rtCriticRating: 9.4 } });
+
+    fake.catalog["1"] = [movie("j1", { updatedAt: 1_700_000_100, title: "Renamed" })];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+
+    expect(await prisma.mediaItem.findFirstOrThrow()).toMatchObject({ title: "Renamed", imdbRating: 7.4, rtCriticRating: 9.4 });
+  });
+
   it("invalidates the cached artwork an item no longer uses, scoped to its library", async () => {
     const { server } = await newServer();
     setLibraries({ key: "1", title: "Movies", type: "movie" });

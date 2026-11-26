@@ -49,7 +49,9 @@ export interface ExternalRatingsSource {
 type Slot = "critic" | "audience";
 
 function toScore(value: unknown): number | null {
-  if (value == null || value === "") return null;
+  if (value == null) return null;
+  // `Number("  ")` is 0: a blank string is no score, not a score of 0.
+  if (typeof value === "string" && value.trim() === "") return null;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
 }

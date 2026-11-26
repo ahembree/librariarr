@@ -67,6 +67,15 @@ describe("extractExternalRatings", () => {
     expect(extractExternalRatings({})).toEqual(EMPTY);
   });
 
+  it("reads a blank string as no score, not 0", () => {
+    expect(extractExternalRatings({
+      Rating: [
+        { image: "imdb://image.rating", value: "  ", type: "audience" },
+        { image: "themoviedb://image.rating", value: "", type: "audience" },
+      ],
+    })).toEqual(EMPTY);
+  });
+
   it("reads a numeric string value", () => {
     expect(extractExternalRatings({ Rating: [{ image: "imdb://image.rating", value: "7.4", type: "audience" }] }).imdbRating).toBe(7.4);
   });

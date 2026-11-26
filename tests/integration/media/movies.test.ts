@@ -250,11 +250,14 @@ describe("GET /api/media/movies", () => {
     );
     expect(either.items.map((i) => i.title)).toEqual(["Fresh", "Rotten"]);
 
-    const sorted = await expectJson<{ items: { title: string }[] }>(
-      await callRoute(GET, { url: "/api/media/movies", searchParams: { sortBy: "tmdbRating", sortOrder: "asc", tmdbRatingConditions: "gt:0" } }),
-      200,
-    );
-    expect(sorted.items.map((i) => i.title)).toEqual(["Rotten", "Fresh"]);
+    // An unrated item sorts last in both directions.
+    for (const [sortOrder, expected] of [["asc", ["Rotten", "Fresh", "Unrated"]], ["desc", ["Fresh", "Rotten", "Unrated"]]] as const) {
+      const sorted = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams: { sortBy: "tmdbRating", sortOrder } }),
+        200,
+      );
+      expect(sorted.items.map((i) => i.title)).toEqual(expected);
+    }
   });
 
   it("caps limit at 100", async () => {

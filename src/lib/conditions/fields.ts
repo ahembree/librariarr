@@ -28,11 +28,15 @@ export const CONDITION_FIELDS: ConditionField[] = [
   { value: "audienceRating", label: "Audience Rating", type: "number", section: "activity" },
   { value: "ratingCount", label: "Rating Count", type: "number", section: "activity" },
   // Each provider's own score from Plex's `Rating` array (external-ratings.ts):
-  // all 0–10 (Rotten Tomatoes 94% → 9.4). Empty for Jellyfin/Emby items.
-  { value: "imdbRating", label: "IMDb Rating (Plex)", type: "number", section: "activity" },
-  { value: "tmdbRating", label: "TMDB Rating (Plex)", type: "number", section: "activity" },
-  { value: "rtCriticRating", label: "RT Critic Score (Plex)", type: "number", section: "activity" },
-  { value: "rtAudienceRating", label: "RT Audience Score (Plex)", type: "number", section: "activity" },
+  // all 0–10 (Rotten Tomatoes 94% → 9.4). A Jellyfin/Emby copy of an item also
+  // on Plex carries its Plex copy's scores (recompute-canonical.ts). Never set
+  // on a music track, so gated off MUSIC: a negated or Is Empty rule there would
+  // match every track. Rule sets reading them wait for every Plex item to be
+  // read (`checkProviderRatingsCompleteness`).
+  { value: "imdbRating", label: "IMDb Rating (Plex)", type: "number", section: "activity", invalidForLibraryType: ["MUSIC"] },
+  { value: "tmdbRating", label: "TMDB Rating (Plex)", type: "number", section: "activity", invalidForLibraryType: ["MUSIC"] },
+  { value: "rtCriticRating", label: "RT Critic Score (Plex)", type: "number", section: "activity", invalidForLibraryType: ["MUSIC"] },
+  { value: "rtAudienceRating", label: "RT Audience Score (Plex)", type: "number", section: "activity", invalidForLibraryType: ["MUSIC"] },
   { value: "isWatchlisted", label: "Is Watchlisted", type: "boolean", section: "activity", knownValues: ["true", "false"] },
   { value: "lastPlayedAt", label: "Last Played", type: "date", section: "activity", readsPlayActivity: true },
   // The date one named user (`Condition.user`) last played the item — see

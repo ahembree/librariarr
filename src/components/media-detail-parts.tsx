@@ -41,31 +41,34 @@ interface RatedItem {
 }
 
 /** A Plex rating image naming a provider stored in its own column. */
-const PROVIDER_IMAGE = /^(imdb|themoviedb|rottentomatoes):\/\//;
+const PROVIDER_IMAGE = /^(imdb|themoviedb|rottentomatoes):\/\//i;
 
 /**
  * An item's ratings — the hero's `ratings` slot: each provider's score from
  * Plex (IMDb, TMDB, Rotten Tomatoes critics and audience), then the server's
  * critic and audience ratings when they come from another source (Jellyfin,
  * Emby, an item synced before the per-provider columns), then the user's own.
+ *
+ * `providers={false}` leaves the per-provider scores out: the show page's
+ * record is one of its episodes, whose scores are that episode's, not the show's.
  */
-export function RatingChips({ item }: { item: RatedItem }) {
+export function RatingChips({ item, providers = true }: { item: RatedItem; providers?: boolean }) {
   const serverType = item.library?.mediaServer?.type ?? undefined;
-  const hasProviders =
+  const hasProviders = providers && (
     item.imdbRating != null || item.tmdbRating != null ||
-    item.rtCriticRating != null || item.rtAudienceRating != null;
+    item.rtCriticRating != null || item.rtAudienceRating != null);
   const showServerRating = (image: string | null | undefined) =>
     !hasProviders || !image || !PROVIDER_IMAGE.test(image);
   return (
     <>
-      {item.imdbRating != null && <RatingChip label="IMDb" value={item.imdbRating} />}
-      {item.rtCriticRating != null && (
+      {providers && item.imdbRating != null && <RatingChip label="IMDb" value={item.imdbRating} />}
+      {providers && item.rtCriticRating != null && (
         <RatingChip label="RT Critics" value={item.rtCriticRating} />
       )}
-      {item.rtAudienceRating != null && (
+      {providers && item.rtAudienceRating != null && (
         <RatingChip label="RT Audience" value={item.rtAudienceRating} />
       )}
-      {item.tmdbRating != null && <RatingChip label="TMDB" value={item.tmdbRating} />}
+      {providers && item.tmdbRating != null && <RatingChip label="TMDB" value={item.tmdbRating} />}
       {item.rating != null && showServerRating(item.ratingImage) && (
         <RatingChip label={getRatingLabel(item.ratingImage, serverType, "rating", "Critic")} value={item.rating} />
       )}

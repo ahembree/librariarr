@@ -439,6 +439,22 @@ export function hasPlayActivityRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => PLAY_ACTIVITY_FIELDS.has(f));
 }
 
+/**
+ * Plex's per-provider ratings (`PROVIDER_RATING_FIELDS` in
+ * src/lib/media/external-ratings.ts, listed here so this module stays free of
+ * that import). A row's ratings are empty until a full sync has read its
+ * details, so a criterion reading one waits for every Plex row to be read
+ * (`checkProviderRatingsCompleteness`).
+ */
+export const PROVIDER_RATING_CONDITION_FIELDS: ReadonlySet<string> = new Set([
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
+]);
+
+/** Whether a rule set reads any of Plex's per-provider ratings. */
+export function hasProviderRatingRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => PROVIDER_RATING_CONDITION_FIELDS.has(f));
+}
+
 /** Resolution rules are evaluated in-memory in both engines (Phase 1 cannot
  *  express normalizeResolutionLabel semantics) — see resolutionHandler. */
 export function hasResolutionRules(groups: ConditionGroup[]): boolean {

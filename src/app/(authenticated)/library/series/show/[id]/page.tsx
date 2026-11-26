@@ -122,7 +122,7 @@ export default function SeriesDetailPage() {
           )}
         </>
       }
-      ratings={<RatingChips item={item} />}
+      ratings={<RatingChips item={item} providers={false} />}
       genres={genreChips(item.genres)}
       backHref="/library/series"
       backLabel="Series"

@@ -13,6 +13,7 @@ import { parseListPagination } from "@/lib/api/pagination";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 import { wantsListIndex } from "@/lib/media/list-index";
+import { listSortTerm } from "@/lib/api/sort-term";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -198,7 +199,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
     // By show, a show's episodes run in SxxExx order — the order a list headed
     // "<Show> SxxExx" reads in, rather than whatever their ids happen to be.
     orderBy: [
-      { [sortBy]: sortOrder },
+      listSortTerm(sortBy, sortOrder),
       ...(sortBy === "parentTitle"
         ? [{ seasonNumber: "asc" as const }, { episodeNumber: "asc" as const }]
         : []),

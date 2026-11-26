@@ -1759,7 +1759,10 @@ function getActualValueForField(
   if (numericFields.has(field)) {
     const val = item[field];
     if (field === "watchedEpisodePercentage") return `${Number(val ?? 0).toFixed(1)}%`;
-    return String(val ?? 0);
+    // No value (an item without a Rotten Tomatoes score, a Jellyfin item with
+    // no Plex copy) reads "N/A", as the Arr numbers do — never a made-up 0
+    // that looks like a real score.
+    return val == null ? "N/A" : String(val);
   }
 
   // Text fields (fallback)
