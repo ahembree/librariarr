@@ -109,6 +109,10 @@ const PER_FILE_OR_ITEM_FIELDS = [
   "rating",
   "audienceRating",
   "ratingCount",
+  "imdbRating",
+  "tmdbRating",
+  "rtCriticRating",
+  "rtAudienceRating",
   "albumTitle",
 ] as const;
 

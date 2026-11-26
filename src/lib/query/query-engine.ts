@@ -114,6 +114,10 @@ const ITEM_SELECT_FULL = {
   audioSamplingRate: true,
   audioBitrate: true,
   ratingCount: true,
+  imdbRating: true,
+  tmdbRating: true,
+  rtCriticRating: true,
+  rtAudienceRating: true,
   libraryId: true,
   parentSummary: true,
   // Condition fields that previously fell to `undefined` in Phase 2 — an
@@ -1396,6 +1400,7 @@ function evaluateQueryRuleInMemory(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     // Series-aggregate numeric fields (attached by serializeSeriesAggregateForEval).
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
     // Per-episode fields: NULL on anything but an episode (episodeLevelValue);

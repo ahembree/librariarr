@@ -1351,6 +1351,7 @@ function evaluateRuleAgainstItem(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
     "seasonNumber", "episodeNumber", "seasonsBehindLatest",
   ]);
@@ -1752,6 +1753,7 @@ function getActualValueForField(
     "playCount", "videoBitrate", "audioChannels", "year",
     "videoBitDepth", "audioSamplingRate", "audioBitrate",
     "rating", "audienceRating", "ratingCount",
+    "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
     "availableEpisodeCount", "watchedEpisodeCount", "watchedEpisodePercentage",
   ]);
   if (numericFields.has(field)) {

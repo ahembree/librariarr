@@ -196,6 +196,7 @@ const NUMERIC_HANDLER_FIELDS = new Set([
   "playCount", "videoBitrate", "audioChannels", "year",
   "videoBitDepth", "audioSamplingRate", "audioBitrate",
   "rating", "audienceRating", "ratingCount",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
 ]);
 
 const fileSizeHandler: FieldHandler = (operator, value, _field, negate) => {

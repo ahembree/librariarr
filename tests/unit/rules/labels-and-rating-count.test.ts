@@ -93,3 +93,29 @@ describe("Rule engine: ratingCount (numeric)", () => {
     expect(result.get("2")).toHaveLength(0);
   });
 });
+
+describe("Rule engine: per-provider ratings (numeric)", () => {
+  const items = [
+    { id: "1", title: "A", imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 94, rtAudienceRating: 92 },
+    { id: "2", title: "B", imdbRating: 5.1, tmdbRating: 6, rtCriticRating: 31, rtAudienceRating: 40 },
+    { id: "3", title: "C", imdbRating: null, tmdbRating: null, rtCriticRating: null, rtAudienceRating: null },
+  ];
+
+  it.each([
+    ["imdbRating", "greaterThan", 7],
+    ["tmdbRating", "greaterThan", 7],
+    ["rtCriticRating", "greaterThan", 90],
+    ["rtAudienceRating", "between", "90,100"],
+  ])("%s %s %s matches only the item over the bar", (field, operator, value) => {
+    const result = evalRules(items, [makeGroup([makeRule({ field, operator, value } as LifecycleRule)])]);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(0);
+    expect(result.get("3")).toHaveLength(0);
+  });
+
+  it("isNull matches the item without the score", () => {
+    const result = evalRules(items, [makeGroup([makeRule({ field: "rtCriticRating", operator: "isNull", value: "" })])]);
+    expect(result.get("3")).toHaveLength(1);
+    expect(result.get("1")).toHaveLength(0);
+  });
+});

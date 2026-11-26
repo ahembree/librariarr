@@ -25,6 +25,7 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { loadLibraryWatchCountsFromHistory, reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
+import { extractExternalRatings } from "@/lib/media/external-ratings";
 import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
@@ -277,6 +278,7 @@ const MEDIA_ITEM_COLUMNS = [
   "dedupKey", "seriesKey", "isWatchlisted",
   "titleSort", "ratingCount", "ratingImage", "audienceRatingImage",
   "absoluteIndex", "chapterSource", "labels", "videoRangeType",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
   "createdAt", "updatedAt",
 ] as const;
 
@@ -511,6 +513,10 @@ function buildRowParams(
     d.chapterSource ?? null,
     d.labels ? JSON.stringify(d.labels) : null,
     d.videoRangeType ?? null,
+    d.imdbRating,
+    d.tmdbRating,
+    d.rtCriticRating,
+    d.rtAudienceRating,
     now,
     now,
   ];
@@ -1913,6 +1919,7 @@ function buildItemData(
     ratingCount: item.ratingCount ?? null,
     ratingImage: item.ratingImage ?? null,
     audienceRatingImage: item.audienceRatingImage ?? null,
+    ...extractExternalRatings(item),
     absoluteIndex: item.absoluteIndex ?? null,
     chapterSource: item.chapterSource ?? null,
     labels: item.Label && item.Label.length > 0 ? item.Label.map((l) => l.tag) : undefined,

@@ -90,6 +90,7 @@ Click **Refresh** next to a server's library list to fetch the latest library li
 For each media item, Librariarr syncs:
 
 - **Metadata**: title, year, rating, studio, genres, content rating, duration, play count, last played date
+- **Ratings (Plex)**: every score Plex lists for the item — IMDb, TMDB, and the Rotten Tomatoes critic and audience scores — whatever the library's **Ratings source** setting. Movie, series and episode detail pages show them, and each is a [lifecycle rule](/docs/features/lifecycle-rules/) and Query criterion. The first full sync after upgrading re-reads every Plex movie and episode once to fill them in
 - **Video details**: resolution, format, frame rate, HDR type, and more
 - **Audio details**: format, channels, quality, and languages
 - **Subtitles**: languages and settings
