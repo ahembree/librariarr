@@ -100,6 +100,7 @@ export type CustomDimension =
   | "year" | "studio" | "container" | "videoProfile" | "scanType" | "aspectRatio"
   | "countries"
   | "rating" | "audienceRating" | "duration" | "fileSize" | "playCount"
+  | "imdbRating" | "tmdbRating" | "rtCriticRating" | "rtAudienceRating"
   | "videoFrameRate" | "videoBitDepth" | "videoBitrate"
   | "audioProfile" | "audioSamplingRate" | "audioBitrate"
   | "audioLanguage" | "subtitleLanguage"
@@ -326,6 +327,7 @@ const VALID_DIMENSIONS = new Set<string>([
   "resolution", "videoCodec", "audioCodec", "contentRating", "dynamicRange",
   "audioChannels", "genre", "year", "studio", "container", "videoProfile",
   "scanType", "aspectRatio", "countries", "rating", "audienceRating",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
   "duration", "fileSize", "playCount",
   "videoFrameRate", "videoBitDepth", "videoBitrate",
   "audioProfile", "audioSamplingRate", "audioBitrate",

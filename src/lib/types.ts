@@ -20,6 +20,10 @@ export interface MediaItemWithRelations {
   ratingImage: string | null;
   audienceRating: number | null;
   audienceRatingImage: string | null;
+  imdbRating: number | null;
+  tmdbRating: number | null;
+  rtCriticRating: number | null;
+  rtAudienceRating: number | null;
   userRating: number | null;
   studio: string | null;
   tagline: string | null;

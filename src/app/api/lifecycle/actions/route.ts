@@ -30,6 +30,11 @@ interface ActionItemMediaItem {
   ratingImage: string | null;
   audienceRating: number | null;
   audienceRatingImage: string | null;
+  /** Plex's per-provider scores — a movie's own; null for a show or artist (one member's). */
+  imdbRating: number | null;
+  tmdbRating: number | null;
+  rtCriticRating: number | null;
+  rtAudienceRating: number | null;
   duration: number | null;
   resolution: string | null;
   dynamicRange: string | null;
@@ -110,6 +115,7 @@ interface RuleSetGroup {
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
+  imdbRating: true, tmdbRating: true, rtCriticRating: true, rtAudienceRating: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, audioCodec: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true, libraryId: true,
 } as const;
@@ -168,6 +174,8 @@ type SelectedMediaItem = {
   year: number | null; summary: string | null; parentSummary: string | null; contentRating: string | null;
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
+  imdbRating: number | null; tmdbRating: number | null;
+  rtCriticRating: number | null; rtAudienceRating: number | null;
   duration: number | null; resolution: string | null; dynamicRange: string | null;
   audioProfile: string | null; audioCodec: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
@@ -182,6 +190,8 @@ function serializeMediaItem(mi: SelectedMediaItem, servers: LibraryServers): Act
     year: mi.year, summary: mi.parentTitle ? (mi.parentSummary ?? mi.summary) : mi.summary, contentRating: mi.contentRating,
     rating: mi.rating, ratingImage: mi.ratingImage,
     audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
+    imdbRating: mi.imdbRating, tmdbRating: mi.tmdbRating,
+    rtCriticRating: mi.rtCriticRating, rtAudienceRating: mi.rtAudienceRating,
     duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
     audioProfile: mi.audioProfile, audioCodec: mi.audioCodec, fileSize: mi.fileSize?.toString() ?? null,
     genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
@@ -217,18 +227,23 @@ function buildActionMediaItem(
   // then, as the episode it acted on may be gone since.
   if (action.mediaItem) {
     const mi = serializeMediaItem(action.mediaItem, servers);
-    if (ruleSetType !== "SERIES") return mi;
+    if (ruleSetType === "MOVIE") return mi;
+    // A show's or artist's action stands on one member's row: its per-provider
+    // scores are that member's, not the group's.
+    const group = { ...mi, imdbRating: null, tmdbRating: null, rtCriticRating: null, rtAudienceRating: null };
+    if (ruleSetType !== "SERIES") return group;
     const title = action.status === "PENDING" || !action.mediaItemTitle
       ? actionTargetTitle({ ...action, mediaItem: action.mediaItem, memberEpisodes })
       : snapshotTargetTitle(action);
-    return { ...mi, title, parentTitle: null };
+    return { ...group, title, parentTitle: null };
   }
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
   const parentTitle = action.mediaItemParentTitle ?? null;
   const nullFields = {
     thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
-    audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
+    audienceRating: null, audienceRatingImage: null,
+    imdbRating: null, tmdbRating: null, rtCriticRating: null, rtAudienceRating: null, duration: null, resolution: null, dynamicRange: null,
     audioProfile: null, audioCodec: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };

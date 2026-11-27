@@ -10,6 +10,7 @@ import {
   restartTracearrBackfillWithoutPlays,
 } from "@/lib/media/watch-evidence";
 import { runBackfillIfNeeded } from "@/lib/dedup/recompute-canonical";
+import { requeueProviderRatings, rowsPredateProviderRatings } from "@/lib/sync/provider-ratings";
 import { compareSemver } from "@/lib/version/semver";
 import { archiveLogsBeforeRestore, discardPreRestoreArchive } from "@/lib/logs/archive";
 
@@ -308,6 +309,8 @@ export async function restoreBackup(
 
   /** Tracearr-mapped servers whose archive walk the restore restarted. */
   let tracearrRestarted = 0;
+  let mediaRowsPredateRatings = false;
+  let ratingsRequeued = 0;
 
   // Wrap truncate + insert in a transaction so a mid-restore failure rolls back cleanly
   await prisma.$transaction(async (tx) => {
@@ -362,6 +365,9 @@ export async function restoreBackup(
       if (table === "appSettings") {
         rows = keepSeenReleaseNotes(rows, seenVersionInUse);
       }
+      if (table === "mediaItem" && rowsPredateProviderRatings(rows)) {
+        mediaRowsPredateRatings = true;
+      }
 
       onProgress?.({
         phase: "restore",
@@ -415,6 +421,13 @@ export async function restoreBackup(
     // backfill slice that read it in between and stored a page would leave the
     // server holding rows, and so never restarted.
     tracearrRestarted = await restartTracearrBackfillWithoutPlays(tx);
+
+    // Media rows from a backup taken before the per-provider ratings existed
+    // come back with them empty and with their old `serverUpdatedAt`, which a
+    // full sync reads as "unchanged" and never fetches again — the ratings
+    // would stay empty for good. Queue them as the upgrade's migration did.
+    // In this transaction, like the walk restart above.
+    if (mediaRowsPredateRatings) ratingsRequeued = await requeueProviderRatings(tx);
   }, { timeout: 300000 }) // 5 min timeout for large restores
     .catch(async (error: unknown) => {
       // Rolled back: the log rows are still in the table, so the copy made of
@@ -422,6 +435,14 @@ export async function restoreBackup(
       if (archivedLogs) await discardPreRestoreArchive(archivedLogs);
       throw error;
     });
+
+  if (ratingsRequeued > 0) {
+    logger.info(
+      "Backup",
+      `The backup predates per-provider ratings: queued ${ratingsRequeued} Plex movie(s) and episode(s) ` +
+        `for the next full sync to read their IMDb, TMDB and Rotten Tomatoes scores`,
+    );
+  }
 
   if (tracearrRestarted > 0) {
     logger.info(

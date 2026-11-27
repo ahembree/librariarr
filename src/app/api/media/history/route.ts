@@ -332,6 +332,8 @@ export const GET = withSession(async (session, request: NextRequest) => {
       mi."summary" AS "mi_summary", mi."contentRating" AS "mi_contentRating",
       mi."rating" AS "mi_rating", mi."ratingImage" AS "mi_ratingImage",
       mi."audienceRating" AS "mi_audienceRating", mi."audienceRatingImage" AS "mi_audienceRatingImage",
+      mi."imdbRating" AS "mi_imdbRating", mi."tmdbRating" AS "mi_tmdbRating",
+      mi."rtCriticRating" AS "mi_rtCriticRating", mi."rtAudienceRating" AS "mi_rtAudienceRating",
       mi."studio" AS "mi_studio", mi."playCount" AS "mi_playCount",
       mi."lastPlayedAt" AS "mi_lastPlayedAt", mi."addedAt" AS "mi_addedAt",
       mi."genres" AS "mi_genres",
@@ -418,6 +420,10 @@ export const GET = withSession(async (session, request: NextRequest) => {
     mi_ratingImage: string | null;
     mi_audienceRating: number | null;
     mi_audienceRatingImage: string | null;
+    mi_imdbRating: number | null;
+    mi_tmdbRating: number | null;
+    mi_rtCriticRating: number | null;
+    mi_rtAudienceRating: number | null;
     mi_studio: string | null;
     mi_playCount: number;
     mi_lastPlayedAt: Date | null;
@@ -482,6 +488,10 @@ export const GET = withSession(async (session, request: NextRequest) => {
       ratingImage: r.mi_ratingImage,
       audienceRating: r.mi_audienceRating,
       audienceRatingImage: r.mi_audienceRatingImage,
+      imdbRating: r.mi_imdbRating,
+      tmdbRating: r.mi_tmdbRating,
+      rtCriticRating: r.mi_rtCriticRating,
+      rtAudienceRating: r.mi_rtAudienceRating,
       studio: r.mi_studio,
       playCount: r.mi_playCount,
       lastPlayedAt: r.mi_lastPlayedAt?.toISOString() ?? null,

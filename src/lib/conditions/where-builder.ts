@@ -29,6 +29,7 @@ import {
   isCrossSystemField,
   isSeriesAggregateField,
   SEASONS_BEHIND_LATEST_FIELD,
+  failsClosedOnEmpty,
 } from "./helpers";
 import { isStreamQueryField } from "./stream-query";
 import { MB_IN_BYTES, DURATION_MS_PER_MIN } from "./constants";
@@ -196,6 +197,7 @@ const NUMERIC_HANDLER_FIELDS = new Set([
   "playCount", "videoBitrate", "audioChannels", "year",
   "videoBitDepth", "audioSamplingRate", "audioBitrate",
   "rating", "audienceRating", "ratingCount",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
 ]);
 
 const fileSizeHandler: FieldHandler = (operator, value, _field, negate) => {
@@ -834,7 +836,15 @@ export function ruleToWhere(rule: Condition): Prisma.MediaItemWhereInput {
   if (STREAM_COUNT_FIELDS.has(field)) return {};
 
   const handler = FIELD_HANDLERS[field];
-  if (handler) return handler(operator, value, field, negate);
+  if (handler) {
+    const clause = handler(operator, value, field, negate);
+    // A missing Plex rating matches no comparison, negated or not
+    // (`failsClosedOnEmpty`): "has a score" is ANDed onto the FINISHED clause,
+    // after the handler's negation and its NULL-safe OR, as the stream
+    // language fields do.
+    if (failsClosedOnEmpty(field, operator)) return { AND: [{ [field]: { not: null } }, clause] };
+    return clause;
+  }
 
   return textGenericHandler(operator, value, field, negate);
 }

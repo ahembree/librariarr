@@ -45,6 +45,8 @@ const ITEM: Record<string, unknown> = {
   year: 2020, contentRating: "PG-13", studio: "Acme",
   genres: ["Action"], labels: ["Fav"], countries: ["US"],
   playCount: 3, rating: 7.5, audienceRating: 80, ratingCount: 100,
+  // Plex ratings fail closed on an empty score (failsClosedOnEmpty), so the item has them.
+  imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2,
   isWatchlisted: true, lastPlayedAt: "2025-01-01T00:00:00.000Z",
   addedAt: "2024-01-01T00:00:00.000Z", originallyAvailableAt: "2020-06-01T00:00:00.000Z",
   resolution: "1080", videoCodec: "hevc", videoProfile: "main10", dynamicRange: "HDR10",

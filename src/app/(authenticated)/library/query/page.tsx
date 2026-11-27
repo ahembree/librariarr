@@ -146,6 +146,10 @@ interface QueryResultItem {
   ratingImage: string | null;
   audienceRating: number | null;
   audienceRatingImage: string | null;
+  imdbRating?: number | null;
+  tmdbRating?: number | null;
+  rtCriticRating?: number | null;
+  rtAudienceRating?: number | null;
   resolution: string | null;
   dynamicRange: string | null;
   videoCodec: string | null;
