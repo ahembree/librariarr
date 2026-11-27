@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.36.0](https://github.com/ahembree/librariarr/compare/v0.35.0...v0.36.0) (2026-11-27)
+
+
+### Features
+
+* **lifecycle:** add Plex collection sort fields and direction ([#558](https://github.com/ahembree/librariarr/issues/558)) ([b352ee4](https://github.com/ahembree/librariarr/commit/b352ee4cf678bb3493a29762564803ed1aadbfd6))
+* **lifecycle:** preview a Plex collection's order with unsaved rules ([#559](https://github.com/ahembree/librariarr/issues/559)) ([0ad8ef9](https://github.com/ahembree/librariarr/commit/0ad8ef96e23c771d3ef5a4bb7b40ea9000752dec))
+* **rules:** add User Last Played criterion ([#556](https://github.com/ahembree/librariarr/issues/556)) ([5d76873](https://github.com/ahembree/librariarr/commit/5d7687324be90cd8a0a6257475d34ebb39f267ab))
+* **sync:** store every Plex rating provider's score ([#567](https://github.com/ahembree/librariarr/issues/567)) ([ce9664d](https://github.com/ahembree/librariarr/commit/ce9664d8555c1c4d204b6edb4c7eb686d09e2aae))
+
+
+### Bug Fixes
+
+* **play-history:** open tracearr stream details on tap ([#568](https://github.com/ahembree/librariarr/issues/568)) ([87a9f31](https://github.com/ahembree/librariarr/commit/87a9f310c18b70a37716d4fa3c54d6d30ec621bf))
+
 ## [0.35.0](https://github.com/ahembree/librariarr/compare/v0.34.0...v0.35.0) (2026-11-22)
 
 
