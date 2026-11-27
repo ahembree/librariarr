@@ -573,6 +573,9 @@ export function StreamDetailPopover({ sections }: { sections: DetailSection[] })
         side="top"
         align="end"
         sideOffset={6}
+        // Keep clear of the screen edges (and a phone's status bar / notch):
+        // on a phone the popover is taller than the room above the row.
+        collisionPadding={8}
         onPointerEnter={hoverTo(true)}
         onPointerLeave={hoverTo(false)}
         onOpenAutoFocus={(event) => event.preventDefault()}
