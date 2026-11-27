@@ -382,6 +382,50 @@ function buildColumns(): ColumnDef[] {
       <span className="text-muted-foreground">{item.audienceRating?.toFixed(1) ?? "-"}</span>
     ),
   },
+  {
+    id: "imdbRating",
+    label: "IMDb",
+    field: "imdbRating",
+    group: "content",
+    defaultVisible: false,
+    defaultWidth: 80,
+    render: (item) => (
+      <span className="text-muted-foreground">{item.imdbRating?.toFixed(1) ?? "-"}</span>
+    ),
+  },
+  {
+    id: "tmdbRating",
+    label: "TMDB",
+    field: "tmdbRating",
+    group: "content",
+    defaultVisible: false,
+    defaultWidth: 80,
+    render: (item) => (
+      <span className="text-muted-foreground">{item.tmdbRating?.toFixed(1) ?? "-"}</span>
+    ),
+  },
+  {
+    id: "rtCriticRating",
+    label: "RT Critics",
+    field: "rtCriticRating",
+    group: "content",
+    defaultVisible: false,
+    defaultWidth: 100,
+    render: (item) => (
+      <span className="text-muted-foreground">{item.rtCriticRating?.toFixed(1) ?? "-"}</span>
+    ),
+  },
+  {
+    id: "rtAudienceRating",
+    label: "RT Audience",
+    field: "rtAudienceRating",
+    group: "content",
+    defaultVisible: false,
+    defaultWidth: 110,
+    render: (item) => (
+      <span className="text-muted-foreground">{item.rtAudienceRating?.toFixed(1) ?? "-"}</span>
+    ),
+  },
   ];
 }
 
@@ -422,6 +466,9 @@ function visibilityFromPreferences(
   }
   return vis;
 }
+
+// Plex's per-provider film and TV scores: never set on a music track
+const PROVIDER_RATING_COLUMN_IDS = new Set(["imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating"]);
 
 // Column IDs that are video-specific and should be hidden for MUSIC
 const VIDEO_COLUMN_IDS = new Set([
@@ -608,7 +655,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
 
   // Filter out video columns entirely for music, then apply user visibility
   const availableColumns = allColumns.filter((col) => {
-    if (isMusic && VIDEO_COLUMN_IDS.has(col.id)) return false;
+    if (isMusic && (VIDEO_COLUMN_IDS.has(col.id) || PROVIDER_RATING_COLUMN_IDS.has(col.id))) return false;
     if (hideServers && col.id === "servers") return false;
     return true;
   });

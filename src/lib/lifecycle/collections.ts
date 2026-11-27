@@ -675,6 +675,10 @@ const MEDIA_SORT_SQL: Record<MediaSortField, { row: string; show: string; text?:
   DURATION: { row: `"duration"::float8`, show: `SUM("duration")::float8` },
   CRITIC_RATING: { row: `"rating"::float8`, show: `AVG("rating")::float8` },
   AUDIENCE_RATING: { row: `"audienceRating"::float8`, show: `AVG("audienceRating")::float8` },
+  IMDB_RATING: { row: `"imdbRating"::float8`, show: `AVG("imdbRating")::float8` },
+  TMDB_RATING: { row: `"tmdbRating"::float8`, show: `AVG("tmdbRating")::float8` },
+  RT_CRITIC_RATING: { row: `"rtCriticRating"::float8`, show: `AVG("rtCriticRating")::float8` },
+  RT_AUDIENCE_RATING: { row: `"rtAudienceRating"::float8`, show: `AVG("rtAudienceRating")::float8` },
   USER_RATING: { row: `"userRating"::float8`, show: `AVG("userRating")::float8` },
 };
 

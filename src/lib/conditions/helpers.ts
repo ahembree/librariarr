@@ -439,6 +439,33 @@ export function hasPlayActivityRules(groups: ConditionGroup[]): boolean {
   return anyRuleMatches(groups, (f) => PLAY_ACTIVITY_FIELDS.has(f));
 }
 
+/**
+ * Plex's per-provider ratings (`PROVIDER_RATING_FIELDS` in
+ * src/lib/media/external-ratings.ts, listed here so this module stays free of
+ * that import). A row's ratings are empty until a full sync has read its
+ * details, so a criterion reading one waits for every Plex row to be read
+ * (`checkProviderRatingsCompleteness`).
+ */
+export const PROVIDER_RATING_CONDITION_FIELDS: ReadonlySet<string> = new Set([
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
+]);
+
+/**
+ * Whether a rule compares a field whose empty value is NO comparison at all:
+ * Plex's per-provider ratings. A missing score matches no comparison operator,
+ * positive or negative, and `negate` does not flip that — `NOT IMDb Rating
+ * >= 6` and `RT Critic Score != 9` leave unrated items out, as the Arr ratings
+ * do. Is Empty / Is Not Empty still ask about the score's presence.
+ */
+export function failsClosedOnEmpty(field: string, operator: string): boolean {
+  return PROVIDER_RATING_CONDITION_FIELDS.has(field) && operator !== "isNull" && operator !== "isNotNull";
+}
+
+/** Whether a rule set reads any of Plex's per-provider ratings. */
+export function hasProviderRatingRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => PROVIDER_RATING_CONDITION_FIELDS.has(f));
+}
+
 /** Resolution rules are evaluated in-memory in both engines (Phase 1 cannot
  *  express normalizeResolutionLabel semantics) — see resolutionHandler. */
 export function hasResolutionRules(groups: ConditionGroup[]): boolean {

@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { X, Check, SlidersHorizontal, ChevronRight, ChevronDown, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines, Languages, Search, MonitorPlay, Volume2, Layers, BookOpen, Tv, File, type LucideIcon } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { PROVIDER_RATING_FIELDS, PROVIDER_RATING_LABELS } from "@/lib/media/external-ratings";
 
 interface MediaFilterValues {
   [key: string]: string;
@@ -1306,6 +1307,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     "playCountConditions", "playCountLogic",
     "ratingConditions", "ratingLogic",
     "audienceRatingConditions", "audienceRatingLogic",
+    ...PROVIDER_RATING_FIELDS.flatMap((f) => [`${f}Conditions`, `${f}Logic`]),
     "videoBitrateConditions", "videoBitrateLogic",
     "audioBitrateConditions", "audioBitrateLogic",
     "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays",
@@ -1466,7 +1468,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     Video: ["videoBitrateConditions"],
     Audio: ["audioBitrateConditions"],
     "Stream Counts": ["audioStreamCountConditions", "subtitleStreamCountConditions"],
-    Content: ["contentRating", "studio", "genre", "playCountConditions", "ratingConditions", "audienceRatingConditions", "isWatchlisted", "durationMin", "durationMax"],
+    Content: ["contentRating", "studio", "genre", "playCountConditions", "ratingConditions", "audienceRatingConditions", ...PROVIDER_RATING_FIELDS.map((f) => `${f}Conditions`), "isWatchlisted", "durationMin", "durationMax"],
     Series: ["episodeCountConditions", "watchedEpisodeCountConditions", "watchedEpisodePercentageConditions", "lastEpisodeAiredAtMin", "lastEpisodeAiredAtMax", "lastEpisodeAiredAtDays"],
     File: ["container", "fileSizeMin", "fileSizeMax"],
     Dates: ["yearConditions", "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays", "addedAtMin", "addedAtMax", "addedAtDays", "originallyAvailableAtMin", "originallyAvailableAtMax", "originallyAvailableAtDays"],
@@ -1541,6 +1543,16 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   const ratingLogic = (filters.ratingLogic as LogicMode) ?? "and";
   const audienceRatingConditions = parseConditions(filters.audienceRatingConditions);
   const audienceRatingLogic = (filters.audienceRatingLogic as LogicMode) ?? "and";
+  // Plex's per-provider scores (IMDb, TMDB, Rotten Tomatoes); not offered for music
+  const providerRatings = mediaType === "MUSIC" ? [] : PROVIDER_RATING_FIELDS.map((field) => ({
+    field,
+    label: PROVIDER_RATING_LABELS[field],
+    conditionsKey: `${field}Conditions`,
+    logicKey: `${field}Logic`,
+    conditions: parseConditions(filters[`${field}Conditions`]),
+    logic: (filters[`${field}Logic`] as LogicMode) ?? "and",
+  }));
+  const activeProviderRatings = providerRatings.filter((r) => r.conditions.length > 0);
   const videoBitrateConditions = parseConditions(filters.videoBitrateConditions);
   const videoBitrateLogic = (filters.videoBitrateLogic as LogicMode) ?? "and";
   const audioBitrateConditions = parseConditions(filters.audioBitrateConditions);
@@ -1583,6 +1595,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     + (hasPlayCount ? 1 : 0)
     + (hasRating ? 1 : 0)
     + (hasAudienceRating ? 1 : 0)
+    + activeProviderRatings.length
     + (hasVideoBitrate ? 1 : 0)
     + (hasAudioBitrate ? 1 : 0)
     + (hasAudioStreamCount ? 1 : 0)
@@ -1795,6 +1808,10 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                   }
                   if (matchesFilterSearch("Audience Rating")) {
                     contentItems.push(<ComparisonPopover key="audienceRating" label="Audience Rating" icon={Star} conditionsKey="audienceRatingConditions" logicKey="audienceRatingLogic" conditions={audienceRatingConditions} logic={audienceRatingLogic} onApply={applyConditions} onClear={clearConditions} step="0.1" placeholder="7.0" inline />);
+                  }
+                  for (const r of providerRatings) {
+                    if (!matchesFilterSearch(r.label)) continue;
+                    contentItems.push(<ComparisonPopover key={r.field} label={r.label} icon={Star} conditionsKey={r.conditionsKey} logicKey={r.logicKey} conditions={r.conditions} logic={r.logic} onApply={applyConditions} onClear={clearConditions} step="0.1" placeholder="7.0" inline />);
                   }
                   if (matchesFilterSearch("Watchlisted")) {
                     contentItems.push(
@@ -2042,6 +2059,17 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
             <X className="h-3 w-3 ml-0.5" />
           </ColorChip>
         )}
+        {activeProviderRatings.map((r) => (
+          <ColorChip
+            key={r.field}
+            className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"
+            onClick={() => clearConditions(r.conditionsKey, r.logicKey)}
+          >
+            <span className="text-muted-foreground">{r.label}:</span>
+            {formatConditionsLabel(r.conditions, r.logic)}
+            <X className="h-3 w-3 ml-0.5" />
+          </ColorChip>
+        ))}
         {hasVideoBitrate && (
           <ColorChip
             className="gap-1 pl-2.5 pr-1.5 py-1 bg-secondary text-secondary-foreground hover:bg-secondary/80"

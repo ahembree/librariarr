@@ -146,6 +146,14 @@ describe("condition filters", () => {
     ]);
     expect(build("videoBitrateConditions=gt:100&audioBitrateConditions=lt:9").videoBitrate).toEqual({ gt: 100 });
   });
+
+  it("filters on each of Plex's per-provider ratings", () => {
+    const where = build("imdbRatingConditions=gte:7&tmdbRatingConditions=lt:5&rtCriticRatingConditions=gt:9&rtAudienceRatingConditions=lt:2|gt:8&rtAudienceRatingLogic=or");
+    expect(where.imdbRating).toEqual({ gte: 7 });
+    expect(where.tmdbRating).toEqual({ lt: 5 });
+    expect(where.rtCriticRating).toEqual({ gt: 9 });
+    expect(where.AND).toEqual([{ OR: [{ rtAudienceRating: { lt: 2 } }, { rtAudienceRating: { gt: 8 } }] }]);
+  });
 });
 
 describe("genre", () => {

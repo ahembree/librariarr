@@ -89,6 +89,16 @@ describe("Lifecycle Exceptions API", () => {
       expect(body.exceptions[0].mediaItem.id).toBe(mediaItem.id);
     });
 
+    it("returns the item's Plex per-provider ratings for the hover card", async () => {
+      const { user, mediaItem } = await createUserWithMediaItem();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      await prisma.mediaItem.update({ where: { id: mediaItem.id }, data: { imdbRating: 7.4, rtCriticRating: 9.4 } });
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: mediaItem.id } });
+
+      const body = await expectJson<{ exceptions: Array<{ mediaItem: Record<string, unknown> }> }>(await callRoute(GET), 200);
+      expect(body.exceptions[0].mediaItem).toMatchObject({ imdbRating: 7.4, tmdbRating: null, rtCriticRating: 9.4, rtAudienceRating: null });
+    });
+
     it("filters by media item type when type param is provided", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

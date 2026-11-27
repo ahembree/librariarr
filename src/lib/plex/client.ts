@@ -21,6 +21,23 @@ import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
+import { extractExternalRatings, type ExternalRatingsSource } from "@/lib/media/external-ratings";
+
+/** A session item's per-provider scores, each left out when Plex lists none. */
+export function sessionProviderRatings(item: Record<string, unknown>): {
+  imdbRating?: number;
+  tmdbRating?: number;
+  rtCriticRating?: number;
+  rtAudienceRating?: number;
+} {
+  const scores = extractExternalRatings(item as ExternalRatingsSource);
+  return {
+    imdbRating: scores.imdbRating ?? undefined,
+    tmdbRating: scores.tmdbRating ?? undefined,
+    rtCriticRating: scores.rtCriticRating ?? undefined,
+    rtAudienceRating: scores.rtAudienceRating ?? undefined,
+  };
+}
 
 interface PlexClientOptions {
   skipTlsVerify?: boolean;
@@ -792,7 +809,12 @@ export class PlexClient implements MediaServerClient {
           contentRating: item.contentRating ? String(item.contentRating) : undefined,
           studio: item.studio ? String(item.studio) : undefined,
           rating: item.rating as number | undefined,
+          ratingImage: item.ratingImage ? String(item.ratingImage) : undefined,
           audienceRating: item.audienceRating as number | undefined,
+          audienceRatingImage: item.audienceRatingImage ? String(item.audienceRatingImage) : undefined,
+          // Each provider's score, as the sync reads them; a session's metadata
+          // may carry the Rating array or only the library source's two.
+          ...sessionProviderRatings(item),
           tagline: item.tagline ? String(item.tagline) : undefined,
           genres: genreArray.length > 0 ? genreArray.map(g => g.tag) : undefined,
           // Media dimensions

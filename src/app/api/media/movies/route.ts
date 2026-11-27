@@ -14,6 +14,7 @@ import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 import { letterOffsets, wantsListIndex, type ListIndex } from "@/lib/media/list-index";
 import { memoListRows } from "@/lib/api/list-rows-memo";
+import { listSortTerm } from "@/lib/api/sort-term";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
 const SORT_COLUMNS = new Set([
@@ -29,6 +30,10 @@ const SORT_COLUMNS = new Set([
   "addedAt",
   "rating",
   "audienceRating",
+  "imdbRating",
+  "tmdbRating",
+  "rtCriticRating",
+  "rtAudienceRating",
   "contentRating",
   // Every column the library table (src/components/media-table.tsx) offers a
   // sort header for. A field missing here silently sorted by title while the
@@ -134,6 +139,10 @@ const listGet = withSession(async (session, request: NextRequest) => {
     ratingImage: true,
     audienceRating: true,
     audienceRatingImage: true,
+    imdbRating: true,
+    tmdbRating: true,
+    rtCriticRating: true,
+    rtAudienceRating: true,
     genres: true,
     studio: true,
     dedupKey: true,
@@ -160,7 +169,7 @@ const listGet = withSession(async (session, request: NextRequest) => {
   const orderBy: Prisma.MediaItemOrderByWithRelationInput[] =
     sortBy === "title"
       ? [{ titleSort: { sort: sortOrder, nulls: "last" } }, { title: sortOrder }, { id: "asc" }]
-      : [{ [sortBy]: sortOrder }, { id: "asc" }];
+      : [listSortTerm(sortBy, sortOrder), { id: "asc" }];
 
   // The index (`?index=1`, the Movies page's first page): the count and the
   // A–Z offsets of the whole listing, read from its titles in list order —

@@ -403,6 +403,12 @@ model MediaItem {
   rating                 Float?
   audienceRating         Float?
   userRating             Float?
+  // Each provider's score from Plex's `Rating` array (src/lib/media/external-ratings.ts):
+  // All on Plex's 0–10 scale, like `rating`/`audienceRating` (Rotten Tomatoes 94% → 9.4).
+  imdbRating             Float?
+  tmdbRating             Float?
+  rtCriticRating         Float?
+  rtAudienceRating       Float?
   studio                 String?
   tagline                String?
   originalTitle          String?

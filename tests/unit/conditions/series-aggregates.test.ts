@@ -354,8 +354,8 @@ describe("group values and member values", () => {
     expect(perMember.sort()).toEqual([
       "albumTitle", "aspectRatio", "audienceRating", "audioBitrate", "audioChannels", "audioCodec",
       "audioProfile", "audioSamplingRate", "container", "contentRating", "country", "duration",
-      "dynamicRange", "episodeNumber", "genre", "isWatchlisted", "labels", "originallyAvailableAt", "rating",
-      "ratingCount", "resolution", "scanType", "seasonNumber", "seasonsBehindLatest", "studio", "videoBitDepth",
+      "dynamicRange", "episodeNumber", "genre", "imdbRating", "isWatchlisted", "labels", "originallyAvailableAt", "rating",
+      "ratingCount", "resolution", "rtAudienceRating", "rtCriticRating", "scanType", "seasonNumber", "seasonsBehindLatest", "studio", "tmdbRating", "videoBitDepth",
       "videoBitrate", "videoCodec", "videoFrameRate", "videoProfile", "year",
     ]);
     for (const field of [

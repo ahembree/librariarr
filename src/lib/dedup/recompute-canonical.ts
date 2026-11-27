@@ -47,6 +47,9 @@ export async function recomputeCanonical(
   await withDeadlockRetry("recomputeCanonical", () =>
     writeCanonicalFlags(prisma, userId, scoped ? dedupKeys : null),
   );
+  await withDeadlockRetry("mirrorProviderRatings", () =>
+    mirrorProviderRatings(prisma, userId, scoped ? dedupKeys : null),
+  );
 
   // Ensure items without dedupKey stay canonical (default).
   // These are items that haven't been synced yet or have no computable key.
@@ -71,6 +74,57 @@ export async function recomputeCanonical(
     scoped
       ? `Dedup canonical flags recomputed for ${dedupKeys.length} group(s)`
       : "Dedup canonical flags recomputed",
+  );
+}
+
+/**
+ * Gives every Jellyfin/Emby movie or episode the per-provider ratings
+ * (`imdbRating`, `tmdbRating`, `rtCriticRating`, `rtAudienceRating`) of its
+ * Plex copy — the same item on a Plex server, by `dedupKey` — and clears them
+ * where the group has no Plex copy left.
+ *
+ * Only Plex lists each provider's score, so a listing reading its canonical
+ * copy (`dedupCanonical`, which may well be the Jellyfin one) filtered, sorted
+ * and showed a title with a Plex copy as unrated, and a rule judged the
+ * Jellyfin copy of a film on a score its Plex copy had. Each column takes the
+ * first score among the group's Plex copies: an enabled server first, then
+ * the canonical copy, then the lowest id. Plex rows keep their own. Only rows
+ * whose values change are written; `dedupKeys` scopes it like the flags.
+ */
+export async function mirrorProviderRatings(
+  client: Prisma.TransactionClient,
+  userId: string,
+  dedupKeys: string[] | null,
+): Promise<number> {
+  const pick = (column: string) =>
+    `(array_agg(s."${column}" ORDER BY s."enabled" DESC, s."dedupCanonical" DESC, s."id" ASC)
+       FILTER (WHERE s."${column}" IS NOT NULL))[1] AS "${column}"`;
+  const columns = ["imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating"];
+  return client.$executeRawUnsafe(
+    `WITH scope AS (
+       SELECT x."id", x."dedupKey", x."dedupCanonical", ms."enabled",
+              ms."type" = 'PLEX' AS "isPlex",
+              ${columns.map((c) => `x."${c}"`).join(", ")}
+         FROM "MediaItem" x
+         JOIN "Library" l ON x."libraryId" = l."id"
+         JOIN "MediaServer" ms ON l."mediaServerId" = ms."id"
+        WHERE ms."userId" = $1 AND x."dedupKey" IS NOT NULL
+          AND x."type" IN ('MOVIE', 'SERIES')
+          ${dedupKeys ? `AND x."dedupKey" = ANY($2::text[])` : ""}
+     ),
+     plex AS (
+       SELECT s."dedupKey", ${columns.map(pick).join(", ")}
+         FROM scope s
+        WHERE s."isPlex"
+        GROUP BY s."dedupKey"
+     )
+     UPDATE "MediaItem" mi
+        SET ${columns.map((c) => `"${c}" = p."${c}"`).join(", ")}
+       FROM scope t
+       LEFT JOIN plex p ON p."dedupKey" = t."dedupKey"
+      WHERE mi."id" = t."id" AND NOT t."isPlex"
+        AND (${columns.map((c) => `t."${c}" IS DISTINCT FROM p."${c}"`).join(" OR ")})`,
+    ...(dedupKeys ? [userId, dedupKeys] : [userId]),
   );
 }
 

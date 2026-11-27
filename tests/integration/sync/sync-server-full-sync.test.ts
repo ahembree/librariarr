@@ -459,6 +459,51 @@ describe("movie metadata", () => {
     expect(m.streams.map((s) => s.streamType).sort()).toEqual([1, 2, 3]);
   });
 
+  it("stores every provider's score from Plex's Rating array, and replaces it when the item changes", async () => {
+    const { server } = await newServer();
+    setLibraries({ key: "1", title: "Movies", type: "movie" });
+    const ratings = (rtCritic: number) => ({
+      updatedAt: rtCritic === 9.4 ? 1_700_000_000 : 1_700_000_100,
+      audienceRating: 7.5,
+      audienceRatingImage: "themoviedb://image.rating",
+      Rating: [
+        { image: "imdb://image.rating", value: 7.4, type: "audience" },
+        { image: "rottentomatoes://image.rating.ripe", value: rtCritic, type: "critic" },
+        { image: "rottentomatoes://image.rating.upright", value: 9.2, type: "audience" },
+        { image: "themoviedb://image.rating", value: 7.5, type: "audience" },
+      ],
+    });
+    fake.catalog["1"] = [movie("m1", ratings(9.4))];
+
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    expect(await prisma.mediaItem.findFirstOrThrow()).toMatchObject({
+      audienceRating: 7.5,
+      imdbRating: 7.4,
+      tmdbRating: 7.5,
+      rtCriticRating: 9.4,
+      rtAudienceRating: 9.2,
+    });
+
+    fake.catalog["1"] = [movie("m1", ratings(3.1))];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    expect((await prisma.mediaItem.findFirstOrThrow()).rtCriticRating).toBe(3.1);
+  });
+
+  it("keeps a Jellyfin item's scores, which come from its Plex copy, when it syncs", async () => {
+    const { server } = await newServer("JELLYFIN");
+    setLibraries({ key: "1", title: "Movies", type: "movie" });
+    fake.catalog["1"] = [movie("j1", { updatedAt: 1_700_000_000 })];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    const stored = await prisma.mediaItem.findFirstOrThrow();
+    // What recomputeCanonical wrote from the item's Plex copy.
+    await prisma.mediaItem.update({ where: { id: stored.id }, data: { imdbRating: 7.4, rtCriticRating: 9.4 } });
+
+    fake.catalog["1"] = [movie("j1", { updatedAt: 1_700_000_100, title: "Renamed" })];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+
+    expect(await prisma.mediaItem.findFirstOrThrow()).toMatchObject({ title: "Renamed", imdbRating: 7.4, rtCriticRating: 9.4 });
+  });
+
   it("invalidates the cached artwork an item no longer uses, scoped to its library", async () => {
     const { server } = await newServer();
     setLibraries({ key: "1", title: "Movies", type: "movie" });

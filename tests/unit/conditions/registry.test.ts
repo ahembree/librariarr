@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { PROVIDER_RATING_FIELDS } from "@/lib/media/external-ratings";
+import { PROVIDER_RATING_CONDITION_FIELDS, hasProviderRatingRules } from "@/lib/conditions/helpers";
 import {
   CONDITION_FIELDS,
   CONDITION_OPERATORS,
@@ -103,6 +105,23 @@ describe("CONDITION_FIELDS registry", () => {
         `${field.value} must be invalid for MUSIC`,
       ).toContain("MUSIC");
     }
+  });
+
+  // Plex lists no per-provider scores for music: every track's is empty, so
+  // "RT Critic Score is empty" or a negated comparison would match every track.
+  it("gates Plex's per-provider ratings off MUSIC, and keeps them for movies and series", () => {
+    for (const value of PROVIDER_RATING_FIELDS) {
+      const field = CONDITION_FIELDS.find((f) => f.value === value);
+      expect(field, value).toBeDefined();
+      expect(field!.invalidForLibraryType).toEqual(["MUSIC"]);
+    }
+  });
+
+  it("lists the same per-provider rating fields in the helpers as in external-ratings.ts", () => {
+    expect([...PROVIDER_RATING_CONDITION_FIELDS].sort()).toEqual([...PROVIDER_RATING_FIELDS].sort());
+    const groups = (field: string) => [{ id: "g", condition: "AND" as const, groups: [], rules: [{ id: "r", field, operator: "isNull", value: "", condition: "AND" as const }] }];
+    expect(hasProviderRatingRules(groups("rtAudienceRating"))).toBe(true);
+    expect(hasProviderRatingRules(groups("rating"))).toBe(false);
   });
 
   // The complement: Arr fields populated for every media type must stay

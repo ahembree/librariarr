@@ -224,8 +224,8 @@ importers:
         specifier: ^0.18.0
         version: 0.18.0(supports-color@7.2.0)(typescript@6.0.3)
       iron-session:
-        specifier: ^9.1.0
-        version: 9.1.0
+        specifier: ^9.1.1
+        version: 9.1.1
       lucide-react:
         specifier: ^1.73.0
         version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
@@ -3761,8 +3761,8 @@ packages:
     resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
     engines: {node: '>= 12'}
 
-  iron-session@9.1.0:
-    resolution: {integrity: sha512-ev5xEgYgRcG3tSUMlX5i9fL/AedBYqDOnojk7Ihqs/scFDQ2u4FzwZybhYkJasCSKeIong128SCQlSbvWu9s0g==}
+  iron-session@9.1.1:
+    resolution: {integrity: sha512-3lp4fCD9hJlcN65n0C4hYFF3ZPcRnQlOI4foKachDiu6fnYhNG8qWUF7UXMKV6X8N8bCprBh+FnX/0ZoSOdgMg==}
     engines: {node: '>=22.13.0'}
 
   iron-webcrypto@2.0.0:
@@ -8936,7 +8936,7 @@ snapshots:
 
   ip-address@10.7.6: {}
 
-  iron-session@9.1.0:
+  iron-session@9.1.1:
     dependencies:
       cookie: 2.0.2
       iron-webcrypto: 2.0.0

@@ -19,6 +19,11 @@ export interface MediaHoverData {
   ratingImage?: string | null;
   audienceRating?: number | null;
   audienceRatingImage?: string | null;
+  /** Plex's per-provider scores — one item's own, never a group's. */
+  imdbRating?: number | null;
+  tmdbRating?: number | null;
+  rtCriticRating?: number | null;
+  rtAudienceRating?: number | null;
   duration?: number | null;
   resolution?: string | null;
   dynamicRange?: string | null;
@@ -51,11 +56,27 @@ interface SharedMetadata {
   ratingImage?: string | null;
   audienceRating?: number | null;
   audienceRatingImage?: string | null;
+  imdbRating?: number | null;
+  tmdbRating?: number | null;
+  rtCriticRating?: number | null;
+  rtAudienceRating?: number | null;
   genres?: string[] | null;
   studio?: string | null;
   addedAt?: string | null;
   servers?: Servers;
 }
+
+/**
+ * A group's popover (a show, season, artist or album) never shows per-provider
+ * scores: its record is one member's, whose scores are that member's, not the
+ * group's — as the show page leaves them out.
+ */
+const NO_PROVIDER_RATINGS = {
+  imdbRating: undefined,
+  tmdbRating: undefined,
+  rtCriticRating: undefined,
+  rtAudienceRating: undefined,
+} as const;
 
 function sharedMetadata(row: SharedMetadata): MediaHoverData {
   return {
@@ -67,6 +88,10 @@ function sharedMetadata(row: SharedMetadata): MediaHoverData {
     ratingImage: row.ratingImage,
     audienceRating: row.audienceRating,
     audienceRatingImage: row.audienceRatingImage,
+    imdbRating: row.imdbRating,
+    tmdbRating: row.tmdbRating,
+    rtCriticRating: row.rtCriticRating,
+    rtAudienceRating: row.rtAudienceRating,
     genres: row.genres,
     studio: row.studio,
     addedAt: row.addedAt,
@@ -111,6 +136,7 @@ export function hoverDataFromListItem(row: HoverItemRow, options: { title?: stri
   const music = row.type === "MUSIC";
   return {
     ...sharedMetadata(row),
+    ...(grouped ? NO_PROVIDER_RATINGS : {}),
     title: options.title ?? row.title,
     duration: grouped ? undefined : row.duration,
     resolution: grouped ? undefined : row.resolution,
@@ -145,6 +171,7 @@ export interface SeriesGroupRow extends GroupFigures {
 export function hoverDataFromSeriesGroup(row: SeriesGroupRow, options: { title?: string } = {}): MediaHoverData {
   return {
     ...sharedMetadata(row),
+    ...NO_PROVIDER_RATINGS,
     title: options.title ?? row.parentTitle,
     seasonCount: row.seasonCount,
     episodeCount: row.episodeCount,
@@ -183,6 +210,7 @@ export interface ArtistGroupRow extends GroupFigures {
 export function hoverDataFromArtistGroup(row: ArtistGroupRow): MediaHoverData {
   return {
     ...sharedMetadata(row),
+    ...NO_PROVIDER_RATINGS,
     title: row.parentTitle,
     albumCount: row.albumCount,
     trackCount: row.trackCount,
@@ -203,6 +231,7 @@ export interface AlbumRow extends GroupFigures {
 export function hoverDataFromAlbum(row: AlbumRow): MediaHoverData {
   return {
     ...sharedMetadata(row),
+    ...NO_PROVIDER_RATINGS,
     title: row.albumTitle,
     trackCount: row.trackCount,
     audioCodecCounts: row.audioCodecCounts,

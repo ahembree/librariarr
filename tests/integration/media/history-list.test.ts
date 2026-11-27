@@ -118,6 +118,19 @@ describe("GET /api/media/history", () => {
     }
   });
 
+  it("returns each play's item with its Plex per-provider ratings, for the hover card", async () => {
+    const movieLib = await createTestLibrary(serverId, { type: "MOVIE" });
+    const movie = await createTestMediaItem(movieLib.id, {
+      type: "MOVIE", title: "Heat", imdbRating: 8.3, tmdbRating: 7.9, rtCriticRating: 8.8, rtAudienceRating: 9.4,
+    });
+    await addWatch(movie.id);
+
+    const body = await expectJson<{ items: Array<{ mediaItem: Record<string, unknown> }> }>(
+      await callRoute(GET, { url: "/api/media/history" }),
+    );
+    expect(body.items[0].mediaItem).toMatchObject({ imdbRating: 8.3, tmdbRating: 7.9, rtCriticRating: 8.8, rtAudienceRating: 9.4 });
+  });
+
   it("filters by one or several types", async () => {
     const episode = await createTestMediaItem(libraryId, {
       type: "SERIES",
