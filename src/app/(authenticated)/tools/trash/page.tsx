@@ -1647,7 +1647,7 @@ function SingletonCard({
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <div>
-            <CardTitle className="text-base">{item.name}</CardTitle>
+            <CardTitle className="text-base/6">{item.name}</CardTitle>
             <CardDescription>{item.description}</CardDescription>
           </div>
           <ColorChip className={meta.className}>{meta.label}</ColorChip>
@@ -1724,7 +1724,7 @@ function NamingCard({
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <div>
-            <CardTitle className="text-base">{item.name}</CardTitle>
+            <CardTitle className="text-base/6">{item.name}</CardTitle>
             <CardDescription>
               Choose the naming variants to apply, then let Librariarr manage them.
             </CardDescription>
@@ -2317,7 +2317,7 @@ function ProfileFormatsTab({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Attach custom formats to a quality profile</CardTitle>
+        <CardTitle className="text-base/6">Attach custom formats to a quality profile</CardTitle>
         <CardDescription>
           Pick any quality profile on {instanceName} — including ones you created yourself. Its
           guide custom formats and current scores are listed so you can override any of them, and

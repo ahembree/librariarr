@@ -294,7 +294,7 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
         <div className="flex items-start gap-3">
           <UserAvatar name={displayName} size="lg" />
           <div className="flex-1 min-w-0">
-            <DialogTitle className="text-base font-display tracking-tight flex items-center gap-2">
+            <DialogTitle className="text-base/6 font-display tracking-tight flex items-center gap-2">
               <span className="truncate">{displayName}</span>
               <span className="text-muted-foreground font-normal">&apos;s requests</span>
             </DialogTitle>
