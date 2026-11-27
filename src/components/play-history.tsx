@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { detailPrefetch, mediaPlaysUrl, PLAY_HISTORY_PAGE_SIZE } from "@/lib/media/detail-prefetch";
 import Link from "next/link";
 import {
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
 import { PaginationControls } from "@/components/pagination-controls";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatDurationClock, formatWatchedAt } from "@/lib/format";
 import { decisionChipClass, streamDecision } from "@/lib/media/stream-decision";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
@@ -297,7 +297,7 @@ interface DetailRow {
   value: string;
 }
 
-interface DetailSection {
+export interface DetailSection {
   title: string;
   rows: DetailRow[];
 }
@@ -487,29 +487,102 @@ function buildDetailSections(row: WatchHistoryRow): DetailSection[] {
   return sections.filter((section) => section.rows.length > 0);
 }
 
+/** Delay before a mouse hover opens, or leaving closes, the stream detail. */
+const HOVER_DELAY_MS = 150;
+
 /**
- * The row's deep stream detail. Keyboard reachable on purpose: the trigger is a
- * real focusable button and Radix's HoverCard opens on focus as well as hover,
- * so Tab shows exactly what a pointer hover does (a `title` attribute or a
- * hover-only div would not).
+ * The row's deep stream detail. A Popover, not a HoverCard: a HoverCard never
+ * opens on touch, so a phone could not read it. A tap, click, Enter or Space
+ * toggles it; a mouse hover also opens it and leaving closes it. A click on a
+ * hover-opened popover pins it open rather than closing it, and a click-opened
+ * one ignores the mouse leaving.
  */
-function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
+export function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
+  const [open, setOpen] = useState(false);
+  const openRef = useRef(false);
+  /** How the open popover was opened: only a hover-opened one closes on leave. */
+  const openedBy = useRef<"hover" | "click" | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearHoverTimer, [clearHoverTimer]);
+
+  const apply = useCallback((next: boolean, source: "hover" | "click") => {
+    openRef.current = next;
+    openedBy.current = next ? source : null;
+    setOpen(next);
+  }, []);
+
+  const hoverTo = useCallback(
+    (next: boolean) => (event: ReactPointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      clearHoverTimer();
+      if (next) {
+        // Already open (moving from the trigger onto the content): just keep it.
+        if (openRef.current) return;
+        hoverTimer.current = setTimeout(() => apply(true, "hover"), HOVER_DELAY_MS);
+      } else if (openedBy.current === "hover") {
+        hoverTimer.current = setTimeout(() => apply(false, "hover"), HOVER_DELAY_MS);
+      }
+    },
+    [apply, clearHoverTimer],
+  );
+
+  const handleTriggerClick = useCallback(
+    (event: ReactMouseEvent) => {
+      if (openRef.current && openedBy.current === "hover") {
+        // Radix skips its toggle when the click is default-prevented: pin instead.
+        event.preventDefault();
+        clearHoverTimer();
+        openedBy.current = "click";
+      }
+    },
+    [clearHoverTimer],
+  );
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      clearHoverTimer();
+      apply(next, "click");
+    },
+    [apply, clearHoverTimer],
+  );
+
   return (
-    <HoverCard openDelay={150} closeDelay={150}>
-      <HoverCardTrigger asChild>
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
         <button
           type="button"
           aria-label="Stream details"
+          onPointerEnter={hoverTo(true)}
+          onPointerLeave={hoverTo(false)}
+          onClick={handleTriggerClick}
           className="inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Info className="h-3 w-3" />
           Details
         </button>
-      </HoverCardTrigger>
-      <HoverCardContent
+      </PopoverTrigger>
+      <PopoverContent
         side="top"
         align="end"
         sideOffset={6}
+        // Keep clear of the screen edges (and a phone's status bar / notch):
+        // on a phone the popover is taller than the room above the row.
+        collisionPadding={8}
+        onPointerEnter={hoverTo(true)}
+        onPointerLeave={hoverTo(false)}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Esc closes only this popover: Radix listens in the capture phase, so
+        // stopping it here keeps the side panel's document Esc handler from
+        // closing the whole panel too.
+        onEscapeKeyDown={(event) => event.stopPropagation()}
         className="w-72 max-w-[calc(100vw-2rem)] space-y-3 duration-200"
       >
         {sections.map((section) => (
@@ -527,8 +600,8 @@ function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
             ))}
           </div>
         ))}
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }
 
