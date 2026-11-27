@@ -1657,7 +1657,7 @@ export function LifecycleRulePage({
       {/* Rule Builder */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-base/6">
             <SlidersHorizontal className="h-4 w-4" />
             {activeRuleSetId ? "Edit Rule Set" : "Create Rule Set"}
           </CardTitle>

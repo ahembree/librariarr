@@ -212,7 +212,7 @@ export function IntegrationInstanceSection<I extends IntegrationInstance>({
       {add.open && (
         <Card className={cn("mb-4 border-l-2", style.border)}>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
+            <CardTitle className="flex items-center gap-2 text-base/6">
               <Plus className={cn("h-4 w-4", style.text)} />
               Add {label} Instance
             </CardTitle>

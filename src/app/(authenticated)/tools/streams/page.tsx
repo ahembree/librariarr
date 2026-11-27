@@ -1518,7 +1518,7 @@ function MaintenanceModePanel({ knownUsers }: { knownUsers: string[] }) {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-1 min-w-0">
-              <CardTitle className="text-base flex items-center gap-2">
+              <CardTitle className="text-base/6 flex items-center gap-2">
                 {maintenanceEnabled && (
                   <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
                 )}
@@ -1728,7 +1728,7 @@ function TranscodeManagerPanel({ knownUsers }: { knownUsers: string[] }) {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-1 min-w-0">
-              <CardTitle className="text-base flex items-center gap-2">
+              <CardTitle className="text-base/6 flex items-center gap-2">
                 {transcodeEnabled && (
                   <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
                 )}

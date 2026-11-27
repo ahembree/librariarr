@@ -676,7 +676,7 @@ export default function PrerollManagerPage() {
       {/* Section 1: Current Preroll */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Current Preroll</CardTitle>
+          <CardTitle className="text-base/6">Current Preroll</CardTitle>
           <CardDescription>
             The preroll video path currently configured on your Plex server
           </CardDescription>
@@ -713,7 +713,7 @@ export default function PrerollManagerPage() {
       {/* Section 2: Quick Set */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Quick Set</CardTitle>
+          <CardTitle className="text-base/6">Quick Set</CardTitle>
           <CardDescription>
             Apply a preroll video path directly to your Plex server
           </CardDescription>
@@ -768,7 +768,7 @@ export default function PrerollManagerPage() {
       {presets.length >= 2 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base/6 flex items-center gap-2">
               <Combine className="h-4 w-4" />
               Combine Prerolls
             </CardTitle>
