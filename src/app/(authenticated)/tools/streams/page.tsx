@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
-import { RatingChip } from "@/components/rating-chip";
+import { RatingChips } from "@/components/media-detail-parts";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -163,7 +163,13 @@ interface SessionWithServer {
   contentRating?: string;
   studio?: string;
   rating?: number;
+  ratingImage?: string;
   audienceRating?: number;
+  audienceRatingImage?: string;
+  imdbRating?: number;
+  tmdbRating?: number;
+  rtCriticRating?: number;
+  rtAudienceRating?: number;
   tagline?: string;
   genres?: string[];
   // Media dimensions
@@ -1373,9 +1379,8 @@ function ActiveSessionsSection() {
                     <div className="flex flex-wrap gap-1.5">
                       {sheetSession.contentRating && <ColorChip>{sheetSession.contentRating}</ColorChip>}
                       {sheetSession.studio && <ColorChip>{sheetSession.studio}</ColorChip>}
-                      {/* The ratings chips the detail pages show. */}
-                      {sheetSession.rating != null && <RatingChip label="Critic" value={sheetSession.rating} />}
-                      {sheetSession.audienceRating != null && <RatingChip label="Audience" value={sheetSession.audienceRating} />}
+                      {/* The ratings chips the detail pages show (ratingChipsOf). */}
+                      <RatingChips item={sheetSession} serverType={sheetSession.serverType} />
                     </div>
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">

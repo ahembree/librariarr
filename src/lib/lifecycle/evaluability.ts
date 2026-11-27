@@ -1,5 +1,9 @@
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/lifecycle-engine";
+import { hasProviderRatingRules as hasProviderRatingGroupRules } from "@/lib/conditions/helpers";
+import { legacyRulesToGroups } from "@/lib/rules/legacy";
+import type { ConditionGroup } from "@/lib/conditions/types";
+import { countPendingProviderRatings } from "@/lib/sync/provider-ratings";
 import { prisma } from "@/lib/db";
 import { hasEnabledArrInstances, arrFamilyLabel, resolveArrInstanceScope } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -158,6 +162,50 @@ export async function checkWatchHistoryCompleteness(
   };
 }
 
+/** Whether either rule shape reads any of Plex's per-provider ratings. */
+function hasProviderRatingRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+  const groups = rules.length > 0 && "rules" in rules[0]
+    ? (rules as LifecycleRuleGroup[])
+    : legacyRulesToGroups(rules as LifecycleRule[]);
+  return hasProviderRatingGroupRules(groups as ConditionGroup[]);
+}
+
+/**
+ * Whether every Plex movie or episode (`type`) has had its per-provider ratings
+ * read — the fourth dependency that fails like the others.
+ *
+ * The ratings come only from an item's detail response, so a row stored before
+ * they existed (every Plex movie and episode on upgrade, queued by migration
+ * `0035_external_ratings`), restored from a backup taken before then, or new
+ * with a failed detail fetch holds them EMPTY until a full sync reads it. Empty
+ * is what "no score" looks like, so `NOT IMDb Rating >= 6` and `RT Critic Score
+ * is empty` match every such row — a well-rated film included. The criteria
+ * wait until no row is pending (`countPendingProviderRatings`), across every
+ * enabled Plex server: a Jellyfin/Emby copy reads its Plex copy's ratings.
+ * Always transient: a full sync settles it.
+ */
+export async function checkProviderRatingsCompleteness(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+): Promise<{ complete: true } | { complete: false; reason: string }> {
+  if (type === "MUSIC") return { complete: true };
+  const pending = await countPendingProviderRatings(prisma, userId, [type]);
+  if (pending.length === 0) return { complete: true };
+  const NAMED = 5;
+  const listed = pending
+    .slice(0, NAMED)
+    .map((p) => `"${p.name}" (${p.pending} ${type === "MOVIE" ? "movie(s)" : "episode(s)"})`)
+    .join("; ");
+  const remainder = pending.length > NAMED ? `; and ${pending.length - NAMED} more` : "";
+  return {
+    complete: false,
+    reason:
+      `${pending.length} Plex server(s) have items whose IMDb, TMDB and Rotten Tomatoes ` +
+      `scores a full sync has not read yet — ${listed}${remainder}. Evaluating these ` +
+      `criteria now would read those items as unrated`,
+  };
+}
+
 export async function checkLifecycleRuleEvaluability(
   userId: string,
   type: "MOVIE" | "SERIES" | "MUSIC",
@@ -244,6 +292,20 @@ export async function checkLifecycleRuleEvaluability(
         evaluable: false,
         permanent: false,
         reason: `Rules read play activity but ${watch.reason}`,
+      };
+    }
+  }
+
+  // Plex's per-provider ratings, the same way: a row whose ratings a full sync
+  // has not read yet reads as unrated. Gated on the rules first, like the
+  // watch-history check, so other rule sets never pay for the count.
+  if (hasProviderRatingRules(rules)) {
+    const ratings = await checkProviderRatingsCompleteness(userId, type);
+    if (!ratings.complete) {
+      return {
+        evaluable: false,
+        permanent: false,
+        reason: `Rules read Plex ratings but ${ratings.reason}`,
       };
     }
   }

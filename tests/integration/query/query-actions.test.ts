@@ -1514,6 +1514,61 @@ describe("POST /api/query/actions", () => {
   // This route is the one that needs the guard MOST: a lifecycle rule set
   // schedules its action `actionDelayDays` out and shows it on the Pending page
   // first, whereas this executes immediately on whatever the query returned.
+  // The same guard for Plex's per-provider ratings: a Plex movie whose details
+  // no full sync has read since the ratings existed reads as unrated, so
+  // "NOT IMDb Rating >= 6" would act on a well-rated film.
+  describe("unread Plex ratings guard", () => {
+    const imdbGroups = [
+      {
+        id: "g1",
+        condition: "AND" as const,
+        rules: [{ id: "r1", field: "imdbRating", operator: "greaterThanOrEqual", value: "6", negate: true, condition: "AND" as const }],
+        groups: [],
+      },
+    ];
+
+    async function setup() {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const server = await createTestServer(user.id, { name: "Plex Home" });
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Unread" });
+      const radarr = await createTestRadarrInstance(user.id);
+      const body = {
+        query: { ...BASE_QUERY, serverIds: [server.id], groups: imdbGroups },
+        mediaItemIds: [movie.id],
+        actionType: "DELETE_RADARR",
+        arrInstanceId: radarr.id,
+      };
+      return { movie, body };
+    }
+
+    it("returns 400 while a Plex movie's ratings have not been read, before running the query", async () => {
+      const { body } = await setup();
+
+      const response = await callRoute(POST, { method: "POST", body });
+
+      const json = await expectJson<{ error: string }>(response, 400);
+      expect(json.error).toMatch(/^The query uses Plex rating criteria but 1 Plex server\(s\) have items/);
+      expect(json.error).toContain('"Plex Home" (1 movie(s))');
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("proceeds once a full sync has read every Plex movie", async () => {
+      const { movie, body } = await setup();
+      await getTestPrisma().mediaItem.update({ where: { id: movie.id }, data: { serverUpdatedAt: new Date() } });
+      mockedExecuteQuery.mockResolvedValue(
+        queryResult([{ id: movie.id, type: "MOVIE", title: "Unread", parentTitle: null }]),
+      );
+
+      const response = await callRoute(POST, { method: "POST", body });
+
+      const { result } = await expectStreamResult<{ executed: number }>(response);
+      expect(result.executed).toBe(1);
+    });
+  });
+
   describe("incomplete watch history guard", () => {
     const watchedByUserGroups = [
       {

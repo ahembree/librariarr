@@ -105,6 +105,10 @@ interface ActionItem {
     ratingImage?: string | null;
     audienceRating?: number | null;
     audienceRatingImage?: string | null;
+    imdbRating?: number | null;
+    tmdbRating?: number | null;
+    rtCriticRating?: number | null;
+    rtAudienceRating?: number | null;
     duration?: number | null;
     resolution?: string | null;
     dynamicRange?: string | null;

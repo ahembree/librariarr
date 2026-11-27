@@ -180,6 +180,30 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].count).toBe(1);
     });
 
+    it("gives a movie's action its Plex per-provider ratings, and a show's none", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const scores = { imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 9.2 };
+      const movie = await createTestMediaItem((await createTestLibrary(server.id, { type: "MOVIE" })).id, {
+        title: "Movie", type: "MOVIE", ...scores,
+      });
+      const episode = await createTestMediaItem((await createTestLibrary(server.id, { type: "SERIES" })).id, {
+        title: "Pilot", type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, ...scores,
+      });
+      const movieRules = await createTestRuleSet(user.id, { name: "Movies", type: "MOVIE" });
+      const showRules = await createTestRuleSet(user.id, { name: "Shows", type: "SERIES" });
+      await createTestAction(user.id, movie.id, movieRules.id);
+      await createTestAction(user.id, episode.id, showRules.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{
+        groups: { ruleSet: { name: string }; items: { mediaItem: Record<string, unknown> }[] }[];
+      }>(await callRoute(GET, { url: "/api/lifecycle/actions" }), 200);
+      const itemOf = (name: string) => body.groups.find((g) => g.ruleSet.name === name)!.items[0].mediaItem;
+      expect(itemOf("Movies")).toMatchObject(scores);
+      expect(itemOf("Shows")).toMatchObject({ imdbRating: null, tmdbRating: null, rtCriticRating: null, rtAudienceRating: null });
+    });
+
     it("shows an estimated row when the rule's action changed since a completed action of a different type", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

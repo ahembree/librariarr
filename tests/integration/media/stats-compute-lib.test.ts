@@ -22,6 +22,7 @@ vi.mock("@/lib/logger", () => ({
 import { computeTimeline } from "@/lib/media/timeline";
 import { computeCrossTab } from "@/lib/media/cross-tab";
 import { computeBreakdown } from "@/lib/media/breakdown";
+import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
 
 // ── Dimension fixtures (shapes as in DIMENSION_REGISTRY) ──
@@ -311,6 +312,20 @@ describe("media stats compute (timeline, cross-tab, breakdown)", () => {
       expect(await computeBreakdown(audioLang, [serverId], true)).toEqual([
         { value: "Unknown", type: "MOVIE", _count: 1 },
       ]);
+    });
+
+    it("buckets each Plex per-provider rating, leaving music out", async () => {
+      await movie("2024-01-01T00:00:00Z", { imdbRating: 7.4, tmdbRating: 7.5, rtCriticRating: 9.4, rtAudienceRating: 3 });
+      await movie("2024-01-02T00:00:00Z");
+      await createTestMediaItem(musicLib, { type: "MUSIC" });
+      const bucketsOf = async (id: string) =>
+        (await computeBreakdown(getDimensionMeta(id as never)!, [serverId], false))
+          .map((r) => `${r.value}/${r.type}/${r._count}`).sort();
+
+      expect(await bucketsOf("imdbRating")).toEqual(["6 – 8/MOVIE/1", "Unrated/MOVIE/1"]);
+      expect(await bucketsOf("tmdbRating")).toEqual(["6 – 8/MOVIE/1", "Unrated/MOVIE/1"]);
+      expect(await bucketsOf("rtCriticRating")).toEqual(["8 – 10/MOVIE/1", "Unrated/MOVIE/1"]);
+      expect(await bucketsOf("rtAudienceRating")).toEqual(["2 – 4/MOVIE/1", "Unrated/MOVIE/1"]);
     });
 
     it("buckets dates by month or year, newest first, with a null label", async () => {

@@ -16,8 +16,8 @@ import {
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { ARR_FAMILY_FOR_TYPE, ARR_TYPE_FOR_FAMILY, familyOfArrInstance, findArrInstance } from "@/lib/arr/instances";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
-import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
+import { hasArrRules, hasSeerrRules, hasPlayActivityRules, hasProviderRatingRules } from "@/lib/conditions/helpers";
+import { checkWatchHistoryCompleteness, checkProviderRatingsCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { beginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
@@ -224,6 +224,18 @@ export const POST = withSession(async (session, request: NextRequest) => {
     if (!watch.complete) {
       return NextResponse.json(
         { error: `The query uses play-activity criteria but ${watch.reason}` },
+        { status: 400 },
+      );
+    }
+  }
+  // And a fourth time for Plex's per-provider ratings, under the rule sets'
+  // condition (`checkProviderRatingsCompleteness`): a row whose ratings no
+  // full sync has read yet reads as unrated.
+  if (hasProviderRatingRules(queryGroups)) {
+    const ratings = await checkProviderRatingsCompleteness(userId, resolvedType);
+    if (!ratings.complete) {
+      return NextResponse.json(
+        { error: `The query uses Plex rating criteria but ${ratings.reason}` },
         { status: 400 },
       );
     }

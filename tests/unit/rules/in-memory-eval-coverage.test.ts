@@ -387,6 +387,20 @@ const arrMeta: ArrMetadata = {
 };
 
 describe("getActualValuesForAllRules", () => {
+  it("reads a missing number as N/A, never as a score of 0", () => {
+    const fields = ["rating", "audienceRating", "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating", "year"];
+    const rules = [group(fields.map((f) => rule(f, "isNull")))];
+    const vals = getActualValuesForAllRules([{ id: "m1", externalIds: [] }], rules, "MOVIE")!.get("m1")!;
+    for (const f of fields) expect(vals.get(`${f}-isNull`)).toBe("N/A");
+    const rated = getActualValuesForAllRules(
+      [{ id: "m2", externalIds: [], rtCriticRating: 9.4, imdbRating: 0 }],
+      [group([rule("rtCriticRating", "isNotNull"), rule("imdbRating", "isNotNull")])],
+      "MOVIE",
+    )!.get("m2")!;
+    expect(rated.get("rtCriticRating-isNotNull")).toBe("9.4");
+    expect(rated.get("imdbRating-isNotNull")).toBe("0");
+  });
+
   const allArr = ["foundInArr", "arrTag", "arrQualityProfile", "arrMonitored", "arrRating", "arrTmdbRating", "arrRtCriticRating",
     "arrDateAdded", "arrReleaseDate", "arrInCinemasDate", "arrDownloadDate", "arrFirstAired", "arrSizeOnDisk", "arrRuntime",
     "arrSeasonCount", "arrEpisodeCount", "arrMonitoredSeasonCount", "arrMonitoredEpisodeCount", "arrCustomFormatScore",
@@ -505,7 +519,8 @@ describe("getActualValuesForAllRules", () => {
     expect(empty.get("fileSize-isNull")).toBe("10 MB");
     expect(empty.get("duration-isNull")).toBe("0 min");
     expect(empty.get("addedAt-isNull")).toBe("N/A");
-    expect(empty.get("year-isNull")).toBe("0");
+    // A missing number is N/A, never a made-up 0.
+    expect(empty.get("year-isNull")).toBe("N/A");
     expect(empty.get("watchedEpisodePercentage-isNull")).toBe("0.0%");
     expect(getActualValuesForAllRules([{ id: "z" }], rules, "MOVIE").get("z")!.get("fileSize-isNull")).toBe("0");
   });

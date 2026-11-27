@@ -25,6 +25,7 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { loadLibraryWatchCountsFromHistory, reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
+import { extractExternalRatings } from "@/lib/media/external-ratings";
 import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
@@ -277,6 +278,7 @@ const MEDIA_ITEM_COLUMNS = [
   "dedupKey", "seriesKey", "isWatchlisted",
   "titleSort", "ratingCount", "ratingImage", "audienceRatingImage",
   "absoluteIndex", "chapterSource", "labels", "videoRangeType",
+  "imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating",
   "createdAt", "updatedAt",
 ] as const;
 
@@ -331,7 +333,14 @@ const SKIP_ON_UPDATE = new Set(["id", "libraryId", "ratingKey", "type", "created
 // loses its history can never make an item look less recently watched.
 const GREATEST_ON_UPDATE = new Set(["playCount", "lastPlayedAt"]);
 
-function buildUpsertSql(rowCount: number): string {
+// Plex's per-provider ratings. Only a Plex item carries them; a Jellyfin/Emby
+// row holds the scores of its Plex copy (same dedupKey), which
+// `recomputeCanonical` writes after every sync. A Jellyfin/Emby upsert leaves
+// them alone (`keepProviderRatings`) so they never read empty between the
+// write and that recompute.
+const PROVIDER_RATING_COLUMNS = new Set(["imdbRating", "tmdbRating", "rtCriticRating", "rtAudienceRating"]);
+
+function buildUpsertSql(rowCount: number, keepProviderRatings = false): string {
   const cols = MEDIA_ITEM_COLUMNS.map((c) => `"${c}"`).join(",");
   const rows: string[] = [];
   for (let r = 0; r < rowCount; r++) {
@@ -343,6 +352,7 @@ function buildUpsertSql(rowCount: number): string {
   }
   const sets = MEDIA_ITEM_COLUMNS
     .filter((c) => !SKIP_ON_UPDATE.has(c))
+    .filter((c) => !(keepProviderRatings && PROVIDER_RATING_COLUMNS.has(c)))
     .map((c) =>
       COALESCE_ON_UPDATE.has(c)
         ? `"${c}"=COALESCE(EXCLUDED."${c}","MediaItem"."${c}")`
@@ -511,6 +521,10 @@ function buildRowParams(
     d.chapterSource ?? null,
     d.labels ? JSON.stringify(d.labels) : null,
     d.videoRangeType ?? null,
+    d.imdbRating,
+    d.tmdbRating,
+    d.rtCriticRating,
+    d.rtAudienceRating,
     now,
     now,
   ];
@@ -538,6 +552,8 @@ export async function processBatch(
   showGuidsMap?: Map<string, Array<{ id: string }>>,
   watchlistGuids?: Set<string>,
   showSummaryMap?: Map<string, string>,
+  /** The server is not Plex: keep the stored per-provider ratings (`PROVIDER_RATING_COLUMNS`). */
+  options: { keepProviderRatings?: boolean } = {},
 ): Promise<{ dedupKeys: string[] }> {
   if (items.length === 0) return { dedupKeys: [] };
 
@@ -550,7 +566,7 @@ export async function processBatch(
   }
   const upsertResults = await withDeadlockRetry("processBatch upsert", () =>
     prisma.$queryRawUnsafe<{ id: string; ratingKey: string; dedupKey: string | null }[]>(
-      buildUpsertSql(items.length), ...params
+      buildUpsertSql(items.length, options.keepProviderRatings), ...params
     ),
   );
   const ratingKeyToId = new Map(upsertResults.map((r) => [r.ratingKey, r.id]));
@@ -916,6 +932,9 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
     announce("sync:started", server.userId);
 
+    // See `PROVIDER_RATING_COLUMNS`: only a Plex item writes its own.
+    const upsertOptions = { keepProviderRatings: server.type !== "PLEX" };
+
     const client = createMediaServerClient(server.type as import("@/generated/prisma/client").MediaServerType, server.url, server.accessToken, {
       skipTlsVerify: server.tlsSkipVerify,
     });
@@ -1278,7 +1297,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
               if (toWrite.length > 0) {
                 carryWatchlistForward(toWrite);
                 addArtistMbids(toWrite);
-                await processBatch(toWrite, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
+                await processBatch(toWrite, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap, upsertOptions);
               }
             }
 
@@ -1296,7 +1315,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
             // No enrichment needed (Jellyfin/Emby) — process all items directly.
             carryWatchlistForward(batch);
             addArtistMbids(batch);
-            await processBatch(batch, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
+            await processBatch(batch, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap, upsertOptions);
           }
 
           processedItems += batch.length;
@@ -1913,6 +1932,7 @@ function buildItemData(
     ratingCount: item.ratingCount ?? null,
     ratingImage: item.ratingImage ?? null,
     audienceRatingImage: item.audienceRatingImage ?? null,
+    ...extractExternalRatings(item),
     absoluteIndex: item.absoluteIndex ?? null,
     chapterSource: item.chapterSource ?? null,
     labels: item.Label && item.Label.length > 0 ? item.Label.map((l) => l.tag) : undefined,
