@@ -191,7 +191,7 @@ export function WhatsNewDialog() {
               <Logo size={28} />
             </div>
             <div className="min-w-0">
-              <DialogTitle className="font-display text-xl font-bold tracking-tight">
+              <DialogTitle className="font-display text-xl/7 font-bold tracking-tight">
                 What&apos;s new in Librariarr
               </DialogTitle>
               <DialogDescription className="mt-0.5">

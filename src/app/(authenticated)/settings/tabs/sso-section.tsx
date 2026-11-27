@@ -938,7 +938,7 @@ function StepCard({ number, title, description, status, disabled, children }: St
         <div className="flex items-center gap-3">
           <StepBadge number={number} status={status} />
           <div className="flex-1">
-            <CardTitle className="text-base">{title}</CardTitle>
+            <CardTitle className="text-base/6">{title}</CardTitle>
             <CardDescription className="mt-1">{description}</CardDescription>
           </div>
         </div>
