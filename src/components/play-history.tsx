@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { detailPrefetch, mediaPlaysUrl, PLAY_HISTORY_PAGE_SIZE } from "@/lib/media/detail-prefetch";
 import Link from "next/link";
 import {
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
 import { PaginationControls } from "@/components/pagination-controls";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatDurationClock, formatWatchedAt } from "@/lib/format";
 import { decisionChipClass, streamDecision } from "@/lib/media/stream-decision";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
@@ -487,29 +487,66 @@ function buildDetailSections(row: WatchHistoryRow): DetailSection[] {
   return sections.filter((section) => section.rows.length > 0);
 }
 
+/** Delay before a mouse hover opens, or leaving closes, the stream detail. */
+const HOVER_DELAY_MS = 150;
+
 /**
- * The row's deep stream detail. Keyboard reachable on purpose: the trigger is a
- * real focusable button and Radix's HoverCard opens on focus as well as hover,
- * so Tab shows exactly what a pointer hover does (a `title` attribute or a
- * hover-only div would not).
+ * The row's deep stream detail. A Popover, not a HoverCard: a HoverCard never
+ * opens on touch, so a phone could not read it. A tap, click, Enter or Space
+ * toggles it; a mouse hover also opens it (and leaving closes it), so a
+ * desktop pointer keeps the hover behaviour.
  */
 function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
+  const [open, setOpen] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearHoverTimer, [clearHoverTimer]);
+
+  const hoverTo = useCallback(
+    (next: boolean) => (event: ReactPointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      clearHoverTimer();
+      hoverTimer.current = setTimeout(() => setOpen(next), HOVER_DELAY_MS);
+    },
+    [clearHoverTimer],
+  );
+
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      clearHoverTimer();
+      setOpen(next);
+    },
+    [clearHoverTimer],
+  );
+
   return (
-    <HoverCard openDelay={150} closeDelay={150}>
-      <HoverCardTrigger asChild>
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
         <button
           type="button"
           aria-label="Stream details"
+          onPointerEnter={hoverTo(true)}
+          onPointerLeave={hoverTo(false)}
           className="inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Info className="h-3 w-3" />
           Details
         </button>
-      </HoverCardTrigger>
-      <HoverCardContent
+      </PopoverTrigger>
+      <PopoverContent
         side="top"
         align="end"
         sideOffset={6}
+        onPointerEnter={hoverTo(true)}
+        onPointerLeave={hoverTo(false)}
+        onOpenAutoFocus={(event) => event.preventDefault()}
         className="w-72 max-w-[calc(100vw-2rem)] space-y-3 duration-200"
       >
         {sections.map((section) => (
@@ -527,8 +564,8 @@ function StreamDetailPopover({ sections }: { sections: DetailSection[] }) {
             ))}
           </div>
         ))}
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }
 
